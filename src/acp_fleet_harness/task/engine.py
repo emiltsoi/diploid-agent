@@ -225,7 +225,7 @@ class TaskEngine:
             api_key = None
             if self.config.secrets:
                 api_key = self.config.secrets.windsurf_api_key
-            engine = DevinAcpEngine(config=self.config.devin, api_key=api_key)
+            engine = DevinAcpEngine(config=self.config.engine, api_key=api_key)
         elif self.engine is not None:
             engine = self.engine
         else:
@@ -238,7 +238,7 @@ class TaskEngine:
             if self._task_config.acp_model is not None
             else self._model
             if self._model is not None
-            else self.config.devin.model
+            else self.config.engine.model
             if self.config is not None
             else None
         )
@@ -247,7 +247,7 @@ class TaskEngine:
             if self._task_config.acp_timeout is not None
             else self._acp_timeout
             if self._acp_timeout is not None
-            else self.config.devin.soft_timeout
+            else self.config.engine.soft_timeout
             if self.config is not None
             else None
         )

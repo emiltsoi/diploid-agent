@@ -3,7 +3,7 @@
 ## Secrets
 
 - `config/secrets.env` is **gitignored**. It holds `TELEGRAM_BOT_TOKEN` and
-  optional Devin API keys.
+  optional ACP API keys.
 - `config/harness.yaml` is **gitignored** because it contains local paths.
 - Only `.example` templates are tracked.
 - The Telegram token is never printed in logs.
@@ -14,11 +14,13 @@
 
 ## ACP authentication
 
-The harness spawns `devin acp` directly. ACP needs either:
+The default engine spawns `devin acp`. It needs either:
 
-1. `WINDSURF_API_KEY` set in `config/secrets.env`, or
+1. `WINDSURF_API_KEY` or `ACP_API_KEY` set in `config/secrets.env`, or
 2. the credentials file written by `devin auth login` or Devin Desktop:
    `~/.local/share/devin/credentials.toml`.
+
+Other engines may use a different API key or credential source.
 
 The systemd user unit loads `config/secrets.env`. If you run the unit under the
 same user that is signed in to Devin Desktop, the credentials file is found

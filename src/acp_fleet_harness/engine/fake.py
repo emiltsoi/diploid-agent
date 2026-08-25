@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from acp_fleet_harness.config import EngineConfig
 from acp_fleet_harness.engine.base import AgentEngine, TurnRequest, TurnResult
 
 
@@ -15,6 +16,9 @@ class FakeAgentEngine(AgentEngine):
     pre-configured results.
     """
 
+    config: EngineConfig | None = None
+    api_key: str | None = None
+    metrics: Any | None = None
     default_reply: str = "ok"
     default_session_id: str = "fake-session-1"
     models: list[str] = field(default_factory=lambda: ["swe-1-7"])

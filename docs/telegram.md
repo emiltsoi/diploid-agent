@@ -107,7 +107,7 @@ For per-task ACP model switching, include `acp_model` (or `model`) in ACP tasks 
 
 ## Resuming after a timeout
 
-When a turn hits `devin.soft_timeout` (600 s by default) or is cancelled with
+When a turn hits `engine.soft_timeout` (600 s by default) or is cancelled with
 `/stop`, the harness returns a partial reply with a notice like:
 
 > Reply `Continue` to keep going, or tell me what to change.

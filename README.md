@@ -1,16 +1,18 @@
 # acp-fleet-harness
 
-A persistent, persona-driven harness around `devin acp`.
+A persistent, persona-driven harness around an ACP-compatible agent engine.
 
-It gives every Telegram chat or HTTP caller a long-running Devin session over
-ACP JSON-RPC, keeps a local transcript, supports per-chat model switching, and
-can retain turns to a Hindsight memory server for semantic recall.
+It ships with the `devin acp` engine as the default, but the engine layer is
+pluggable: any binary that speaks ACP v1 JSON-RPC over stdio can be configured
+under `engine` instead. Every Telegram chat or HTTP caller gets a long-running
+agent session, local transcript, per-chat model switching, and optional
+retention to a Hindsight memory server.
 
 ## What it does
 
-- Runs a `devin acp` session with a persona loaded from `personas/<persona>`.
+- Runs an ACP agent session with a persona loaded from `personas/<persona>`.
 - Remembers each conversation in `sessions/<chat_id>/transcript.jsonl`.
-- Preserves context across **model switches** by starting a new Devin session and
+- Preserves context across **model switches** by starting a new agent session and
   re-injecting the recent transcript + long-term memory.
 - Can switch models on the fly (`/model <name>`).
 - Can keep long-term memory either locally (`file`) or in a Hindsight server
@@ -42,7 +44,7 @@ Add `TELEGRAM_BOT_TOKEN=...` to `config/secrets.env` for Telegram.
 
 ## Authentication
 
-`acp-fleet-harness` spawns `devin acp`, which needs to be authenticated. The
+The default engine spawns `devin acp`, which needs to be authenticated. The
 easiest way is to sign in once on the same user account that will run the
 service:
 
@@ -53,10 +55,9 @@ This writes credentials to `~/.local/share/devin/credentials.toml`. The
 `systemd/acp-fleet-harness.service.example` unit runs as your user and inherits your
 `HOME`, so the credentials file is found automatically.
 
-If you want to run the service as a different user (for example, a dedicated
-`devin` account), set `WINDSURF_API_KEY` in `config/secrets.env` and reference
-that file from the service unit. The token is the `windsurf_api_key` value from
-your own `~/.local/share/devin/credentials.toml`.
+Other engines may use `WINDSURF_API_KEY`, `ACP_API_KEY`, or a per-engine
+credential source. For a headless/dedicated account, set the relevant key in
+`config/secrets.env` and reference that file from the service unit.
 
 Send a message:
 
@@ -116,11 +117,12 @@ prompt with a clear label. Long quotes are trimmed to
 
 ## Important caveats
 
-- Authentication is handled by `devin` itself (`devin auth login` or Devin
-  Desktop). The harness only works if the user running it is already
-  authenticated, or if `WINDSURF_API_KEY` is supplied in `config/secrets.env`.
-- A Devin ACP session's model is set at creation. Switching models starts a new
-  ACP session, but the harness re-injects the conversation transcript + memory.
+- Authentication is handled by the configured engine (`devin auth login` or
+  Devin Desktop when `provider: devin`). The harness only works if the user
+  running it is already authenticated, or if `WINDSURF_API_KEY` / `ACP_API_KEY` is
+  supplied in `config/secrets.env`.
+- An ACP session's model is set at creation. Switching models starts a new
+  session, but the harness re-injects the conversation transcript + memory.
 - The HTTP ingress is intended for a trusted/private network (`127.0.0.1` by
   default). If you expose it externally, set `HARNESS_API_KEY` in
   `config/secrets.env` and send it in the `X-API-Key` header on `POST` and live runtime config `GET`

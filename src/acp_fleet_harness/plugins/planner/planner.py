@@ -51,7 +51,7 @@ class PlannerPlugin(StatePlugin):
     @property
     def _planning_model(self) -> str | None:
         return self.config.config.get("model") or (
-            self._runtime.config.devin.model if self._runtime else None
+            self._runtime.config.engine.model if self._runtime else None
         )
 
     @property

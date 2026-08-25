@@ -11,9 +11,9 @@ For the current implementation, see:
 
 ## Background
 
-The harness keeps one active Devin ACP session per Telegram chat. ACP session
-IDs are only valid for as long as the `devin acp` subprocess that created them
-is alive. If the service restarts or the subprocess crashes, the stored ACP
+The harness keeps one active ACP session per Telegram chat. ACP session IDs are
+only valid for as long as the ACP engine subprocess that created them is alive.
+If the service restarts or the subprocess crashes, the stored ACP
 `session_id` becomes stale. The harness therefore treats the ACP session as
 ephemeral and the **local on-disk state** (transcript, memory, session record)
 as the authoritative conversation history.

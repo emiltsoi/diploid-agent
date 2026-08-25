@@ -27,13 +27,13 @@
          │                      │
          ▼                      ▼
 ┌─────────────────┐     ┌──────────────────────┐
-│ Devin ACP       │     │ Memory backend       │
-│ (devin acp)     │     │ (file or Hindsight)  │
+│ ACP engine      │     │ Memory backend       │
+│ (default devin) │     │ (file or Hindsight)  │
 └────────┬────────┘     └──────────────────────┘
          │
          ▼
 ┌─────────────────┐
-│ Devin cloud     │
+│ Agent cloud     │
 │ session         │
 └─────────────────┘
 ```
@@ -43,20 +43,20 @@
 The core state machine.
 
 - Owns `sessions.jsonl`, the chat registry.
-- Creates or resumes Devin ACP sessions.
+- Creates or resumes ACP engine sessions.
 - Calls `MemoryManager` to retain turns and recall context.
-- Handles model switching by starting a new Devin session.
+- Handles model switching by starting a new engine session.
 
 ### `AcpClient`
 
-Synchronous wrapper around the `devin acp` ACP v1 JSON-RPC server.
+Synchronous wrapper around the configured ACP v1 JSON-RPC agent binary.
 
 - `create_session(prompt, cwd, model)` calls `session/new`, sets `mode`/`model`
   config options, and streams the first prompt.
 - `send_message(session_id, prompt, cwd, model)` calls `session/prompt` on an
   existing session.
 - `list_models()` returns the model options advertised by the ACP server.
-- Spawns one long-lived `devin acp` subprocess and multiplexes all chats
+- Spawns one long-lived ACP agent subprocess and multiplexes all chats
   through it.
 
 ### `MemoryManager`
@@ -65,7 +65,7 @@ Coordinates transcript, retention, summarization, and recall.
 
 - Keeps `sessions/<chat_id>/chat_transcript.jsonl` (durable chat ledger).
 - Picks the configured `MemoryBackend` (`file` or `hindsight`).
-- Builds the memory block that is injected into new Devin sessions.
+- Builds the memory block that is injected into new agent sessions.
 
 ### `MemoryBackend` implementations
 
@@ -86,7 +86,7 @@ Discovers and syncs `SKILL.md` files into the chat working directory.
 
 - Searches `personas/<persona>/skills/`, `personas/shared/skills/`, and `sessions/<chat_id>/.devin/skills/`.
 - Loads YAML frontmatter (`name`, `description`, `allowed-tools`, `triggers`, `permissions`) and the prompt body.
-- Copies enabled skills into `sessions/<chat_id>/.devin/skills/` before `session/new` so `devin acp` discovers them.
+- Copies enabled skills into `sessions/<chat_id>/.devin/skills/` before `session/new` so the ACP process discovers them.
 - Supports chat-scoped skill creation via `/skill create <name> <markdown>`.
 
 ### `persona_composer`
@@ -135,12 +135,12 @@ for details on `/new`, `/resume`, `/branch`, `/sessions`, and auto-recovery.
      anchor (for `Continue` triggers) + message.
    - If `reply_to` is present, the quoted text is inserted with a clear
      "In reply to ..." label and capped at `max_reply_quote_chars`.
-   - Sends to Devin ACP and receives an `AcpPromptResult` with `reply`,
+   - Sends to the ACP engine and receives an `AcpPromptResult` with `reply`,
      `stop_reason`, `cancelled`, and `partial`. If the ACP session is stale or
      the transport times out, the harness restarts the ACP process (if needed),
      rehydrates a new ACP session from the local transcript and memory, and
      retries once.
-   - If `devin.soft_timeout` elapses before the ACP turn completes,
+   - If `engine.soft_timeout` elapses before the ACP turn completes,
      `AcpClient` sends a `session/cancel` notification and the result is
      `partial=True`. The reply includes a notice prompting the user to send
      `Continue`. The same mechanism is used when the user sends `/stop`.
@@ -183,7 +183,7 @@ for details on `/new`, `/resume`, `/branch`, `/sessions`, and auto-recovery.
 || `systemd/example.service.example` | Generic unit template | Yes |
 || `systemd/example-run.sh` | Supervisor that runs ingress + poller | Yes |
 || `sessions/<chat_id>/` | Per-chat working directory | No (runtime) |
-|| `sessions/<chat_id>/.devin/skills/` | Synced skills for `devin acp` | No (runtime) |
+|| `sessions/<chat_id>/.devin/skills/` | Synced skills for the ACP process | No (runtime) |
 || `sessions/<chat_id>/chat_transcript.jsonl` | Durable turn log | No (runtime) |
 || `sessions/<chat_id>/chat_MEMORY.md` | Durable file-backend summaries | No (runtime) |
 || `sessions/<chat_id>/hindsight-pending-retain.jsonl` | Durable Hindsight spool | No (runtime) |

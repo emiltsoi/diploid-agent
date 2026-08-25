@@ -1,4 +1,4 @@
-"""ACP client: drive `devin acp` over stdio JSON-RPC.
+"""ACP client: drive an ACP-compatible agent binary over stdio JSON-RPC.
 
 Provides a long-lived ACP session, giving real-time `agent_message_chunk`
 streaming, mid-turn cancellation via `session/cancel` notification, and
@@ -87,21 +87,33 @@ def _normalize_model(model: str) -> str:
     return model.replace(".", "-")
 
 
-def _resolve_devin_bin(devin_bin: str | Path) -> Path:
-    p = Path(devin_bin).expanduser()
+def _devin_default_start_args(model: str) -> list[str]:
+    """Return the default start arguments for the Devin ACP binary."""
+    return ["acp", "--model", model]
+
+
+def _resolve_agent_bin(agent_bin: str | Path) -> Path:
+    """Resolve an agent binary path, falling back to PATH by file name."""
+    p = Path(agent_bin).expanduser()
     if p.exists():
         return p
-    found = shutil.which("devin")
+    name = p.name if p.name != "." else str(agent_bin)
+    found = shutil.which(name)
     if found:
         return Path(found)
-    raise RuntimeError(f"devin binary not found: {devin_bin}")
+    raise RuntimeError(f"agent binary not found: {agent_bin}")
+
+
+# Backward-compatible alias (deprecated).
+_resolve_devin_bin = _resolve_agent_bin
 
 
 class AcpClient:
-    """Synchronous wrapper around the `devin acp` ACP v1 server.
+    """Synchronous wrapper around an ACP v1 agent binary.
 
-    Spawns one long-lived `devin acp` subprocess and multiplexes sessions
-    through it.
+    Spawns one long-lived agent subprocess and multiplexes sessions through it.
+    Defaults to `devin acp` start arguments for backward compatibility; other
+    binaries can override `start_args`.
     """
 
     def __init__(
@@ -109,21 +121,24 @@ class AcpClient:
         model: str = "swe-1-7",
         permission_mode: str = "dangerous",
         timeout: float = 900.0,
-        devin_bin: str | Path = "~/.local/bin/devin",
+        agent_bin: str | Path = "~/.local/bin/devin",
+        start_args: list[str] | None = None,
         api_key: str | None = None,
         metrics: Any | None = None,
     ):
         self.model = _normalize_model(model)
         self.acp_mode = _ACP_MODE_MAP.get(permission_mode, "bypass")
         self.timeout = timeout
-        self.devin_bin = _resolve_devin_bin(devin_bin)
+        self.agent_bin = _resolve_agent_bin(agent_bin)
+        self.start_args = start_args or _devin_default_start_args(self.model)
         self.metrics = metrics
 
-        self._api_key = api_key or _load_windsurf_api_key()
+        self._api_key = (
+            api_key or os.environ.get("WINDSURF_API_KEY") or os.environ.get("ACP_API_KEY")
+        )
         if not self._api_key:
             raise RuntimeError(
-                "No WINDSURF_API_KEY in environment and no "
-                "~/.local/share/devin/credentials.toml. Run `devin auth login`."
+                "No api_key provided and no WINDSURF_API_KEY or ACP_API_KEY in environment."
             )
 
         # Background loop state.
@@ -259,7 +274,7 @@ class AcpClient:
         self._loop.call_soon_threadsafe(_do_cancel)
 
     def list_sessions(self, *, cwd: Path | None = None) -> list[dict[str, Any]]:
-        """ACP does not expose a directory-scoped session list like `devin list`."""
+        """ACP does not expose a directory-scoped session list."""
         return []
 
     def close(self) -> None:
@@ -329,6 +344,7 @@ class AcpClient:
     async def _start_transport(self) -> None:
         env = os.environ.copy()
         env["WINDSURF_API_KEY"] = self._api_key
+        env["ACP_API_KEY"] = self._api_key
         # A standalone `devin acp` must not believe it is inside the
         # Windsurf IDE, or it will wait for the IDE to authenticate.
         env.pop("ACP_BACKEND", None)
@@ -336,10 +352,8 @@ class AcpClient:
         env.pop("WINDSURF_EXT_HOST_PID", None)
 
         self._proc = await asyncio.create_subprocess_exec(
-            str(self.devin_bin),
-            "acp",
-            "--model",
-            self.model,
+            str(self.agent_bin),
+            *self.start_args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,

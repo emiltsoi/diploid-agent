@@ -1,16 +1,17 @@
 # Design decisions
 
-## Why ACP instead of the `devin -p` CLI or v3 REST API
+## Why ACP
 
-The Devin CLI now exposes an ACP JSON-RPC backend (`devin acp`) that gives the
-harness real-time streaming, mode/model steering via
-`session/set_config_option`, and a single long-lived process per chat. The
-non-interactive `devin -p` flow cannot do mid-turn streaming or cancellation,
-and the v3 REST API did not reliably honor injected personas or model switching.
+ACP (Agent Communication Protocol) gives the harness real-time streaming,
+mode/model steering via `session/set_config_option`, and a single long-lived
+process per chat. The default engine is the Devin CLI's `devin acp` backend, but
+the transport is generic: any binary that speaks ACP v1 JSON-RPC over stdio can
+be configured under `engine` with custom `bin` and `start_args`.
 
-ACP requires the same Devin Desktop or `devin auth login` credentials as the
-CLI, but it runs headlessly when `WINDSURF_API_KEY` or
-`~/.local/share/devin/credentials.toml` is available.
+The Devin engine uses the same Devin Desktop or `devin auth login` credentials
+as the CLI; it runs headlessly when `WINDSURF_API_KEY` or
+`~/.local/share/devin/credentials.toml` is available. Other engines may use
+`ACP_API_KEY` or their own credential source.
 
 ## Why one Hindsight bank per persona
 
@@ -53,7 +54,7 @@ file backend summarization loop is disabled when `backend: hindsight`.
 
 - **First prompt** (new session / model switch): full persona + memory + user
   message. This is the heavy context load.
-- **Follow-up prompt** (resume): short identity anchor + user message. The Devin
+- **Follow-up prompt** (resume): short identity anchor + user message. The ACP
   session already holds prior context.
 
 This keeps follow-up messages small while still allowing complete context
@@ -103,7 +104,7 @@ The ACP `session/new` call accepts a `mcpServers` list, but which servers are
 active is a chat-level policy, not a transport detail. The harness keeps the
 configured server definitions and the per-chat enabled set, and injects the right
 list at session creation time. This lets Telegram and HTTP callers enable or
-disable servers per chat without restarting the `devin acp` process.
+disable servers per chat without restarting the engine process.
 
 ## Why stale-session rehydration rebuilds the full prompt
 
@@ -116,7 +117,8 @@ intentionally chosen over trying to resume a broken ACP session.
 
 ## Why skills are files synced into the chat working directory
 
-Devin CLI discovers skills from `cwd/.devin/skills/*/SKILL.md` at session start.
+The active ACP process discovers skills from `cwd/.devin/skills/*/SKILL.md` at
+session start.
 The harness therefore owns skill *selection*: it reads persona, shared, and
 chat-scoped skill files, computes the enabled set for the chat, and copies the
 effective skills into the session's `cwd` before `session/new`. This keeps the

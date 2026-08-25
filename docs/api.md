@@ -223,7 +223,7 @@ curl -X POST http://127.0.0.1:4003/branch \
 
 ## `GET /models`
 
-List the model names accepted by the `devin` CLI.
+List the model names accepted by the ACP engine.
 
 ```bash
 curl http://127.0.0.1:4003/models

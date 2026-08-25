@@ -59,10 +59,12 @@ For a system unit, add `User=<username>`.
 
 ## Authentication note
 
-`devin acp` needs either:
+The default engine (`devin acp`) needs either:
 
-1. `WINDSURF_API_KEY` in `config/secrets.env`, or
+1. `WINDSURF_API_KEY` or `ACP_API_KEY` in `config/secrets.env`, or
 2. `~/.local/share/devin/credentials.toml` from a previous `devin auth login`.
+
+Other engines may use a different key or credential source.
 
 The systemd unit runs as your user and loads `config/secrets.env` via
 `EnvironmentFile`. If you sign in through Devin Desktop or `devin auth login` on

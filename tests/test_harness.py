@@ -387,7 +387,7 @@ def test_chat_memory_exceeded_flag_tracks_file_not_prompt(monkeypatch, tmp_path:
     """The session record's chat_memory_exceeded flag should reflect the file, not recall truncation."""
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
     config = _make_config(tmp_path, fixture_root)
-    config.devin.model = "swe-1-7"
+    config.engine.model = "swe-1-7"
     harness = ConversationHarness(config)
 
     def fake_create_session(prompt, *, cwd=None, model=None, **kwargs):

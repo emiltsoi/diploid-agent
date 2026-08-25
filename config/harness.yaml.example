@@ -1,5 +1,7 @@
-devin:
+engine:                 # `devin:` is still accepted as a backward-compatible alias
+  provider: devin       # `devin`, `generic`, or `fake`
   bin: ~/.local/bin/devin
+  # start_args: ["acp", "--model", "swe-1-7"]  # override command-line args for non-Devin binaries
   model: swe-1-7
   permission_mode: dangerous
   timeout: 900.0      # absolute ACP call limit

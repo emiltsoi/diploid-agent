@@ -293,7 +293,7 @@ class ContextBuilder:
         normalized = re.sub(r"[^\w\s]", "", user_message).strip().lower()
         if not normalized:
             return False
-        return normalized in {t.strip().lower() for t in self.config.devin.continuation_triggers}
+        return normalized in {t.strip().lower() for t in self.config.engine.continuation_triggers}
 
     def continuation_anchor(self, record: SessionRecord | None, user_message: str) -> str | None:
         """Return a prompt anchor when resuming an interrupted turn."""
@@ -378,12 +378,12 @@ class ContextBuilder:
         build_ctx = PromptBuildContext(
             chat_id=chat_id,
             record=record,
-            model=model or self.config.devin.model,
+            model=model or self.config.engine.model,
             is_first=True,
             continuation_anchor=continuation_anchor,
         )
         build_ctx = self.plugin_manager.before_build_prompt(chat_id, build_ctx)
-        effective_model = build_ctx.model or self.config.devin.model
+        effective_model = build_ctx.model or self.config.engine.model
 
         formatted = self.format_user_message(
             user_message,

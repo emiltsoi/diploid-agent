@@ -239,8 +239,8 @@ class TurnController:
 
         turn_start = time.perf_counter()
         continue_word = (
-            self.runtime.config.devin.continuation_triggers[0].capitalize()
-            if self.runtime.config.devin.continuation_triggers
+            self.runtime.config.engine.continuation_triggers[0].capitalize()
+            if self.runtime.config.engine.continuation_triggers
             else "Continue"
         )
 
@@ -253,7 +253,7 @@ class TurnController:
                     cwd=self.runtime._chat_dir(chat_id),
                     model=use_model,
                     mcp_servers=self.runtime._active_mcp_servers(chat_id) if is_new else None,
-                    soft_timeout=self.runtime.config.devin.soft_timeout,
+                    soft_timeout=self.runtime.config.engine.soft_timeout,
                 )
                 call_ctx = self.runtime._plugins.before_engine_call(
                     chat_id,
@@ -761,7 +761,7 @@ class TurnController:
                     prompt=prompt,
                     cwd=self.runtime._chat_dir(chat_id),
                     model=use_model,
-                    soft_timeout=self.runtime.config.devin.soft_timeout,
+                    soft_timeout=self.runtime.config.engine.soft_timeout,
                 )
                 call_ctx = self.runtime._plugins.before_engine_call(
                     chat_id,
@@ -913,8 +913,8 @@ class TurnController:
                 reply = turn_result.reply
 
             continue_word = (
-                self.runtime.config.devin.continuation_triggers[0].capitalize()
-                if self.runtime.config.devin.continuation_triggers
+                self.runtime.config.engine.continuation_triggers[0].capitalize()
+                if self.runtime.config.engine.continuation_triggers
                 else "Continue"
             )
             notice: str | None = None

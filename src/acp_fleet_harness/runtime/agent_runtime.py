@@ -30,7 +30,7 @@ from acp_fleet_harness.config import (
 )
 from acp_fleet_harness.context import ContextBuilder
 from acp_fleet_harness.dispatch import Dispatch, DispatchStatus, DispatchStore
-from acp_fleet_harness.engine import AgentEngine, DevinAcpEngine, TurnRequest, TurnResult
+from acp_fleet_harness.engine import AgentEngine, TurnRequest, TurnResult, build_engine
 from acp_fleet_harness.engine.router import ModelRoute, ModelRouter
 from acp_fleet_harness.mcp import McpManager
 from acp_fleet_harness.memory import MemoryManager, RecallResult
@@ -236,8 +236,8 @@ class AgentRuntime(RuntimeAPI):
         api_key = None
         if self.config.secrets:
             api_key = self.config.secrets.windsurf_api_key
-        return DevinAcpEngine(
-            config=self.config.devin,
+        return build_engine(
+            self.config.engine,
             api_key=api_key,
             metrics=metrics,
         )
@@ -1342,7 +1342,7 @@ class AgentRuntime(RuntimeAPI):
         return pctx.prompt
 
     def _model(self, record: SessionRecord | None) -> str:
-        return record.model if record else self.config.devin.model
+        return record.model if record else self.config.engine.model
 
     def resolve_model(
         self,
@@ -1456,7 +1456,7 @@ class AgentRuntime(RuntimeAPI):
             cwd=cwd,
             model=model,
             mcp_servers=mcp_servers or self._active_mcp_servers(chat_id),
-            soft_timeout=self.config.devin.soft_timeout,
+            soft_timeout=self.config.engine.soft_timeout,
         )
         result = self.engine.prompt(request, on_chunk=on_chunk, on_update=on_update)
         if result.session_id is None:

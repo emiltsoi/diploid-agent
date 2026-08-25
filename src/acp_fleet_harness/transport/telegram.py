@@ -1839,7 +1839,7 @@ def main() -> int:
 
     # The poller must wait longer than the harness's absolute ACP timeout,
     # otherwise it gives up on a turn that is still running.
-    reply_timeout = config.devin.timeout + 30.0
+    reply_timeout = config.engine.timeout + 30.0
     metrics = MetricsCollector(prefix="harness")
     poller = TelegramPoller(
         token=token,

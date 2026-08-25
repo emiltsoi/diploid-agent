@@ -90,8 +90,8 @@ def test_config_loads_acp_backend(tmp_path: Path) -> None:
         )
     )
     config = Config.load(config_path, secrets_path)
-    assert config.devin.model == "swe-1-7"
-    assert config.devin.bin == "/bin/devin"
+    assert config.engine.model == "swe-1-7"
+    assert config.engine.bin == "/bin/devin"
     assert config.persona.name == "test-pilot"
     assert config.harness.telegram.token == "tok"
 

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""ACP probe: verify headless `devin acp` works with on-disk or env credentials.
+"""ACP probe: verify a headless ACP binary works with on-disk or env credentials.
 
-This spawns `devin acp`, drives it through a raw ACP v1 JSON-RPC exchange, and
-prints the streamed reply. It proves the auth issue is environmental: the ACP
-process needs either `WINDSURF_API_KEY` or the `~/.local/share/devin/credentials.toml`
-file that `devin auth login` writes.
+This spawns an ACP agent binary (default `devin acp`), drives it through a raw
+ACP v1 JSON-RPC exchange, and prints the streamed reply. It proves the auth
+issue is environmental: the ACP process needs either `WINDSURF_API_KEY`,
+`ACP_API_KEY`, or the `~/.local/share/devin/credentials.toml` file that
+`devin auth login` writes.
 """
 
 from __future__ import annotations
@@ -21,10 +22,12 @@ from pathlib import Path
 from typing import Any
 
 
-def _load_windsurf_api_key() -> str | None:
-    """Return WINDSURF_API_KEY from env or the Devin CLI credentials file."""
+def _load_api_key() -> str | None:
+    """Return API key from env or the Devin CLI credentials file."""
     if os.environ.get("WINDSURF_API_KEY"):
         return os.environ["WINDSURF_API_KEY"]
+    if os.environ.get("ACP_API_KEY"):
+        return os.environ["ACP_API_KEY"]
 
     creds_path = Path.home() / ".local" / "share" / "devin" / "credentials.toml"
     if creds_path.exists():
@@ -39,10 +42,10 @@ def _load_windsurf_api_key() -> str | None:
 class AcpTransport:
     """Minimal async ACP v1 client over stdio."""
 
-    def __init__(self, devin_bin: Path, model: str, windsurf_api_key: str, cwd: Path):
-        self.devin_bin = devin_bin
+    def __init__(self, agent_bin: Path, model: str, api_key: str, cwd: Path):
+        self.agent_bin = agent_bin
         self.model = model
-        self.windsurf_api_key = windsurf_api_key
+        self.api_key = api_key
         self.cwd = cwd
         self.proc: asyncio.subprocess.Process | None = None
         self._next_id = 0
@@ -51,10 +54,11 @@ class AcpTransport:
 
     async def start(self) -> dict[str, Any]:
         env = os.environ.copy()
-        env["WINDSURF_API_KEY"] = self.windsurf_api_key
+        env["WINDSURF_API_KEY"] = self.api_key
+        env["ACP_API_KEY"] = self.api_key
 
         self.proc = await asyncio.create_subprocess_exec(
-            str(self.devin_bin),
+            str(self.agent_bin),
             "acp",
             "--model",
             self.model,
@@ -246,33 +250,39 @@ class AcpTransport:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Devin ACP auth and steering probe")
-    default_devin_bin = shutil.which("devin") or str(Path.home() / ".local" / "bin" / "devin")
-    parser.add_argument("--devin-bin", type=Path, default=Path(default_devin_bin))
+    parser = argparse.ArgumentParser(description="ACP auth and steering probe")
+    default_agent_bin = shutil.which("devin") or str(Path.home() / ".local" / "bin" / "devin")
+    parser.add_argument(
+        "--engine-bin",
+        type=Path,
+        default=Path(default_agent_bin),
+        help="Path to the ACP agent binary (default: devin)",
+    )
+    parser.add_argument("--devin-bin", type=Path, dest="engine_bin")
     parser.add_argument("--model", default="swe-1-7")
     parser.add_argument(
         "--mode", default="bypass", help="Session mode (bypass, accept-edits, ask, plan, smart)"
     )
     args = parser.parse_args()
 
-    if not args.devin_bin.exists():
-        print(f"Devin binary not found: {args.devin_bin}", file=sys.stderr)
+    if not args.engine_bin.exists():
+        print(f"Agent binary not found: {args.engine_bin}", file=sys.stderr)
         return 1
 
-    api_key = _load_windsurf_api_key()
+    api_key = _load_api_key()
     if not api_key:
         print(
-            "No WINDSURF_API_KEY in environment and no ~/.local/share/devin/credentials.toml.\n"
-            "Run `devin auth login` from this environment, or set WINDSURF_API_KEY.",
+            "No WINDSURF_API_KEY/ACP_API_KEY in environment and no ~/.local/share/devin/credentials.toml.\n"
+            "Run `devin auth login` from this environment, or set WINDSURF_API_KEY/ACP_API_KEY.",
             file=sys.stderr,
         )
         return 1
 
-    with tempfile.TemporaryDirectory(prefix="devin-acp-probe-") as tmpdir:
+    with tempfile.TemporaryDirectory(prefix="acp-probe-") as tmpdir:
         cwd = Path(tmpdir)
 
         async def _run() -> int:
-            transport = AcpTransport(args.devin_bin, args.model, api_key, cwd)
+            transport = AcpTransport(args.engine_bin, args.model, api_key, cwd)
             try:
                 init = await transport.start()
                 print(

@@ -1,36 +1,75 @@
-"""Devin ACP implementation of AgentEngine."""
+"""ACP engine implementation for the Devin CLI and other ACP-compatible binaries."""
 
 from __future__ import annotations
 
 import logging
+import os
+import tomllib
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from acp_fleet_harness.acp_client import AcpClient, AcpPromptResult
-from acp_fleet_harness.config import DevinConfig
+from acp_fleet_harness.config import EngineConfig
 from acp_fleet_harness.engine.base import AgentEngine, TurnRequest, TurnResult
 
 logger = logging.getLogger(__name__)
 
 
-class DevinAcpEngine(AgentEngine):
-    """AgentEngine that drives the Devin ACP binary over stdio."""
+def _load_devin_credentials() -> str | None:
+    """Return the Windsurf API key from the Devin CLI credentials file."""
+    creds_path = Path.home() / ".local" / "share" / "devin" / "credentials.toml"
+    if creds_path.exists():
+        try:
+            data = tomllib.loads(creds_path.read_text())
+            return data.get("windsurf_api_key")
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            logger.warning("Failed to read Devin credentials from %s: %s", creds_path, exc)
+    return None
+
+
+def _devin_start_args(model: str) -> list[str]:
+    """Return the default start arguments for `devin acp`."""
+    return ["acp", "--model", model.replace(".", "-")]
+
+
+class AcpEngine(AgentEngine):
+    """AgentEngine that drives an ACP-compatible binary over stdio.
+
+    When `provider` is `"devin"` (the default), the engine reads the Windsurf
+    API key from the Devin credentials file and spawns `devin acp`.
+    """
 
     def __init__(
         self,
-        config: DevinConfig,
+        config: EngineConfig,
         *,
         api_key: str | None = None,
         metrics: Any | None = None,
     ) -> None:
         self.config = config
         self.metrics = metrics
+
+        if api_key is None:
+            if config.provider == "devin":
+                api_key = _load_devin_credentials()
+            if not api_key:
+                api_key = os.environ.get("WINDSURF_API_KEY") or os.environ.get("ACP_API_KEY")
+
+        if config.start_args is None:
+            if config.provider == "devin":
+                start_args = _devin_start_args(config.model)
+            else:
+                start_args = []
+        else:
+            start_args = config.start_args
+
         self._client = AcpClient(
             model=config.model,
             permission_mode=config.permission_mode,
             timeout=config.timeout,
-            devin_bin=config.bin,
+            agent_bin=config.bin,
+            start_args=start_args,
             api_key=api_key,
             metrics=metrics,
         )
@@ -156,3 +195,7 @@ class DevinAcpEngine(AgentEngine):
         if not isinstance(exc, RuntimeError):
             return False
         return bool(self._client._is_stale_session_error(exc))  # type: ignore[attr-defined]
+
+
+# Backward-compatible alias.
+DevinAcpEngine = AcpEngine

@@ -2,7 +2,7 @@
 
 ## Why a switch creates a new session
 
-A Devin ACP session's model is set at creation and can be changed via
+An ACP session's model is set at creation and can be changed via
 `session/set_config_option`, but the harness prefers to start a fresh session
 when the model changes. This keeps the transcript boundary clean and lets the
 new model see the full persona + memory context in a single first prompt.
@@ -16,13 +16,13 @@ new model see the full persona + memory context in a single first prompt.
    - the full persona identity
    - the current chat memory (recalled from the active backend)
    - a system-style instruction to continue the conversation
-3. Calls `session/new` through the long-lived `devin acp` process and sets the
+3. Calls `session/new` through the long-lived ACP engine process and sets the
    `model` config option to `<new_model>`.
 4. Updates `sessions.jsonl` with the new `session_id` and `model`.
 5. Records the switch as a transcript turn so the new session has continuity.
 
-The `session_id` in `/status` changes because it now points to the new Devin
-session. The old session still exists on Devin's servers but is no longer used by
+The `session_id` in `/status` changes because it now points to the new agent
+session. The old session still exists on the provider's servers but is no longer used by
 the harness.
 
 ## Context preservation
@@ -64,5 +64,5 @@ know.
 
 The ACP server expects model IDs with dashes (e.g. `swe-1-7`, `glm-5-2`). The
 harness normalizes dotted names like `swe-1.7` or `glm-5.2` by replacing `.` with
-`-` before sending them to the CLI, so either form can be used when switching
+`-` before sending them to the ACP engine, so either form can be used when switching
 models.

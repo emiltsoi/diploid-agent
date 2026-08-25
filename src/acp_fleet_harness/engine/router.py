@@ -21,7 +21,7 @@ class ModelRouter:
     """Choose a model for a user message based on lane rules and budget."""
 
     def __init__(self, config: Config) -> None:
-        self._devin_model = config.devin.model
+        self._default_model = config.engine.model
         self._routing = config.harness.routing
 
     @property
@@ -40,7 +40,7 @@ class ModelRouter:
         notice is returned but a model is still chosen.
         """
         if not self.enabled:
-            return ModelRoute(model=self._devin_model)
+            return ModelRoute(model=self._default_model)
 
         budget = self._routing.budget
         if budget.enabled and cumulative_tokens >= budget.max_total_tokens:
@@ -50,13 +50,13 @@ class ModelRouter:
                 f"Start a new session with /new to continue."
             )
             return ModelRoute(
-                model=self._routing.fallback_model or self._devin_model,
+                model=self._routing.fallback_model or self._default_model,
                 notice=notice,
                 budget_exceeded=True,
             )
 
         lane = self._detect_lane(user_message)
-        model = self._routing.lanes.get(lane, self._routing.fallback_model or self._devin_model)
+        model = self._routing.lanes.get(lane, self._routing.fallback_model or self._default_model)
 
         notice: str | None = None
         if budget.enabled and cumulative_tokens > 0:

@@ -37,7 +37,7 @@ class TurnResult:
 class AgentEngine(abc.ABC):
     """Abstract protocol for an agent backend.
 
-    The canonical implementation is `DevinAcpEngine`, which speaks ACP over
+    The canonical implementation is `AcpEngine`, which speaks ACP over
     stdio. Other implementations can drop in by satisfying this interface.
     """
 

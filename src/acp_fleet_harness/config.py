@@ -22,8 +22,12 @@ class Secrets(BaseModel):
         return v.strip() if v is not None else None
 
 
-class DevinConfig(BaseModel):
+class EngineConfig(BaseModel):
+    """Engine configuration."""
+
+    provider: str = "devin"
     bin: str = "~/.local/bin/devin"
+    start_args: list[str] | None = None
     model: str = "swe-1-7"
     permission_mode: str = "dangerous"
     timeout: float = 900.0
@@ -36,6 +40,9 @@ class DevinConfig(BaseModel):
     @classmethod
     def expand_bin(cls, v: str) -> str:
         return os.path.expanduser(v)
+
+
+DevinConfig = EngineConfig  # backward-compatible alias
 
 
 class PersonaConfig(BaseModel):
@@ -313,7 +320,13 @@ class HarnessConfig(BaseModel):
 
 
 class Config(BaseModel):
-    devin: DevinConfig = Field(default_factory=DevinConfig)
+    model_config = ConfigDict(populate_by_name=True)
+
+    engine: EngineConfig = Field(
+        default_factory=EngineConfig,
+        alias="devin",
+        serialization_alias="engine",
+    )
     persona: PersonaConfig
     harness: HarnessConfig = Field(default_factory=HarnessConfig)
     secrets: Secrets | None = None
