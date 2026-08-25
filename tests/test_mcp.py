@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from devin_fleet_harness.config import Config, McpConfig, McpServerConfig
-from devin_fleet_harness.mcp import McpManager
+from acp_fleet_harness.config import Config, McpConfig, McpServerConfig
+from acp_fleet_harness.mcp import McpManager
 
 
 def test_mcp_manager_returns_enabled_servers() -> None:
@@ -88,7 +88,7 @@ def test_mcp_manager_renders_placeholders(tmp_path: Path) -> None:
                         command="python",
                         args=[
                             "-m",
-                            "devin_fleet_harness.example_mcp",
+                            "acp_fleet_harness.example_mcp",
                             "--chat-id",
                             "{chat_id}",
                             "--sessions-root",
@@ -111,7 +111,7 @@ def test_mcp_manager_renders_placeholders(tmp_path: Path) -> None:
 
 
 def test_mcp_manager_renders_harness_url(tmp_path: Path) -> None:
-    from devin_fleet_harness.config import Config, McpConfig, McpServerConfig
+    from acp_fleet_harness.config import Config, McpConfig, McpServerConfig
 
     config = Config(
         persona={"name": "test-pilot", "profile_root": "/tmp"},
@@ -126,7 +126,7 @@ def test_mcp_manager_renders_harness_url(tmp_path: Path) -> None:
                         command="python",
                         args=[
                             "-m",
-                            "devin_fleet_harness.memory_mcp",
+                            "acp_fleet_harness.memory_mcp",
                             "--chat-id",
                             "{chat_id}",
                             "--harness-url",

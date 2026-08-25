@@ -133,10 +133,10 @@ Drop a package directory in `~/.devin/plugins/<name>/` with an `__init__.py` tha
 
 ```python
 from pathlib import Path
-from devin_fleet_harness.config import PluginConfig
-from devin_fleet_harness.models import ChatResult
-from devin_fleet_harness.plugins.base import StatePlugin
-from devin_fleet_harness.plugins.contexts import TurnStartContext
+from acp_fleet_harness.config import PluginConfig
+from acp_fleet_harness.models import ChatResult
+from acp_fleet_harness.plugins.base import StatePlugin
+from acp_fleet_harness.plugins.contexts import TurnStartContext
 
 
 class MyPlugin(StatePlugin):

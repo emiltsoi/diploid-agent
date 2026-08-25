@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from devin_fleet_harness.engine import TurnRequest
-from devin_fleet_harness.engine.fake import FakeAgentEngine
+from acp_fleet_harness.engine import TurnRequest
+from acp_fleet_harness.engine.fake import FakeAgentEngine
 
 
 def test_fake_engine_prompt_creates_session() -> None:

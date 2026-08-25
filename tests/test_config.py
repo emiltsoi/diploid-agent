@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from devin_fleet_harness.config import Config, PersonaConfig
+from acp_fleet_harness.config import Config, PersonaConfig
 
 
 def test_config_loads_windsurf_api_key(tmp_path: Path) -> None:
@@ -28,7 +28,7 @@ def test_config_loads_windsurf_api_key(tmp_path: Path) -> None:
 
 
 def test_skill_config_parses() -> None:
-    from devin_fleet_harness.config import Config
+    from acp_fleet_harness.config import Config
 
     data = {
         "persona": {"name": "test-pilot", "profile_root": "/tmp"},
@@ -45,7 +45,7 @@ def test_skill_config_parses() -> None:
 
 
 def test_mcp_config_parses() -> None:
-    from devin_fleet_harness.config import Config
+    from acp_fleet_harness.config import Config
 
     data = {
         "persona": {

@@ -11,7 +11,8 @@ __pycache__/
 config/secrets.env
 config/*.token
 config/harness.yaml
-systemd/devin-fleet-harness.service
+config/devin-pilot.yaml
+systemd/acp-fleet-harness.service
 sessions/
 sessions.jsonl
 dispatch_store.jsonl

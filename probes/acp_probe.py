@@ -75,7 +75,7 @@ class AcpTransport:
                     "terminal": False,
                 },
                 "clientInfo": {
-                    "name": "devin-fleet-harness/acp-probe",
+                    "name": "acp-fleet-harness/acp-probe",
                     "version": "0.1.0",
                 },
             },

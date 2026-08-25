@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from devin_fleet_harness.config import Config, DevinConfig, HarnessConfig, PersonaConfig, Secrets
-from devin_fleet_harness.runtime.agent_runtime import AgentRuntime
+from acp_fleet_harness.config import Config, DevinConfig, HarnessConfig, PersonaConfig, Secrets
+from acp_fleet_harness.runtime.agent_runtime import AgentRuntime
 
 
 def _fixture_root() -> Path:
@@ -37,7 +37,7 @@ def test_wake_silent_does_not_notify(tmp_path: Path, monkeypatch) -> None:
     sent = []
     monkeypatch.setattr(runtime.notifier, "send", lambda *a, **k: sent.append(a))
 
-    from devin_fleet_harness.models import WakeEvent
+    from acp_fleet_harness.models import WakeEvent
 
     e = runtime.wake_queue.enqueue(
         WakeEvent(
@@ -54,7 +54,7 @@ def test_wake_silent_does_not_notify(tmp_path: Path, monkeypatch) -> None:
 
     class FakeEngine:
         def prompt(self, *a, **k):
-            from devin_fleet_harness.engine import TurnResult
+            from acp_fleet_harness.engine import TurnResult
 
             return TurnResult(reply="ok", session_id="s1")
 

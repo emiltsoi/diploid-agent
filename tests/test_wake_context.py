@@ -2,19 +2,19 @@
 
 from pathlib import Path
 
-from devin_fleet_harness.config import (
+from acp_fleet_harness.config import (
     Config,
     DevinConfig,
     HarnessConfig,
     PersonaConfig,
     PluginConfig,
 )
-from devin_fleet_harness.context import ContextBuilder
-from devin_fleet_harness.engine.fake import FakeAgentEngine
-from devin_fleet_harness.memory import MemoryManager
-from devin_fleet_harness.models import WakeEvent
-from devin_fleet_harness.plugins.base import StatePlugin, WakeContext
-from devin_fleet_harness.plugins.manager import PluginManager
+from acp_fleet_harness.context import ContextBuilder
+from acp_fleet_harness.engine.fake import FakeAgentEngine
+from acp_fleet_harness.memory import MemoryManager
+from acp_fleet_harness.models import WakeEvent
+from acp_fleet_harness.plugins.base import StatePlugin, WakeContext
+from acp_fleet_harness.plugins.manager import PluginManager
 
 
 def _fixture_root() -> Path:

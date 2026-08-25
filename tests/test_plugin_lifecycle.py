@@ -5,8 +5,8 @@ from typing import Any
 
 import pytest
 
-from devin_fleet_harness.acp_client import AcpPromptResult
-from devin_fleet_harness.config import (
+from acp_fleet_harness.acp_client import AcpPromptResult
+from acp_fleet_harness.config import (
     Config,
     DevinConfig,
     HarnessConfig,
@@ -14,10 +14,10 @@ from devin_fleet_harness.config import (
     PluginConfig,
     Secrets,
 )
-from devin_fleet_harness.harness import ConversationHarness
-from devin_fleet_harness.models import ChatResult
-from devin_fleet_harness.plugins.base import StatePlugin
-from devin_fleet_harness.plugins.contexts import (
+from acp_fleet_harness.harness import ConversationHarness
+from acp_fleet_harness.models import ChatResult
+from acp_fleet_harness.plugins.base import StatePlugin
+from acp_fleet_harness.plugins.contexts import (
     DispatchCompleteContext,
     DispatchContinueContext,
     DispatchCreateContext,
@@ -627,7 +627,7 @@ def test_retain_and_promote_hooks_fire(monkeypatch, tmp_path: Path) -> None:
 
     monkeypatch.setattr(harness.client, "create_session", fake_create_session)
     monkeypatch.setattr(
-        "devin_fleet_harness.memory.MemoryManager.promote_to_persona",
+        "acp_fleet_harness.memory.MemoryManager.promote_to_persona",
         lambda self, fact: None,
     )
 

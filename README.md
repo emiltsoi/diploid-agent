@@ -1,4 +1,4 @@
-# devin-fleet-harness
+# acp-fleet-harness
 
 A persistent, persona-driven harness around `devin acp`.
 
@@ -33,16 +33,16 @@ pip install -e ".[dev]"
 cp config/harness.yaml.example config/harness.yaml
 # edit config/harness.yaml
 
-cp systemd/devin-fleet-harness.service.example systemd/devin-fleet-harness.service
+cp systemd/acp-fleet-harness.service.example systemd/acp-fleet-harness.service
 # edit paths, then:
-systemctl --user enable --now "$(pwd)/systemd/devin-fleet-harness.service"
+systemctl --user enable --now "$(pwd)/systemd/acp-fleet-harness.service"
 ```
 
 Add `TELEGRAM_BOT_TOKEN=...` to `config/secrets.env` for Telegram.
 
 ## Authentication
 
-`devin-fleet-harness` spawns `devin acp`, which needs to be authenticated. The
+`acp-fleet-harness` spawns `devin acp`, which needs to be authenticated. The
 easiest way is to sign in once on the same user account that will run the
 service:
 
@@ -50,7 +50,7 @@ service:
 - CLI: run `devin auth login` and complete the browser/manual token flow.
 
 This writes credentials to `~/.local/share/devin/credentials.toml`. The
-`systemd/devin-fleet-harness.service.example` unit runs as your user and inherits your
+`systemd/acp-fleet-harness.service.example` unit runs as your user and inherits your
 `HOME`, so the credentials file is found automatically.
 
 If you want to run the service as a different user (for example, a dedicated

@@ -5,8 +5,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from devin_fleet_harness.models import WakeEvent
-from devin_fleet_harness.runtime.wake_queue import WakeQueue
+from acp_fleet_harness.models import WakeEvent
+from acp_fleet_harness.runtime.wake_queue import WakeQueue
 
 mp.set_start_method("spawn", force=True)
 

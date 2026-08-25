@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from devin_fleet_harness.config import (
+from acp_fleet_harness.config import (
     Config,
     DevinConfig,
     HarnessConfig,
@@ -13,7 +13,7 @@ from devin_fleet_harness.config import (
     PluginConfig,
     Secrets,
 )
-from devin_fleet_harness.transport.http import create_app
+from acp_fleet_harness.transport.http import create_app
 
 
 def _test_config(tmp_path: Path) -> Config:
@@ -32,7 +32,7 @@ def _test_config(tmp_path: Path) -> Config:
             plugins=[
                 PluginConfig(
                     name="curriculum",
-                    module="devin_fleet_harness.plugins.curriculum",
+                    module="acp_fleet_harness.plugins.curriculum",
                     prompt_slot="persona_state",
                     state_file="chat_curriculum.json",
                     max_prompt_chars=1024,

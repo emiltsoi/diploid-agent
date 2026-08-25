@@ -7,7 +7,7 @@ keeping the service container and non-turn API on AgentRuntime.
 
 from pathlib import Path
 
-from devin_fleet_harness.config import (
+from acp_fleet_harness.config import (
     Config,
     DevinConfig,
     HarnessConfig,
@@ -15,9 +15,9 @@ from devin_fleet_harness.config import (
     PlanConfig,
     Secrets,
 )
-from devin_fleet_harness.harness import ConversationHarness
-from devin_fleet_harness.runtime import AgentRuntime, TurnController
-from devin_fleet_harness.transport.base import RuntimeAPI
+from acp_fleet_harness.harness import ConversationHarness
+from acp_fleet_harness.runtime import AgentRuntime, TurnController
+from acp_fleet_harness.transport.base import RuntimeAPI
 
 
 def _make_config(tmp_path: Path) -> Config:

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from devin_fleet_harness.plan.manager import PlanManager
-from devin_fleet_harness.plan.models import PlanStatus, Task, TaskStatus, TaskType
+from acp_fleet_harness.plan.manager import PlanManager
+from acp_fleet_harness.plan.models import PlanStatus, Task, TaskStatus, TaskType
 
 
 def test_create_plan_with_ready_task(tmp_path: Path) -> None:

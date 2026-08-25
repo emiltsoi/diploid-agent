@@ -7,14 +7,14 @@ from typing import Any
 
 import httpx
 
-from devin_fleet_harness.config import (
+from acp_fleet_harness.config import (
     NotificationsConfig,
     TaskConfig,
     TimerConfig,
     WakerConfig,
 )
-from devin_fleet_harness.telegram_poll import ChatInput, TelegramPoller, TurnWorker
-from devin_fleet_harness.transport.telegram import _format_thought
+from acp_fleet_harness.telegram_poll import ChatInput, TelegramPoller, TurnWorker
+from acp_fleet_harness.transport.telegram import _format_thought
 
 
 def _update(**kwargs) -> dict:
