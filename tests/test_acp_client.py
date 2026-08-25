@@ -82,6 +82,7 @@ def test_acp_client_falls_back_to_env(monkeypatch) -> None:
 
 def test_acp_client_raises_when_no_key(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.delenv("WINDSURF_API_KEY", raising=False)
+    monkeypatch.delenv("ACP_API_KEY", raising=False)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     devin_bin = tmp_path / "devin"
     devin_bin.write_text("#!/bin/sh\n")
