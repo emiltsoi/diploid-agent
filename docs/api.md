@@ -312,7 +312,15 @@ Response:
   "enabled_skills": ["review"],
   "disabled_skills": null,
   "last_turn_metrics": {...},
-  "cumulative_metrics": {...}
+  "cumulative_metrics": {...},
+  "context_usage": {
+    "model": "swe-1-7",
+    "context_window": 262144,
+    "last_turn": {...},
+    "cumulative": {...},
+    "memory_budgets": {...},
+    "memory_exceeded": {...}
+  }
 }
 ```
 

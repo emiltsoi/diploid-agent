@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import subprocess
 import tomllib
 from collections.abc import Callable
 from pathlib import Path
@@ -49,6 +51,7 @@ class AcpEngine(AgentEngine):
     ) -> None:
         self.config = config
         self.metrics = metrics
+        self._context_window_cache: dict[str, int | None] | None = None
 
         if api_key is None:
             if config.provider == "devin":
@@ -195,6 +198,50 @@ class AcpEngine(AgentEngine):
         if not isinstance(exc, RuntimeError):
             return False
         return bool(self._client._is_stale_session_error(exc))  # type: ignore[attr-defined]
+
+    def model_context_window(self, model: str) -> int | None:
+        """Return the context-window size for ``model`` in tokens.
+
+        Uses the configured ``context_window`` override if set, otherwise
+        queries the underlying Devin CLI ``models list`` output and caches it.
+        """
+        if self.config.context_window is not None:
+            return self.config.context_window
+        if self._context_window_cache is None:
+            self._context_window_cache = self._load_model_context_windows()
+        canonical = model.replace(".", "-")
+        return self._context_window_cache.get(canonical)
+
+    def _load_model_context_windows(self) -> dict[str, int | None]:
+        """Parse ``<bin> models list --format json`` into a uid -> token map."""
+        cache: dict[str, int | None] = {}
+        bin_path = Path(self.config.bin).expanduser()
+        if not bin_path.exists():
+            return cache
+        try:
+            proc = subprocess.run(
+                [str(bin_path), "models", "list", "--format", "json"],
+                capture_output=True,
+                text=True,
+                timeout=30.0,
+                check=False,
+            )
+            if proc.returncode != 0:
+                logger.debug("Failed to list models: %s", proc.stderr)
+                return cache
+            data = json.loads(proc.stdout)
+            for family in data.get("families", []):
+                for variant in family.get("variants", []):
+                    uid = variant.get("model_uid")
+                    tokens = variant.get("max_context_tokens")
+                    if uid and isinstance(tokens, int):
+                        cache[uid] = tokens
+            # Allow dotted aliases like ``swe-1.7`` by normalizing to dashed uids.
+            dotted_cache = {uid.replace("-", "."): tokens for uid, tokens in cache.items() if uid}
+            cache.update(dotted_cache)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Could not load model context windows: %s", exc)
+        return cache
 
 
 # Backward-compatible alias.

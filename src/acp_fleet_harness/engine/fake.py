@@ -62,3 +62,9 @@ class FakeAgentEngine(AgentEngine):
 
     def close(self) -> None:
         self.call_log.append(("close", None))
+
+    def model_context_window(self, model: str) -> int | None:
+        self.call_log.append(("model_context_window", model))
+        if self.config is not None and self.config.context_window is not None:
+            return self.config.context_window
+        return None

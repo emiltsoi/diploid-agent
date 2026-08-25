@@ -654,6 +654,43 @@ def test_process_records_turn_metrics(monkeypatch, tmp_path: Path) -> None:
     assert status["cumulative_metrics"]["total_tokens"] == 150
 
 
+def test_status_exposes_context_usage(monkeypatch, tmp_path: Path) -> None:
+    """status() includes a context_usage block with percentages when the window is known."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root)
+    config.engine.context_window = 1000
+    harness = ConversationHarness(config)
+
+    def fake_create_session(
+        prompt: str, *, cwd: Path | None = None, model: str | None = None, **kwargs: Any
+    ):
+        return AcpPromptResult(
+            reply="Ready.",
+            session_id="session-1",
+            usage={
+                "inputTokens": 100,
+                "outputTokens": 50,
+                "totalTokens": 150,
+                "cachedReadTokens": 25,
+            },
+        )
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+
+    harness.process("chat-ctx-usage", "hello")
+    status = harness.status("chat-ctx-usage")
+    ctx = status["context_usage"]
+    assert ctx["model"] == "swe-1-7"
+    assert ctx["context_window"] == 1000
+    assert ctx["last_turn"]["input_tokens"] == 100
+    assert ctx["last_turn"]["input_percent"] == 10.0
+    assert ctx["last_turn"]["total_percent"] == 15.0
+    assert ctx["last_turn"]["available_tokens"] == 900
+    assert ctx["cumulative"]["total_tokens"] == 150
+    assert "max_chat_memory_chars" in ctx["memory_budgets"]
+    assert "chat_memory_exceeded" in ctx["memory_exceeded"]
+
+
 def test_metrics_exposed_in_prompt_when_enabled(monkeypatch, tmp_path: Path) -> None:
     """When expose_in_prompt is true, cumulative usage is injected into the prompt."""
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"

@@ -1603,6 +1603,47 @@ class AgentRuntime(RuntimeAPI):
         with self._lock:
             return self._model(self._active_record(chat_id))
 
+    def _context_usage(self, record: SessionRecord) -> dict[str, Any]:
+        """Return context-window and prompt-budget usage for a chat record."""
+        context_window: int | None = None
+        try:
+            context_window_fn = getattr(self.engine, "model_context_window", None)
+            if context_window_fn is not None:
+                context_window = context_window_fn(record.model)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Failed to resolve context window for %s: %s", record.model, exc)
+
+        last_turn = record.last_turn_metrics or {}
+        cumulative = record.cumulative_metrics or {}
+
+        def _enrich(turn: dict[str, Any]) -> dict[str, Any]:
+            enriched = dict(turn)
+            if context_window:
+                input_tokens = turn.get("input_tokens", 0) or 0
+                total_tokens = turn.get("total_tokens", 0) or 0
+                enriched["input_percent"] = round(input_tokens / context_window * 100, 2)
+                enriched["total_percent"] = round(total_tokens / context_window * 100, 2)
+                enriched["available_tokens"] = max(0, context_window - input_tokens)
+            return enriched
+
+        return {
+            "model": record.model,
+            "context_window": context_window,
+            "last_turn": _enrich(last_turn),
+            "cumulative": cumulative,
+            "memory_budgets": {
+                "max_chat_memory_chars": self.config.harness.memory.max_chat_memory_chars,
+                "max_persona_memory_chars": self.config.harness.memory.max_persona_memory_chars,
+                "max_short_term_chars": self.config.harness.memory.max_short_term_chars,
+                "max_reply_quote_chars": self.config.harness.memory.max_reply_quote_chars,
+                "hindsight_max_recall_tokens": self.config.harness.memory.hindsight.max_recall_tokens,
+            },
+            "memory_exceeded": {
+                "chat_memory_exceeded": record.chat_memory_exceeded,
+                "persona_memory_exceeded": record.persona_memory_exceeded,
+            },
+        }
+
     def status(self, chat_id: str) -> dict[str, Any]:
         """Return the harness-recorded status for a chat."""
         with self._lock:
@@ -1615,6 +1656,8 @@ class AgentRuntime(RuntimeAPI):
             memory_stats = self._memory_manager(chat_id).stats()
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to load memory stats for %s: %s", chat_id, exc)
+
+        context_usage = self._context_usage(record)
 
         with self._lock:
             record = self._active_record(chat_id)
@@ -1634,6 +1677,7 @@ class AgentRuntime(RuntimeAPI):
                 "memory": memory_stats,
                 "last_turn_metrics": record.last_turn_metrics,
                 "cumulative_metrics": record.cumulative_metrics,
+                "context_usage": context_usage,
                 "enabled_mcp_servers": record.enabled_mcp_servers,
                 "enabled_skills": record.enabled_skills,
                 "disabled_skills": record.disabled_skills,

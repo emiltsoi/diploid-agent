@@ -29,6 +29,7 @@ class EngineConfig(BaseModel):
     bin: str = "~/.local/bin/devin"
     start_args: list[str] | None = None
     model: str = "swe-1-7"
+    context_window: int | None = None
     permission_mode: str = "dangerous"
     timeout: float = 900.0
     soft_timeout: float | None = 600.0  # seconds before auto-cancel + partial reply; None disables

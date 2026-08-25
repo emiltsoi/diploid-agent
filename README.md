@@ -77,7 +77,7 @@ curl -X POST http://127.0.0.1:4003/switch-model \
 
 ## Telegram commands
 
-- `/status` — current model, session id, working directory.
+- `/status` — current model, session id, working directory, and context-window usage.
 - `/metrics` — token usage and latency for this chat.
 - `/models` — list available ACP models.
 - `/model <name>` — switch this chat to a new model.

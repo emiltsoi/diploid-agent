@@ -77,7 +77,7 @@ def _format_thought(thought: str, limit: int = 4096) -> str:
 
 _TELEGRAM_HELP = """Available commands:
 
-/status - current model, session id, and working directory
+/status - current model, session id, working directory, and context-window usage
 /metrics - token usage and latency for this chat
 /mcp list | /mcp enable <name> | /mcp disable <name> - manage MCP servers
 /skill list | /skill enable <name> | /skill disable <name> | /skill create <name> <markdown> - manage skills
@@ -1293,12 +1293,30 @@ class TelegramPoller:
             data = resp.json()
             if not data.get("active"):
                 return "No active session for this chat yet."
-            return (
-                f"Persona: {data.get('persona')}\n"
-                f"Model: {data.get('model')}\n"
-                f"Session: {data.get('session_id')}\n"
-                f"Working directory: {data.get('cwd')}"
-            )
+            lines = [
+                f"Persona: {data.get('persona')}",
+                f"Model: {data.get('model')}",
+                f"Session: {data.get('session_id')}",
+                f"Working directory: {data.get('cwd')}",
+            ]
+            ctx = data.get("context_usage") or {}
+            context_window = ctx.get("context_window")
+            if context_window:
+                lines.append(f"Context window: {context_window} tokens")
+                last_turn = ctx.get("last_turn") or {}
+                if last_turn.get("input_percent") is not None:
+                    lines.append(
+                        f"Last turn: {last_turn['input_percent']}% input, "
+                        f"{last_turn.get('total_percent', 0)}% total "
+                        f"({last_turn.get('available_tokens', 0)} available)"
+                    )
+                cumulative = ctx.get("cumulative") or {}
+                if cumulative.get("turns") is not None:
+                    lines.append(
+                        f"Cumulative: {cumulative.get('turns', 0)} turns, "
+                        f"{cumulative.get('total_tokens', 0)} tokens"
+                    )
+            return "\n".join(lines)
         except Exception:
             logger.exception("Harness /status failed")
             return "Sorry, I could not fetch your chat status."

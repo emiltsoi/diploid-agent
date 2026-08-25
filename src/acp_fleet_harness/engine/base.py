@@ -83,3 +83,7 @@ class AgentEngine(abc.ABC):
     def health(self) -> bool:
         """Return True if the engine is healthy enough to accept prompts."""
         return True
+
+    def model_context_window(self, model: str) -> int | None:
+        """Return the model's context-window size in tokens, if known."""
+        return None

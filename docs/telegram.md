@@ -58,7 +58,7 @@ message, so the conversation thread is visible.
 
 | Command | Action |
 |---|---|
-| `/status` | Show current model, session id, and working directory. |
+| `/status` | Show current model, session id, working directory, and context-window usage. |
 | `/metrics` | Show token usage and latency for this chat. |
 | `/mcp list` | List configured MCP servers and enabled state. |
 | `/mcp enable <name>` | Enable an MCP server for this chat. |
