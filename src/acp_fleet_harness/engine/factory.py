@@ -23,4 +23,6 @@ def build_engine(
     engine_cls = ENGINES.get(config.provider)
     if engine_cls is None:
         raise ValueError(f"unknown engine provider: {config.provider}")
+    if engine_cls is FakeAgentEngine:
+        return FakeAgentEngine()
     return engine_cls(config, api_key=api_key, metrics=metrics)
