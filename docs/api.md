@@ -1,0 +1,575 @@
+# HTTP API reference
+
+Base URL: `http://127.0.0.1:4003` (configurable).
+
+## `GET /health`
+
+Health check.
+
+```bash
+curl http://127.0.0.1:4003/health
+```
+
+Response:
+
+```json
+{"status": "ok"}
+```
+
+## `POST /chat`
+
+Send a message and get a reply.
+
+```bash
+curl -X POST http://127.0.0.1:4003/chat \
+  -H "Content-Type: application/json" \
+  -d '{"chat_id": "test-1", "message": "Hello"}'
+```
+
+Response:
+
+```json
+{
+  "reply": "Hello.",
+  "notice": null
+}
+```
+
+`notice` is set on the first turn of a session or when a memory file crosses
+its context budget.
+
+Optional `model` starts a new Devin session if it differs from the current one:
+
+```bash
+curl -X POST http://127.0.0.1:4003/chat \
+  -H "Content-Type: application/json" \
+  -d '{"chat_id": "test-1", "message": "Hello", "model": "glm-5-2"}'
+```
+
+Optional `reply_to` and `reply_to_is_bot` inject a quoted earlier message into
+the prompt with a clear label (e.g. when the user is replying to a previous
+message in Telegram). Optional `reply_to_message_id` lets the harness resolve
+the reference from the Telegram message registry instead of quoting the full
+replied-to text:
+
+```bash
+curl -X POST http://127.0.0.1:4003/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "chat_id": "test-1",
+    "message": "Can you explain this?",
+    "reply_to": "The earlier message.",
+    "reply_to_is_bot": true,
+    "reply_to_message_id": 123
+  }'
+```
+
+Long `reply_to` text is trimmed to `harness.memory.max_reply_quote_chars`
+(default 2048 characters) to avoid bloating the prompt. When `reply_to_is_bot`
+is true, the quote is capped at `harness.memory.max_bot_reply_quote_chars`
+(default 240 characters) so the assistant does not see its own long output
+echoed back.
+
+## `POST /switch-model`
+
+Switch the model for a chat.
+
+```bash
+curl -X POST http://127.0.0.1:4003/switch-model \
+  -H "Content-Type: application/json" \
+  -d '{"chat_id": "test-1", "model": "glm-5-2"}'
+```
+
+Response:
+
+```json
+{
+  "reply": "Now running on model `glm-5-2`.\n\nReady to continue.",
+  "notice": null
+}
+```
+
+## `POST /stop`
+
+Cancel an in-flight ACP turn for a chat and return an immediate
+acknowledgement. The active turn will return a partial reply when it finishes
+aborting.
+
+```bash
+curl -X POST http://127.0.0.1:4003/stop \
+  -H "Content-Type: application/json" \
+  -d '{"chat_id": "test-1"}'
+```
+
+Response:
+
+```json
+{
+  "reply": "Stopping the current turn...",
+  "notice": "The agent will return a partial summary when it aborts."
+}
+```
+
+## `GET /turn/{chat_id}`
+
+Return the partial state of an active turn. Polling clients (like the Telegram
+poller) use this to update a streaming placeholder message.
+
+```bash
+curl http://127.0.0.1:4003/turn/test-1
+```
+
+Response while a turn is running:
+
+```json
+{
+  "chat_id": "test-1",
+  "status": "running",
+  "session_id": "...",
+  "user_message": "Write a long story...",
+  "message_text": "So far the story is about...",
+  "thought_text": "",
+  "stopped": false
+}
+```
+
+Response when idle:
+
+```json
+{
+  "chat_id": "test-1",
+  "status": "idle"
+}
+```
+
+## `POST /new/{chat_id}`
+
+Archive the current active session and start a fresh Devin session with an
+empty active directory.
+
+```bash
+curl -X POST http://127.0.0.1:4003/new/test-1
+```
+
+Response:
+
+```json
+{
+  "reply": "New session started.\n\nReady to continue.",
+  "notice": null
+}
+```
+
+## Session management
+
+These endpoints require the multi-session feature. See [Session management](session-management.md) for the full design.
+
+### `GET /sessions/{chat_id}`
+
+List the per-chat sessions. The active session is marked.
+
+```bash
+curl http://127.0.0.1:4003/sessions/test-1
+```
+
+Response:
+
+```json
+{
+  "chat_id": "test-1",
+  "active": 2,
+  "sessions": [
+    {
+      "number": 1,
+      "label": "2026-08-19 hello",
+      "model": "swe-1-7",
+      "turn_number": 3,
+      "updated_at": 1724000000.0,
+      "parent": null,
+      "is_active": false
+    },
+    {
+      "number": 2,
+      "label": "2026-08-19 switched to glm-5-2",
+      "model": "glm-5-2",
+      "turn_number": 1,
+      "updated_at": 1724000100.0,
+      "parent": null,
+      "is_active": true
+    }
+  ]
+}
+```
+
+### `POST /resume`
+
+Resume a previous session as the active one.
+
+```bash
+curl -X POST http://127.0.0.1:4003/resume \
+  -H "Content-Type: application/json" \
+  -d '{"chat_id": "test-1", "session_number": 1}'
+```
+
+### `POST /branch`
+
+Branch from a previous session and make the copy the active session.
+
+```bash
+curl -X POST http://127.0.0.1:4003/branch \
+  -H "Content-Type: application/json" \
+  -d '{"chat_id": "test-1", "session_number": 1}'
+```
+
+## `GET /models`
+
+List the model names accepted by the `devin` CLI.
+
+```bash
+curl http://127.0.0.1:4003/models
+```
+
+## `GET /metrics`
+
+Return global aggregate metrics across all chats.
+
+```bash
+curl http://127.0.0.1:4003/metrics
+```
+
+Response:
+
+```json
+{
+  "global": {
+    "turns": 10,
+    "input_tokens": 5000,
+    "output_tokens": 3000,
+    "total_tokens": 8000,
+    "cached_tokens": 0,
+    "latency_seconds": 45.0
+  },
+  "recent_turns": [...]
+}
+```
+
+## `GET /metrics/{chat_id}`
+
+Return per-chat cumulative and last-turn metrics.
+
+```bash
+curl http://127.0.0.1:4003/metrics/test-1
+```
+
+Response:
+
+```json
+{
+  "cumulative": {
+    "turns": 5,
+    "input_tokens": 2500,
+    "output_tokens": 1500,
+    "total_tokens": 4000,
+    "cached_tokens": 0,
+    "latency_seconds": 22.5
+  },
+  "last_turn": {
+    "turn_number": 5,
+    "model": "swe-1-7",
+    "input_tokens": 500,
+    "output_tokens": 300,
+    "total_tokens": 800,
+    "cached_tokens": 0,
+    "latency_seconds": 4.5
+  }
+}
+```
+
+## `GET /status/{chat_id}`
+
+Show the chat's harness record.
+
+```bash
+curl http://127.0.0.1:4003/status/test-1
+```
+
+Response:
+
+```json
+{
+  "chat_id": "test-1",
+  "active": true,
+  "persona": "test-pilot",
+  "model": "swe-1-7",
+  "session_number": 2,
+  "session_id": "nickel-tango",
+  "cwd": "/path/to/devin-fleet-harness/sessions/test-1",
+  "turn_number": 3,
+  "persona_memory_exceeded": false,
+  "chat_memory_exceeded": false,
+  "memory": {...},
+  "enabled_mcp_servers": ["github"],
+  "enabled_skills": ["review"],
+  "disabled_skills": null,
+  "last_turn_metrics": {...},
+  "cumulative_metrics": {...}
+}
+```
+
+## `GET /memory/{chat_id}`
+
+Return the per-chat memory content.
+
+```bash
+curl http://127.0.0.1:4003/memory/test-1
+```
+
+## `POST /summarize/{chat_id}`
+
+Manually trigger file-backend summarization.
+
+```bash
+curl -X POST http://127.0.0.1:4003/summarize/test-1
+```
+
+## `POST /recall`
+
+Search the active memory backend.
+
+```bash
+curl -X POST http://127.0.0.1:4003/recall \
+  -H "Content-Type: application/json" \
+  -d '{"chat_id": "test-1", "query": "what is my name", "tags": ["memory"]}'
+```
+
+## `POST /retain`
+
+Retain an observation in the active memory backend.
+
+```bash
+curl -X POST http://127.0.0.1:4003/retain \
+  -H "Content-Type: application/json" \
+  -d '{"chat_id": "test-1", "content": "User prefers tea in the morning", "tags": ["preference"], "context": "drink"}'
+```
+
+## `POST /promote`
+
+Append a fact to the persona's global memory.
+
+```bash
+curl -X POST http://127.0.0.1:4003/promote \
+  -H "Content-Type: application/json" \
+  -d '{"chat_id": "test-1", "message": "I prefer Rust over Python"}'
+```
+
+## `POST /state`
+
+Dispatch an event to a state plugin for a chat.
+
+```bash
+curl -X POST http://127.0.0.1:4003/state \
+  -H "Content-Type: application/json" \
+  -d '{"chat_id": "test-1", "plugin": "curriculum", "event": "add_word", "params": {"word": "hola", "translation": "hello"}}'
+```
+
+The `params` object is passed as keyword arguments to the plugin's event handler.
+
+## `GET /mcp/{chat_id}`
+
+List configured MCP servers and whether each is enabled for the chat.
+
+```bash
+curl http://127.0.0.1:4003/mcp/test-1
+```
+
+## `POST /mcp`
+
+Enable or disable an MCP server for the chat.
+
+```bash
+curl -X POST http://127.0.0.1:4003/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"chat_id": "test-1", "command": "enable", "name": "github"}'
+```
+
+Valid commands: `list`, `enable`, `disable`. `name` is required for `enable` and `disable`.
+
+## `GET /skill/{chat_id}`
+
+List available skills and whether each is enabled for the chat.
+
+```bash
+curl http://127.0.0.1:4003/skill/test-1
+```
+
+## `POST /skill`
+
+Enable, disable, or create a chat-scoped skill.
+
+```bash
+# Enable a skill
+curl -X POST http://127.0.0.1:4003/skill \
+  -H "Content-Type: application/json" \
+  -d '{"chat_id": "test-1", "command": "enable", "name": "review"}'
+
+# Create a chat-scoped skill
+curl -X POST http://127.0.0.1:4003/skill \
+  -H "Content-Type: application/json" \
+  -d '{
+    "chat_id": "test-1",
+    "command": "create",
+    "name": "oncall",
+    "content": "---\nname: oncall\n---\n\nAcknowledge the page and check dashboards."
+  }'
+```
+
+Valid commands: `list`, `enable`, `disable`, `create`. `name` is required for `enable`, `disable`, and `create`; `content` is required for `create`.
+
+## `POST /dispatch`
+
+Start a new dispatch for a chat. The external worker receives the returned `dispatch_id` and calls `POST /continue` when it finishes.
+
+```bash
+curl -X POST http://127.0.0.1:4003/dispatch \
+  -H "Content-Type: application/json" \
+  -d '{"chat_id": "test-1", "context": "run tests"}'
+```
+
+Response:
+
+```json
+{
+  "reply": "Dispatched.",
+  "dispatch_id": "dispatch-abc123"
+}
+```
+
+## `POST /continue`
+
+Report a dispatch completion and trigger the next agent turn.
+
+```bash
+curl -X POST http://127.0.0.1:4003/continue \
+  -H "Content-Type: application/json" \
+  -d '{"dispatch_id": "dispatch-abc123", "result": "All tests passed."}'
+```
+
+Response:
+
+```json
+{
+  "reply": "All tests passed.",
+  "dispatch_id": "dispatch-abc123"
+}
+```
+
+## `POST /webhook`
+
+Telegram webhook. Expects a Telegram `Update` JSON payload and returns
+`{"ok": True, "reply": "..."}`. If the update contains a `reply_to_message`,
+its text is extracted and injected into the prompt as a quote.
+
+## Runtime configuration
+
+These endpoints let you inspect and mutate the live `task`, `waker`, `timer`, and `notifications` configuration without restarting the harness. `GET` and `POST` are available for each section. They require the `X-API-Key` header when `HARNESS_API_KEY` is configured. Partial updates are supported: only the fields present in the request body are changed. Invalid values return `422`. Successful updates are persisted to `runtime-overrides.yaml` in the project root; a persistence failure returns `503`.
+
+The `acp_model` in `/task/config` is the default for ACP tasks. You can override it per ACP task with the `acp_model` field in `POST /plan/create` or in the planner's task JSON (`!plan`, `Plan:`, or `/plan` triggers); per-task values take precedence.
+
+### `GET /task/config`
+
+Return the current task configuration.
+
+```bash
+curl http://127.0.0.1:4003/task/config
+```
+
+Response:
+
+```json
+{"workers":4,"shell_timeout":60.0,"enabled_types":["shell","noop","acp"],"acp_timeout":null,"acp_model":null}
+```
+
+### `POST /task/config`
+
+Update the task configuration. All fields are optional; the worker pool is resized at runtime.
+
+```bash
+curl -X POST http://127.0.0.1:4003/task/config \
+  -H 'Content-Type: application/json' \
+  -d '{"workers":6}'
+```
+
+Response has the same shape as the `GET` response and reflects the updated values.
+
+### `GET /waker/config`
+
+Return the current waker configuration.
+
+```bash
+curl http://127.0.0.1:4003/waker/config
+```
+
+Response:
+
+```json
+{"enabled":false,"interval_seconds":5.0,"max_retries":3,"retry_after":30.0,"lease_seconds":300.0}
+```
+
+### `POST /waker/config`
+
+Update the waker configuration.
+
+```bash
+curl -X POST http://127.0.0.1:4003/waker/config \
+  -H 'Content-Type: application/json' \
+  -d '{"max_retries":4}'
+```
+
+### `GET /timer/config`
+
+Return the current timer configuration.
+
+```bash
+curl http://127.0.0.1:4003/timer/config
+```
+
+Response:
+
+```json
+{"enabled":true,"interval_seconds":5.0,"lease_seconds":300.0,"max_retries":5,"retry_after_seconds":30.0}
+```
+
+### `POST /timer/config`
+
+Update the timer configuration.
+
+```bash
+curl -X POST http://127.0.0.1:4003/timer/config \
+  -H 'Content-Type: application/json' \
+  -d '{"interval_seconds":10.0}'
+```
+
+### `GET /notifications/config`
+
+Return the current notifications configuration.
+
+```bash
+curl http://127.0.0.1:4003/notifications/config
+```
+
+Response:
+
+```json
+{"enabled":true,"webhook_url":null}
+```
+
+### `POST /notifications/config`
+
+Update the notifications configuration. `webhook_url` may be `null` or a non-empty string; the notifier is recreated at runtime.
+
+```bash
+curl -X POST http://127.0.0.1:4003/notifications/config \
+  -H 'Content-Type: application/json' \
+  -d '{"webhook_url":"https://example.com/notify"}'
+```
+

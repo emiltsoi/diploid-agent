@@ -1,0 +1,236 @@
+devin:
+  bin: ~/.local/bin/devin
+  model: swe-1-7
+  permission_mode: dangerous
+  timeout: 900.0      # absolute ACP call limit
+  soft_timeout: 600.0 # seconds before auto-cancel + partial reply; 0.0 or null disables
+  continuation_triggers:  # plain-text replies that resume a partial turn
+    - continue
+    - go on
+    - proceed
+    - resume
+
+persona:
+  name: language-teacher
+  profile_root: personas/language-teacher
+  fleet_root: personas
+  identity_class: worker
+  memory_filename: MEMORY.md
+
+harness:
+  sessions_root: sessions
+  session_store_path: sessions.jsonl
+  dispatch_store_path: dispatch_store.jsonl  # optional; defaults next to session_store_path
+  wake_store_path: wake_queue.jsonl           # optional; defaults next to session_store_path
+  instance_ttl_seconds: 60.0
+  listen_host: 127.0.0.1
+  listen_port: 4003
+  session_prune_enabled: true
+  session_prune_days: 14
+  waker:
+    enabled: false
+    interval_seconds: 5
+    max_retries: 3
+    retry_after: 30
+    lease_seconds: 300
+  timer:
+    enabled: true
+    interval_seconds: 5.0
+    lease_seconds: 300.0
+    max_retries: 5
+    retry_after_seconds: 30.0
+  plan:
+    root: plans
+    store_filename: plans.jsonl
+  task:
+    workers: 4
+    shell_timeout: 60.0
+    enabled_types:
+      - shell
+      - noop
+      - acp
+  plugin_paths:
+    - ~/.devin/plugins
+  plugins:
+    - name: continuity
+      enabled: true
+      module: devin_fleet_harness.plugins.continuity
+      prompt_slot: wake
+      first_prompt_only: true
+      prompt_order: 0
+      state_file: chat_wake_state.json
+      max_prompt_chars: 1024
+    - name: identity
+      enabled: true
+      module: devin_fleet_harness.plugins.identity
+      prompt_slot: self_narrative
+      first_prompt_only: true
+      prompt_order: 5
+      state_file: chat_SELF.md
+      max_prompt_chars: 2048
+      skill: identity
+      mcp_server:
+        name: devin-identity
+        command: python
+        args:
+          - "-m"
+          - "devin_fleet_harness.plugins.identity.identity_mcp"
+          - "--chat-id"
+          - "{chat_id}"
+          - "--sessions-root"
+          - "{sessions_root}"
+        env: []
+    - name: working_memory
+      enabled: true
+      module: devin_fleet_harness.plugins.working_memory
+      prompt_slot: working_memory
+      first_prompt_only: false
+      prompt_order: 40
+      state_file: chat_working_memory.json
+      max_prompt_chars: 1024
+      mcp_server:
+        name: devin-working-memory
+        command: python
+        args:
+          - "-m"
+          - "devin_fleet_harness.plugins.working_memory.working_memory_mcp"
+          - "--chat-id"
+          - "{chat_id}"
+          - "--sessions-root"
+          - "{sessions_root}"
+        env: []
+    - name: persistent_memory
+      enabled: false  # enable once you trust the auto-promotion and recall
+      module: devin_fleet_harness.plugins.persistent_memory
+      prompt_slot: persistent_memory
+      first_prompt_only: false
+      prompt_order: 32
+      state_file: chat_persistent_memory.json
+      max_prompt_chars: 1024
+      config:
+        auto_recall: true
+        auto_promote: true
+        auto_summarize_on_sleep: false
+        check_short_term: true
+        recall_max_tokens: 1500
+    - name: curriculum
+      enabled: false  # example plugin; not needed for this persona
+      module: devin_fleet_harness.plugins.curriculum
+      prompt_slot: persona_state
+      first_prompt_only: false
+      prompt_order: 100
+      state_file: chat_curriculum.json
+      max_prompt_chars: 1024
+      mcp_server:
+        name: devin-curriculum
+        command: python
+        args:
+          - "-m"
+          - "devin_fleet_harness.plugins.curriculum.curriculum_mcp"
+          - "--chat-id"
+          - "{chat_id}"
+          - "--sessions-root"
+          - "{sessions_root}"
+      skill: curriculum
+    - name: planner
+      enabled: true
+      module: devin_fleet_harness.plugins.planner
+      prompt_slot: persona_state
+      first_prompt_only: false
+      prompt_order: 50
+      max_prompt_chars: 1024
+      config:
+        trigger_prefix:
+          - "!plan "
+          - "Plan: "
+        auto_triage: false
+        model: null  # null uses the runtime default model
+        max_tasks: 10
+    - name: auto_continue
+      enabled: true
+      module: devin_fleet_harness.plugins.auto_continue
+      prompt_slot: persona_state
+      first_prompt_only: false
+      prompt_order: 55
+      state_file: chat_auto_continue.json
+      max_prompt_chars: 1024
+      config:
+        delay_seconds: 2.0
+        max_attempts: 3
+        stop_reasons:
+          - timeout
+          - cancelled
+  telegram:
+    enabled: false
+    webhook_port: 8080
+    stream_thoughts: true
+    stream_chunk_interval: 2.0
+    min_telegram_interval: 1.0
+    min_edit_message_interval: 2.0
+  notifications:
+    enabled: true
+    webhook_url: null          # set to receive HTTP push on continuation
+  memory:
+    backend: file                  # file | hindsight
+    n_turns_summarization: null    # set to 10 to auto-summarize every 10 turns
+    max_chat_memory_chars: 8192
+    max_persona_memory_chars: 16384
+    max_reply_quote_chars: 2048    # max chars of a Telegram reply-to quote to inject
+    max_bot_reply_quote_chars: 240  # max chars to quote when replying to a bot message
+    short_term_strategy: smart     # raw | smart
+    short_term_turns: 10           # max raw turns to load
+    min_short_term_turns: 2        # always keep this many raw turns
+    max_short_term_chars: 4096     # cap the short-term block; older turns summarized
+    include_short_term: true
+    short_term_summary_cache_days: 7  # stale .cache/*.md entries are removed after this many days
+    hindsight:
+      base_url: http://localhost:8888
+      bank: example                 # defaults to persona name if unset
+      api_key: null
+      timeout: 30.0
+      max_recall_tokens: 1500
+      recall_min_scores:
+        semantic: 0.25
+        reranker: 0.5
+      prefer_observations: true
+      async_writes: true
+      fallback_to_file: true
+  metrics:
+    expose_in_prompt: false  # set to true to feed cumulative usage into the LLM prompt
+    max_recent_turns: 100
+  mcp:
+    servers:
+      - name: github
+        command: npx
+        args: ["-y", "@modelcontextprotocol/server-github"]
+        env: []
+      - name: devin-memory
+        command: python
+        args:
+          - "-m"
+          - "devin_fleet_harness.memory_mcp"
+          - "--chat-id"
+          - "{chat_id}"
+          - "--harness-url"
+          - "{harness_url}"
+        env: []
+      - name: devin-curriculum
+        command: python
+        args:
+          - "-m"
+          - "devin_fleet_harness.plugins.curriculum.curriculum_mcp"
+          - "--chat-id"
+          - "{chat_id}"
+          - "--sessions-root"
+          - "{sessions_root}"
+        env: []
+    default_enabled: [github, devin-memory, devin-working-memory, devin-identity]
+  skills:
+    shared_root: personas/shared
+    default_lazy: true  # only match skills by keyword; do not auto-load all default_enabled
+    default_enabled:
+      - review
+      - model-review
+      - memory
+      - identity
+    allow_chat_creation: true

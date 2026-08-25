@@ -1,0 +1,38 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# User-specific configuration and runtime state.
+config/secrets.env
+config/*.token
+config/harness.yaml
+systemd/devin-fleet-harness.service
+sessions/
+sessions.jsonl
+dispatch_store.jsonl
+wake_queue.jsonl
+wake_queue.jsonl.lock
+runtime-overrides.yaml
+/plans/
+/plans.jsonl
+
+# Probe output artifacts.
+probes/*.log
+probes/*.json
+probes/*.txt
+
+# Misc.
+*.log
+.env
+.coverage
+
+# uv lockfile (generated from pyproject.toml).
+uv.lock
+
+# Plan review drafts — session-specific review notes, not committed.
+PLAN-REVIEW-*.md
