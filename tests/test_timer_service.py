@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from devin_fleet_harness.config import (
+from acp_fleet_harness.config import (
     Config,
     DevinConfig,
     HarnessConfig,
@@ -15,11 +15,11 @@ from devin_fleet_harness.config import (
     Secrets,
     TimerConfig,
 )
-from devin_fleet_harness.models import WakeEvent
-from devin_fleet_harness.runtime.agent_runtime import AgentRuntime
-from devin_fleet_harness.runtime.event_bus import Event, EventBus
-from devin_fleet_harness.runtime.timer_service import TimerService
-from devin_fleet_harness.runtime.wake_queue import WakeQueue
+from acp_fleet_harness.models import WakeEvent
+from acp_fleet_harness.runtime.agent_runtime import AgentRuntime
+from acp_fleet_harness.runtime.event_bus import Event, EventBus
+from acp_fleet_harness.runtime.timer_service import TimerService
+from acp_fleet_harness.runtime.wake_queue import WakeQueue
 
 
 def _fixture_root() -> Path:
@@ -91,7 +91,7 @@ def test_timer_service_posts_timer_fired_event(tmp_path: Path) -> None:
 
 class FakeEngine:
     def prompt(self, *a, **k):
-        from devin_fleet_harness.engine import TurnResult
+        from acp_fleet_harness.engine import TurnResult
 
         return TurnResult(reply="woken", session_id="s1")
 

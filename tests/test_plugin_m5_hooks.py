@@ -2,12 +2,12 @@
 
 from pathlib import Path
 
-from devin_fleet_harness.config import PluginConfig
-from devin_fleet_harness.dispatch import Dispatch
-from devin_fleet_harness.models import PartialTurn
-from devin_fleet_harness.plugins.base import StatePlugin
-from devin_fleet_harness.plugins.contexts import IdleContext
-from devin_fleet_harness.plugins.manager import PluginManager
+from acp_fleet_harness.config import PluginConfig
+from acp_fleet_harness.dispatch import Dispatch
+from acp_fleet_harness.models import PartialTurn
+from acp_fleet_harness.plugins.base import StatePlugin
+from acp_fleet_harness.plugins.contexts import IdleContext
+from acp_fleet_harness.plugins.manager import PluginManager
 
 
 class HookSpy(StatePlugin):

@@ -2,8 +2,8 @@
 
 from dataclasses import fields
 
-from devin_fleet_harness.models import PartialTurn, WakeEvent
-from devin_fleet_harness.plugins.contexts import IdleContext
+from acp_fleet_harness.models import PartialTurn, WakeEvent
+from acp_fleet_harness.plugins.contexts import IdleContext
 
 
 def test_wake_event_defaults() -> None:

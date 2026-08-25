@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from devin_fleet_harness.config import PersonaConfig
-from devin_fleet_harness.persona_composer import compose_persona, identity_anchor
+from acp_fleet_harness.config import PersonaConfig
+from acp_fleet_harness.persona_composer import compose_persona, identity_anchor
 
 
 def test_compose_persona_from_fixture() -> None:

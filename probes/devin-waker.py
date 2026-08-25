@@ -18,7 +18,7 @@ from urllib.parse import urljoin
 
 import httpx
 
-from devin_fleet_harness.runtime.wake_queue import WakeQueue
+from acp_fleet_harness.runtime.wake_queue import WakeQueue
 
 
 def main() -> int:

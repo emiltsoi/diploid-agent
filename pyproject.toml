@@ -3,7 +3,7 @@ requires = ["setuptools>=70.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "devin-fleet-harness"
+name = "acp-fleet-harness"
 version = "0.2.0"
 description = "Persistent Devin ACP harness"
 readme = "README.md"

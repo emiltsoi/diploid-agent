@@ -5,8 +5,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from devin_fleet_harness.acp_client import AcpPromptResult
-from devin_fleet_harness.config import (
+from acp_fleet_harness.acp_client import AcpPromptResult
+from acp_fleet_harness.config import (
     Config,
     DevinConfig,
     HarnessConfig,
@@ -15,7 +15,7 @@ from devin_fleet_harness.config import (
     PersonaConfig,
     Secrets,
 )
-from devin_fleet_harness.harness import ConversationHarness
+from acp_fleet_harness.harness import ConversationHarness
 
 
 def _make_config(tmp_path: Path, fixture_root: Path) -> Config:
@@ -273,7 +273,7 @@ def test_stop_calls_cancel_and_returns_message(monkeypatch, tmp_path: Path) -> N
 
     monkeypatch.setattr(harness.client, "cancel", fake_cancel)
 
-    from devin_fleet_harness.models import ActiveTurn
+    from acp_fleet_harness.models import ActiveTurn
 
     harness._active_turns["chat-stop"] = ActiveTurn("chat-stop", "s-1", "hello", time.time())
 
@@ -348,8 +348,8 @@ def test_system_notice_uses_recall_numbers_not_disk_size(monkeypatch, tmp_path: 
     config = _make_config(tmp_path, fixture_root)
     harness = ConversationHarness(config)
 
-    from devin_fleet_harness.memory import RecallResult
-    from devin_fleet_harness.persona_composer import PersonaPrompt
+    from acp_fleet_harness.memory import RecallResult
+    from acp_fleet_harness.persona_composer import PersonaPrompt
 
     path = tmp_path / "chat-MEMORY.md"
     recall = RecallResult(
@@ -433,8 +433,8 @@ def test_system_notice_uses_chat_status_when_file_exceeds(tmp_path: Path) -> Non
     config = _make_config(tmp_path, fixture_root)
     harness = ConversationHarness(config)
 
-    from devin_fleet_harness.memory import RecallResult
-    from devin_fleet_harness.persona_composer import PersonaPrompt
+    from acp_fleet_harness.memory import RecallResult
+    from acp_fleet_harness.persona_composer import PersonaPrompt
 
     path = tmp_path / "chat-MEMORY.md"
     recall = RecallResult(
@@ -821,7 +821,7 @@ def test_mcp_enable_disable_persists(monkeypatch, tmp_path: Path) -> None:
 
 def test_new_session_syncs_skills(monkeypatch, tmp_path: Path) -> None:
     """New sessions sync enabled skills into the chat working directory."""
-    from devin_fleet_harness.config import SkillsConfig
+    from acp_fleet_harness.config import SkillsConfig
 
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
     config = _make_config(tmp_path, fixture_root)
@@ -1018,7 +1018,7 @@ def test_harness_has_dispatch_store_and_notifier(tmp_path: Path) -> None:
 
 
 def test_harness_continue_turn_after_dispatch(monkeypatch, tmp_path: Path) -> None:
-    from devin_fleet_harness.acp_client import AcpPromptResult
+    from acp_fleet_harness.acp_client import AcpPromptResult
 
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
     config = _make_config(tmp_path, fixture_root)
@@ -1060,7 +1060,7 @@ def test_harness_continue_turn_after_dispatch(monkeypatch, tmp_path: Path) -> No
 
 
 def test_harness_continue_turn_rehydrates_stale_session(monkeypatch, tmp_path: Path) -> None:
-    from devin_fleet_harness.acp_client import AcpPromptResult
+    from acp_fleet_harness.acp_client import AcpPromptResult
 
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
     config = _make_config(tmp_path, fixture_root)

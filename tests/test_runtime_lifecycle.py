@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from devin_fleet_harness.config import (
+from acp_fleet_harness.config import (
     Config,
     DevinConfig,
     HarnessConfig,
@@ -14,9 +14,9 @@ from devin_fleet_harness.config import (
     Secrets,
     TimerConfig,
 )
-from devin_fleet_harness.models import WakeEvent
-from devin_fleet_harness.plan.models import Task
-from devin_fleet_harness.runtime.agent_runtime import AgentRuntime
+from acp_fleet_harness.models import WakeEvent
+from acp_fleet_harness.plan.models import Task
+from acp_fleet_harness.runtime.agent_runtime import AgentRuntime
 
 
 def _fixture_root() -> Path:
@@ -79,7 +79,7 @@ def test_runtime_get_status_reports_state(tmp_path: Path) -> None:
 
 class FakeEngine:
     def prompt(self, *a, **k):
-        from devin_fleet_harness.engine import TurnResult
+        from acp_fleet_harness.engine import TurnResult
 
         return TurnResult(reply="woken", session_id="s1")
 
@@ -133,7 +133,7 @@ def test_task_completed_handler_marks_plan_done(tmp_path: Path) -> None:
         plan = runtime.plan_create("lifecycle-plan", tasks=[Task(name="t", command="")])
         task = plan.tasks[0]
 
-        from devin_fleet_harness.runtime.event_bus import Event
+        from acp_fleet_harness.runtime.event_bus import Event
 
         runtime.event_bus.post(
             Event(

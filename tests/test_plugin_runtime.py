@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from devin_fleet_harness.config import PluginConfig
-from devin_fleet_harness.models import ChatResult
-from devin_fleet_harness.plugins.base import StatePlugin
-from devin_fleet_harness.runtime.plugin_runtime import PluginRuntime
+from acp_fleet_harness.config import PluginConfig
+from acp_fleet_harness.models import ChatResult
+from acp_fleet_harness.plugins.base import StatePlugin
+from acp_fleet_harness.runtime.plugin_runtime import PluginRuntime
 
 
 class FakeRuntime:

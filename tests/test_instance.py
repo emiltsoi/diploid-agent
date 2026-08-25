@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from devin_fleet_harness.runtime.instance import InstanceManager
+from acp_fleet_harness.runtime.instance import InstanceManager
 
 mp.set_start_method("spawn", force=True)
 

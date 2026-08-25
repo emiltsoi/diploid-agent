@@ -3,8 +3,8 @@
 import threading
 import time
 
-from devin_fleet_harness.models import ActiveTurn
-from devin_fleet_harness.runtime.turn_controller import TurnController
+from acp_fleet_harness.models import ActiveTurn
+from acp_fleet_harness.runtime.turn_controller import TurnController
 
 
 def test_turn_status_returns_immediately_when_idle() -> None:

@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from devin_fleet_harness.dispatch import DispatchStatus, DispatchStore
+from acp_fleet_harness.dispatch import DispatchStatus, DispatchStore
 
 
 def test_dispatch_store_adds_and_completes(tmp_path: Path) -> None:

@@ -5,12 +5,12 @@ The harness has two long-running processes:
 1. `telegram_ingress` — FastAPI server.
 2. `telegram_poll` — Telegram long-polling bot.
 
-They are started together by `systemd/devin-fleet-harness-run.sh`. If either child exits,
+They are started together by `systemd/acp-fleet-harness-run.sh`. If either child exits,
 the script exits and systemd restarts the pair.
 
 ## Run script
 
-`systemd/devin-fleet-harness-run.sh`:
+`systemd/acp-fleet-harness-run.sh`:
 
 - Resolves the project root from the script's own path.
 - Loads `config/secrets.env` if present.
@@ -25,24 +25,24 @@ This lets `Restart=on-failure` restart the whole unit as a pair.
 Copy and edit the example:
 
 ```bash
-cp systemd/devin-fleet-harness.service.example systemd/devin-fleet-harness.service
+cp systemd/acp-fleet-harness.service.example systemd/acp-fleet-harness.service
 # replace /home/USER paths
 ```
 
-`systemd/devin-fleet-harness.service`:
+`systemd/acp-fleet-harness.service`:
 
 ```ini
 [Unit]
-Description=Devin fleet harness — ingress + telegram poller
+Description=ACP fleet harness — ingress + telegram poller
 After=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/USER/devin-fleet-harness
-ExecStart=/home/USER/devin-fleet-harness/systemd/devin-fleet-harness-run.sh
+WorkingDirectory=/home/USER/acp-fleet-harness
+ExecStart=/home/USER/acp-fleet-harness/systemd/acp-fleet-harness-run.sh
 Restart=on-failure
 RestartSec=10
-EnvironmentFile=-/home/USER/devin-fleet-harness/config/secrets.env
+EnvironmentFile=-/home/USER/acp-fleet-harness/config/secrets.env
 
 [Install]
 WantedBy=default.target
@@ -51,7 +51,7 @@ WantedBy=default.target
 ## User unit
 
 ```bash
-systemctl --user enable --now "$(pwd)/systemd/devin-fleet-harness.service"
+systemctl --user enable --now "$(pwd)/systemd/acp-fleet-harness.service"
 ```
 
 For a user unit, the `User=` line must be omitted (it is not in the example).

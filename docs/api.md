@@ -303,7 +303,7 @@ Response:
   "model": "swe-1-7",
   "session_number": 2,
   "session_id": "nickel-tango",
-  "cwd": "/path/to/devin-fleet-harness/sessions/test-1",
+  "cwd": "/path/to/acp-fleet-harness/sessions/test-1",
   "turn_number": 3,
   "persona_memory_exceeded": false,
   "chat_memory_exceeded": false,

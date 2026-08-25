@@ -54,7 +54,7 @@ harness:
   plugins:
     - name: continuity
       enabled: true
-      module: devin_fleet_harness.plugins.continuity
+      module: acp_fleet_harness.plugins.continuity
       prompt_slot: wake
       first_prompt_only: true
       prompt_order: 0
@@ -62,7 +62,7 @@ harness:
       max_prompt_chars: 1024
     - name: identity
       enabled: true
-      module: devin_fleet_harness.plugins.identity
+      module: acp_fleet_harness.plugins.identity
       prompt_slot: self_narrative
       first_prompt_only: true
       prompt_order: 5
@@ -74,7 +74,7 @@ harness:
         command: python
         args:
           - "-m"
-          - "devin_fleet_harness.plugins.identity.identity_mcp"
+          - "acp_fleet_harness.plugins.identity.identity_mcp"
           - "--chat-id"
           - "{chat_id}"
           - "--sessions-root"
@@ -82,7 +82,7 @@ harness:
         env: []
     - name: working_memory
       enabled: true
-      module: devin_fleet_harness.plugins.working_memory
+      module: acp_fleet_harness.plugins.working_memory
       prompt_slot: working_memory
       first_prompt_only: false
       prompt_order: 40
@@ -93,7 +93,7 @@ harness:
         command: python
         args:
           - "-m"
-          - "devin_fleet_harness.plugins.working_memory.working_memory_mcp"
+          - "acp_fleet_harness.plugins.working_memory.working_memory_mcp"
           - "--chat-id"
           - "{chat_id}"
           - "--sessions-root"
@@ -101,7 +101,7 @@ harness:
         env: []
     - name: persistent_memory
       enabled: false  # enable once you trust the auto-promotion and recall
-      module: devin_fleet_harness.plugins.persistent_memory
+      module: acp_fleet_harness.plugins.persistent_memory
       prompt_slot: persistent_memory
       first_prompt_only: false
       prompt_order: 32
@@ -115,7 +115,7 @@ harness:
         recall_max_tokens: 1500
     - name: curriculum
       enabled: false  # example plugin; not needed for this persona
-      module: devin_fleet_harness.plugins.curriculum
+      module: acp_fleet_harness.plugins.curriculum
       prompt_slot: persona_state
       first_prompt_only: false
       prompt_order: 100
@@ -126,7 +126,7 @@ harness:
         command: python
         args:
           - "-m"
-          - "devin_fleet_harness.plugins.curriculum.curriculum_mcp"
+          - "acp_fleet_harness.plugins.curriculum.curriculum_mcp"
           - "--chat-id"
           - "{chat_id}"
           - "--sessions-root"
@@ -134,7 +134,7 @@ harness:
       skill: curriculum
     - name: planner
       enabled: true
-      module: devin_fleet_harness.plugins.planner
+      module: acp_fleet_harness.plugins.planner
       prompt_slot: persona_state
       first_prompt_only: false
       prompt_order: 50
@@ -148,7 +148,7 @@ harness:
         max_tasks: 10
     - name: auto_continue
       enabled: true
-      module: devin_fleet_harness.plugins.auto_continue
+      module: acp_fleet_harness.plugins.auto_continue
       prompt_slot: persona_state
       first_prompt_only: false
       prompt_order: 55
@@ -208,7 +208,7 @@ harness:
         command: python
         args:
           - "-m"
-          - "devin_fleet_harness.memory_mcp"
+          - "acp_fleet_harness.memory_mcp"
           - "--chat-id"
           - "{chat_id}"
           - "--harness-url"
@@ -218,7 +218,7 @@ harness:
         command: python
         args:
           - "-m"
-          - "devin_fleet_harness.plugins.curriculum.curriculum_mcp"
+          - "acp_fleet_harness.plugins.curriculum.curriculum_mcp"
           - "--chat-id"
           - "{chat_id}"
           - "--sessions-root"

@@ -3,14 +3,14 @@
 import time
 from pathlib import Path
 
-from devin_fleet_harness.config import Config, DevinConfig, HarnessConfig, PersonaConfig
-from devin_fleet_harness.context import ContextBuilder
-from devin_fleet_harness.dispatch import DispatchStore
-from devin_fleet_harness.engine.fake import FakeAgentEngine
-from devin_fleet_harness.memory import MemoryManager
-from devin_fleet_harness.models import SessionRecord
-from devin_fleet_harness.plugins import PluginManager
-from devin_fleet_harness.skills import SkillManager
+from acp_fleet_harness.config import Config, DevinConfig, HarnessConfig, PersonaConfig
+from acp_fleet_harness.context import ContextBuilder
+from acp_fleet_harness.dispatch import DispatchStore
+from acp_fleet_harness.engine.fake import FakeAgentEngine
+from acp_fleet_harness.memory import MemoryManager
+from acp_fleet_harness.models import SessionRecord
+from acp_fleet_harness.plugins import PluginManager
+from acp_fleet_harness.skills import SkillManager
 
 
 def _fixture_root() -> Path:

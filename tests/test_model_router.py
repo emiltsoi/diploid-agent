@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from devin_fleet_harness.config import (
+from acp_fleet_harness.config import (
     Config,
     ConversationBudget,
     DevinConfig,
@@ -11,7 +11,7 @@ from devin_fleet_harness.config import (
     RoutingConfig,
     Secrets,
 )
-from devin_fleet_harness.engine.router import ModelRouter
+from acp_fleet_harness.engine.router import ModelRouter
 
 
 def _make_config(routing: RoutingConfig | None = None) -> Config:

@@ -6,8 +6,8 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from devin_fleet_harness.acp_client import AcpPromptResult
-from devin_fleet_harness.config import (
+from acp_fleet_harness.acp_client import AcpPromptResult
+from acp_fleet_harness.config import (
     Config,
     DevinConfig,
     HarnessConfig,
@@ -15,9 +15,9 @@ from devin_fleet_harness.config import (
     PluginConfig,
     Secrets,
 )
-from devin_fleet_harness.engine import TurnResult
-from devin_fleet_harness.models import ChatResult
-from devin_fleet_harness.telegram_ingress import create_app
+from acp_fleet_harness.engine import TurnResult
+from acp_fleet_harness.models import ChatResult
+from acp_fleet_harness.telegram_ingress import create_app
 
 
 class FakeClient:
@@ -97,7 +97,7 @@ def _test_config(tmp_path: Path) -> Config:
             plugins=[
                 PluginConfig(
                     name="curriculum",
-                    module="devin_fleet_harness.plugins.curriculum",
+                    module="acp_fleet_harness.plugins.curriculum",
                     prompt_slot="persona_state",
                     state_file="chat_curriculum.json",
                     max_prompt_chars=1024,
@@ -124,7 +124,7 @@ def _test_config_with_auth(tmp_path: Path) -> Config:
             plugins=[
                 PluginConfig(
                     name="curriculum",
-                    module="devin_fleet_harness.plugins.curriculum",
+                    module="acp_fleet_harness.plugins.curriculum",
                     prompt_slot="persona_state",
                     state_file="chat_curriculum.json",
                     max_prompt_chars=1024,
@@ -396,7 +396,7 @@ def test_state_event(client: TestClient) -> None:
 
 
 def test_dispatch_and_continue_endpoints(client: TestClient, monkeypatch) -> None:
-    from devin_fleet_harness.acp_client import AcpPromptResult
+    from acp_fleet_harness.acp_client import AcpPromptResult
 
     def fake_create_session(prompt, **kwargs):
         return AcpPromptResult(reply="Ready.", session_id="session-1")

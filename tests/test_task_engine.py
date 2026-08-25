@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from devin_fleet_harness.config import TaskConfig
-from devin_fleet_harness.plan.manager import PlanManager
-from devin_fleet_harness.plan.models import Task, TaskStatus, TaskType
-from devin_fleet_harness.runtime.event_bus import Event, EventBus
-from devin_fleet_harness.task.engine import TaskEngine
-from devin_fleet_harness.task.worker import WorkerPool
+from acp_fleet_harness.config import TaskConfig
+from acp_fleet_harness.plan.manager import PlanManager
+from acp_fleet_harness.plan.models import Task, TaskStatus, TaskType
+from acp_fleet_harness.runtime.event_bus import Event, EventBus
+from acp_fleet_harness.task.engine import TaskEngine
+from acp_fleet_harness.task.worker import WorkerPool
 
 
 def _fixture_engine(tmp_path: Path, workers: int = 2, shell_timeout: float = 5.0):
@@ -159,8 +159,8 @@ def test_start_unknown_task_raises(tmp_path: Path) -> None:
 
 
 def _acp_fixture_engine(tmp_path: Path, workers: int = 2, shell_timeout: float = 5.0):
-    from devin_fleet_harness.config import Config, DevinConfig, HarnessConfig, PersonaConfig
-    from devin_fleet_harness.engine.fake import FakeAgentEngine
+    from acp_fleet_harness.config import Config, DevinConfig, HarnessConfig, PersonaConfig
+    from acp_fleet_harness.engine.fake import FakeAgentEngine
 
     config = Config(
         devin=DevinConfig(bin="/bin/echo", model="test-model"),

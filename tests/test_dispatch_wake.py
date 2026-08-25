@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from devin_fleet_harness.config import Config, DevinConfig, HarnessConfig, PersonaConfig, Secrets
-from devin_fleet_harness.runtime.agent_runtime import AgentRuntime
+from acp_fleet_harness.config import Config, DevinConfig, HarnessConfig, PersonaConfig, Secrets
+from acp_fleet_harness.runtime.agent_runtime import AgentRuntime
 
 
 def _fixture_root() -> Path:
@@ -28,7 +28,7 @@ def _make_config(tmp_path: Path) -> Config:
 
 class FakeEngine:
     def prompt(self, *a, **k):
-        from devin_fleet_harness.engine import TurnResult
+        from acp_fleet_harness.engine import TurnResult
 
         return TurnResult(reply="done", session_id="s1")
 

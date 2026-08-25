@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from devin_fleet_harness.config import (
+from acp_fleet_harness.config import (
     Config,
     DevinConfig,
     HarnessConfig,
@@ -20,8 +20,8 @@ from devin_fleet_harness.config import (
     TimerConfig,
     WakerConfig,
 )
-from devin_fleet_harness.runtime.agent_runtime import AgentRuntime
-from devin_fleet_harness.transport.http import create_app
+from acp_fleet_harness.runtime.agent_runtime import AgentRuntime
+from acp_fleet_harness.transport.http import create_app
 
 
 def _fixture_root() -> Path:
@@ -48,7 +48,7 @@ def _make_config(tmp_path: Path) -> Config:
 
 class FakeEngine:
     def prompt(self, *a, **k):
-        from devin_fleet_harness.engine import TurnResult
+        from acp_fleet_harness.engine import TurnResult
 
         return TurnResult(reply="ok", session_id="s1")
 

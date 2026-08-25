@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from devin_fleet_harness.config import (
+from acp_fleet_harness.config import (
     Config,
     DevinConfig,
     HarnessConfig,
@@ -14,10 +14,10 @@ from devin_fleet_harness.config import (
     Secrets,
     TimerConfig,
 )
-from devin_fleet_harness.models import WakeEvent
-from devin_fleet_harness.plan.models import Task
-from devin_fleet_harness.runtime.agent_runtime import AgentRuntime
-from devin_fleet_harness.runtime.event_bus import Event
+from acp_fleet_harness.models import WakeEvent
+from acp_fleet_harness.plan.models import Task
+from acp_fleet_harness.runtime.agent_runtime import AgentRuntime
+from acp_fleet_harness.runtime.event_bus import Event
 
 
 def _fixture_root() -> Path:
@@ -44,7 +44,7 @@ def _make_config(tmp_path: Path) -> Config:
 
 class FakeEngine:
     def prompt(self, *a, **k):
-        from devin_fleet_harness.engine import TurnResult
+        from acp_fleet_harness.engine import TurnResult
 
         return TurnResult(reply="noted", session_id="s1")
 

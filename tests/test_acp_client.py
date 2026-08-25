@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from devin_fleet_harness.acp_client import (
+from acp_fleet_harness.acp_client import (
     AcpClient,
     AcpPromptResult,
     _load_windsurf_api_key,

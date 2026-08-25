@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from devin_fleet_harness.config import PluginConfig
-from devin_fleet_harness.plugins.manager import PluginManager
+from acp_fleet_harness.config import PluginConfig
+from acp_fleet_harness.plugins.manager import PluginManager
 
 
 def test_reload_plugin_clears_instance() -> None:
