@@ -10,9 +10,8 @@ __pycache__/
 # User-specific configuration and runtime state.
 config/secrets.env
 config/*.token
-config/harness.yaml
-config/devin-pilot.yaml
-systemd/acp-fleet-harness.service
+config/*.yaml
+systemd/*.service
 sessions/
 sessions.jsonl
 dispatch_store.jsonl
