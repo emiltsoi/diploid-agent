@@ -7,7 +7,7 @@ start a new turn for a chat. Events are created when:
 - a timer or external worker enqueues one via `POST /wake`;
 - a user explicitly requests a wake.
 
-A separate `devin-waker` process polls the queue and calls `POST /wake`.
+A separate `acp-waker` process polls the queue and calls `POST /wake`.
 `/wake` checks the per-chat `InstanceManager` lock, so two instances cannot
 process the same chat at once. A wake with `silent=True` runs the turn but
 does not send an outbound message.
@@ -33,12 +33,12 @@ partial message and thought in the prompt.
 
 ## Running the waker
 
-Copy `probes/devin-waker.py` to a convenient location (for example
-`~/.local/bin/devin-waker`) and run it:
+Copy `probes/acp-waker.py` to a convenient location (for example
+`~/.local/bin/acp-waker`) and run it:
 
 ```bash
-devin-waker --wake-queue wake_queue.jsonl --harness-url http://127.0.0.1:4003
+acp-waker --wake-queue wake_queue.jsonl --harness-url http://127.0.0.1:4003
 ```
 
-A `systemd/devin-waker.service.example` unit is included for running it as
+A `systemd/acp-waker.service.example` unit is included for running it as
 a user service.
