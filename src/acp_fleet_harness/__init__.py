@@ -1,4 +1,4 @@
-"""acp-fleet-harness: persistent Devin ACP agent harness."""
+"""acp-fleet-harness: persistent ACP agent harness."""
 
 from .acp_client import AcpClient
 from .config import Config

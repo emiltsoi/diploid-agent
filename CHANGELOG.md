@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 — 2026-08-25
+
+### Summary
+Rebranded package and repository from `devin-fleet-harness` to
+`acp-fleet-harness`. The source package, imports, tests, systemd units, and
+example config all use `acp_fleet_harness`. This is a naming-only change: the
+harness still spawns `devin acp` by default, but the project identity is now
+independent.
+
 ## 0.2.0 — 2026-08-25
 
 ### Summary
