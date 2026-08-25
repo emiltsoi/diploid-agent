@@ -73,6 +73,7 @@ logger = logging.getLogger(__name__)
 _CHAT_DURABLE_FILES = {
     "chat_transcript.jsonl",
     "chat_MEMORY.md",
+    "chat_self_state.md",
     "hindsight-pending-retain.jsonl",
 }
 

@@ -162,6 +162,13 @@ harness:
         stop_reasons:
           - timeout
           - cancelled
+    - name: self_state
+      enabled: true
+      module: acp_fleet_harness.plugins.self_state
+      prompt_slot: persona_state
+      prompt_order: 90
+      state_file: chat_self_state.md
+      max_prompt_chars: 512
   telegram:
     enabled: false
     webhook_port: 8080
