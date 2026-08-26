@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from diploid_agent.config import EngineConfig
-from diploid_agent.engine.base import AgentEngine
 from diploid_agent.engine.acp import AcpEngine
+from diploid_agent.engine.base import AgentEngine
 from diploid_agent.engine.fake import FakeAgentEngine
 
 ENGINES: dict[str, type[AgentEngine]] = {

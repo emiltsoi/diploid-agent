@@ -22,7 +22,6 @@ from diploid_agent.plugins.contexts import (
     EngineResultContext,
     PromptBuildContext,
     RecordTurnContext,
-    TurnErrorContext,
     TurnStartContext,
 )
 from diploid_agent.testing.fake_runtime import FakePluginRuntime

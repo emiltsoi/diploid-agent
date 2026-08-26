@@ -11,7 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from diploid_agent.config import Config, TaskConfig
-from diploid_agent.engine import AgentEngine, AcpEngine, TurnRequest
+from diploid_agent.engine import AcpEngine, AgentEngine, TurnRequest
 from diploid_agent.plan.manager import PlanManager
 from diploid_agent.plan.models import Plan, Task, TaskStatus, TaskType
 from diploid_agent.runtime.event_bus import Event, EventBus
