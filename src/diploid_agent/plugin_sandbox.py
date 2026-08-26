@@ -164,21 +164,34 @@ def main(argv: list[str] | None = None) -> int:
 
         _exercise_plugin(plugin, args.chat_id)
 
-        _dump({
-            "ok": True,
-            "module": args.module,
-            "name": config.name,
-            "checks": ["start", "health", "before_turn", "before_build_prompt", "before_engine_call", "after_engine_call", "before_record_turn", "after_turn", "stop"],
-        })
+        _dump(
+            {
+                "ok": True,
+                "module": args.module,
+                "name": config.name,
+                "checks": [
+                    "start",
+                    "health",
+                    "before_turn",
+                    "before_build_prompt",
+                    "before_engine_call",
+                    "after_engine_call",
+                    "before_record_turn",
+                    "after_turn",
+                    "stop",
+                ],
+            }
+        )
         return 0
     except Exception:  # noqa: BLE001
-        _dump({
-            "ok": False,
-            "module": args.module,
-            "error": traceback.format_exc(),
-        })
+        _dump(
+            {
+                "ok": False,
+                "module": args.module,
+                "error": traceback.format_exc(),
+            }
+        )
         return 1
-
 
 
 if __name__ == "__main__":

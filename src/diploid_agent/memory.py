@@ -59,7 +59,7 @@ class MemoryItem:
             "content": self.content,
             "timestamp": self.timestamp,
             "context": self.context or "",
-"metadata": {k: str(v) for k, v in (self.metadata or {}).items()},
+            "metadata": {k: str(v) for k, v in (self.metadata or {}).items()},
             "document_id": self.document_id,
             "tags": self.tags,
             "update_mode": "replace",

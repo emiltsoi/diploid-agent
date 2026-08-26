@@ -343,11 +343,13 @@ class PluginManager:
                         chat_id=chat_id,
                     )
                     h = {"error": traceback.format_exc()}
-                results.append({
-                    "name": cfg.name,
-                    "healthy": h is None or h.get("healthy", True),
-                    "details": h,
-                })
+                results.append(
+                    {
+                        "name": cfg.name,
+                        "healthy": h is None or h.get("healthy", True),
+                        "details": h,
+                    }
+                )
         return results
 
     def validate_contract(self, module: str) -> list[str]:

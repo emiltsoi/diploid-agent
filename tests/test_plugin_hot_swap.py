@@ -151,9 +151,7 @@ def test_stop_all_calls_stop(tmp_path: Path) -> None:
     fake = MagicMock()
     runtime._plugins._load_plugin = lambda _config, _chat_id: fake
 
-    runtime._plugins._get_or_create(
-        "chat-1", PluginConfig(name="tracker", enabled=True)
-    )
+    runtime._plugins._get_or_create("chat-1", PluginConfig(name="tracker", enabled=True))
     assert fake.start.called, "start() should be called when the instance is created"
 
     runtime._plugins.stop_all()

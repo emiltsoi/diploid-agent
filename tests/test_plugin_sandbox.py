@@ -10,6 +10,7 @@ from diploid_agent.transport.http import create_app
 class FakeEngine:
     def prompt(self, *a, **k):
         from diploid_agent.engine import TurnResult
+
         return TurnResult(reply="ok", session_id="s1")
 
     def list_models(self):
@@ -34,7 +35,9 @@ def _make_config(tmp_path):
             session_store_path=tmp_path / "sessions.jsonl",
             session_prune_enabled=False,
             plugins=[
-                PluginConfig(name="continuity", enabled=True, module="diploid_agent.plugins.continuity")
+                PluginConfig(
+                    name="continuity", enabled=True, module="diploid_agent.plugins.continuity"
+                )
             ],
         ),
     )

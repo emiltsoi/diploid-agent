@@ -203,9 +203,7 @@ class AgentRuntime(RuntimeAPI):
         self._rehydrate_metrics()
 
         # Durable record of plugin incidents (sandbox, lifecycle, health, watchdog).
-        self._incidents = PluginIncidentStore(
-            self.store_path.parent / "plugin-incidents.jsonl"
-        )
+        self._incidents = PluginIncidentStore(self.store_path.parent / "plugin-incidents.jsonl")
 
         # Plugins can declare MCP servers and skills; add them before McpManager.
         self._plugins = PluginManager(

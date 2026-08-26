@@ -21,8 +21,12 @@ def test_watchdog_rollback_before_restart() -> None:
             Response(200, json={"status": "ok"}),
         ]
     )
-    rollback = respx.post("http://127.0.0.1:4003/config/rollback").respond(200, json={"reply": "ok"})
-    respx.post("http://127.0.0.1:4003/plugin-incidents").respond(200, json={"reply": "incident recorded"})
+    rollback = respx.post("http://127.0.0.1:4003/config/rollback").respond(
+        200, json={"reply": "ok"}
+    )
+    respx.post("http://127.0.0.1:4003/plugin-incidents").respond(
+        200, json={"reply": "incident recorded"}
+    )
     with patch("subprocess.run") as mock_run:
         calls = 0
         original_sleep = time.sleep

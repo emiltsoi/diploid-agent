@@ -1,4 +1,5 @@
 """Durable, append-only record of plugin failures and recovery actions."""
+
 from __future__ import annotations
 
 import json

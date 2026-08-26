@@ -7,6 +7,7 @@ from diploid_agent.runtime.agent_runtime import AgentRuntime
 class FakeEngine:
     def prompt(self, *a, **k):
         from diploid_agent.engine import TurnResult
+
         return TurnResult(reply="ok", session_id="s1")
 
     def list_models(self):
@@ -49,7 +50,10 @@ def test_validate_contract_rejects_builtin_module(tmp_path: Path) -> None:
 
 
 def test_runtime_health_reports_plugin_health(tmp_path: Path) -> None:
-    config = _make_config(tmp_path, [PluginConfig(name="continuity", enabled=True, module="diploid_agent.plugins.continuity")])
+    config = _make_config(
+        tmp_path,
+        [PluginConfig(name="continuity", enabled=True, module="diploid_agent.plugins.continuity")],
+    )
     runtime = AgentRuntime(config)
     runtime.engine = FakeEngine()
     health = runtime.health()

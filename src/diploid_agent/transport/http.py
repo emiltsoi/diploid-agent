@@ -518,7 +518,9 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
                 PluginManager.validate_module(config.module)
                 return _to_response(ChatResult(reply=f"Dry run OK for {config.name}"))
             except Exception as exc:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+                ) from exc
         try:
             return _to_response(runtime.plugin_add(config))
         except ValueError as exc:
@@ -580,13 +582,17 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
             merged["name"] = name
             config = PluginConfig(**merged)
         except (ValueError, TypeError) as exc:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
         if req.dry_run:
             try:
                 PluginManager.validate_module(config.module)
                 return _to_response(ChatResult(reply=f"Dry run OK for {name}"))
             except Exception as exc:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+                ) from exc
         # Validate the module before applying the update.
         try:
             PluginManager.validate_module(config.module)

@@ -13,6 +13,7 @@ from diploid_agent.runtime.agent_runtime import AgentRuntime
 class FakeEngine:
     def prompt(self, *a, **k):
         from diploid_agent.engine import TurnResult
+
         return TurnResult(reply="ok", session_id="s1")
 
     def list_models(self):
@@ -38,7 +39,9 @@ def _make_config(tmp_path: Path) -> Config:
             session_prune_enabled=False,
             plugin_paths=[tmp_path / "plugins"],
             plugins=[
-                PluginConfig(name="continuity", enabled=True, module="diploid_agent.plugins.continuity")
+                PluginConfig(
+                    name="continuity", enabled=True, module="diploid_agent.plugins.continuity"
+                )
             ],
         ),
     )

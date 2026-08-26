@@ -38,9 +38,7 @@ class StdioMcpServer:
     def _tools(self) -> list[dict[str, Any]]:
         return []
 
-    def _call_tool(
-        self, name: str, arguments: dict[str, Any], req_id: Any
-    ) -> dict[str, Any]:
+    def _call_tool(self, name: str, arguments: dict[str, Any], req_id: Any) -> dict[str, Any]:
         return _error_response(req_id, f"Tool {name} not implemented")
 
     def _handle(self, request: dict[str, Any]) -> dict[str, Any] | None:
