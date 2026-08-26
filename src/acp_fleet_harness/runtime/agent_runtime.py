@@ -210,6 +210,11 @@ class AgentRuntime(RuntimeAPI):
             dispatch_store=self.dispatch_store,
             runtime=self,
         )
+        failed = self._plugins.validate_all()
+        if failed:
+            self._plugins.disable_plugins(set(failed))
+            self.config.harness.plugins = self._plugins._plugins
+            self._save_runtime_overrides()
         self._plugin_mcp_server_names: set[str] = set()
         self._register_plugin_mcp_servers()
 

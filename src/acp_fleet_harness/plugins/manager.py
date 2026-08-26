@@ -86,7 +86,7 @@ class PluginManager:
                     if not isinstance(plugin, FailedPlugin):
                         try:
                             plugin.stop()
-                        except Exception:
+                        except BaseException:
                             logger.exception("stop() failed for plugin %s", name)
 
         self._plugins = sorted(new_plugins, key=lambda p: p.prompt_order)
@@ -123,7 +123,7 @@ class PluginManager:
             if plugin is not None and not isinstance(plugin, FailedPlugin):
                 try:
                     plugin.stop()
-                except Exception:
+                except BaseException:
                     logger.exception("stop() failed for plugin %s", name)
         self._snapshot_config(self._plugins)
         return f"Plugin {name} removed"
@@ -140,7 +140,7 @@ class PluginManager:
                 if plugin is not None and not isinstance(plugin, FailedPlugin):
                     try:
                         plugin.stop()
-                    except Exception:
+                    except BaseException:
                         logger.exception("stop() failed for plugin %s", name)
         self._snapshot_config(self._plugins)
         return f"Plugin {name} {'enabled' if enabled else 'disabled'}"
@@ -161,7 +161,7 @@ class PluginManager:
                 if plugin is not None and not isinstance(plugin, FailedPlugin):
                     try:
                         plugin.stop()
-                    except Exception:
+                    except BaseException:
                         logger.exception("stop() failed during rollback for plugin %s", name)
         self._plugins = [PluginConfig(**p.model_dump()) for p in target]
         # Replace the history tail with the restored config so the next snapshot is clean.
@@ -176,7 +176,7 @@ class PluginManager:
                 if not isinstance(plugin, FailedPlugin):
                     try:
                         plugin.stop()
-                    except Exception:
+                    except BaseException:
                         logger.exception("stop() failed for plugin %s", name)
         self._instances.clear()
 
@@ -185,7 +185,7 @@ class PluginManager:
         if config.name not in cache:
             try:
                 plugin = self._load_plugin(config, chat_id)
-            except Exception:
+            except BaseException:
                 logger.exception("Failed to load plugin %s", config.name)
                 plugin = FailedPlugin(
                     config,
@@ -198,8 +198,15 @@ class PluginManager:
             if not isinstance(plugin, FailedPlugin):
                 try:
                     plugin.start()
-                except Exception:
+                except BaseException:
                     logger.exception("start() failed for plugin %s", config.name)
+                    cache[config.name] = FailedPlugin(
+                        config,
+                        chat_id,
+                        self._sessions_root,
+                        runtime=self._runtime,
+                        error=traceback.format_exc(),
+                    )
         return cache[config.name]
 
     _MODULE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
@@ -221,6 +228,25 @@ class PluginManager:
         mod = importlib.import_module(module)
         if not hasattr(mod, "Plugin"):
             raise ImportError(f"Plugin module {module} must expose a 'Plugin' class")
+
+    def validate_all(self) -> list[str]:
+        """Return names of plugins whose module cannot be loaded."""
+        failed: list[str] = []
+        for cfg in self._plugins:
+            if cfg.module:
+                try:
+                    self.validate_module(cfg.module)
+                except Exception:
+                    logger.exception("Validation failed for plugin %s", cfg.name)
+                    failed.append(cfg.name)
+        return failed
+
+    def disable_plugins(self, names: set[str]) -> None:
+        """Disable the named plugins and snapshot the new config."""
+        for cfg in self._plugins:
+            if cfg.name in names:
+                cfg.enabled = False
+        self._snapshot_config(self._plugins)
 
     def _load_plugin(self, config: PluginConfig, chat_id: str) -> StatePlugin:
         if config.module:
@@ -254,7 +280,7 @@ class PluginManager:
         if instance is not None and not isinstance(instance, FailedPlugin):
             try:
                 instance.stop()
-            except Exception:
+            except BaseException:
                 logger.exception("stop() failed for plugin %s", name)
         return f"Plugin {name} {'enabled' if enabled else 'disabled'}"
 
