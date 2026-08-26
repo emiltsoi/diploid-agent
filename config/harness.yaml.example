@@ -198,6 +198,7 @@ harness:
     intermediate_min_chars: 20
     min_telegram_interval: 1.0
     min_edit_message_interval: 2.0
+    message_format: markdown_v2
   notifications:
     enabled: true
     webhook_url: null          # set to receive HTTP push on continuation

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -71,6 +71,8 @@ class TelegramConfig(BaseModel):
     intermediate_min_chars: int = 20
     min_telegram_interval: float = 1.0
     min_edit_message_interval: float = 2.0
+    message_format: Literal["plain", "markdown_v2"] = "plain"
+
 
 class MetricsConfig(BaseModel):
     expose_in_prompt: bool = False

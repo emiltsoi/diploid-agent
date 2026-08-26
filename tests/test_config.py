@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from diploid_agent.config import Config, PersonaConfig
+from diploid_agent.config import Config, PersonaConfig, TelegramConfig
 
 
 def test_config_loads_windsurf_api_key(tmp_path: Path) -> None:
@@ -112,3 +112,7 @@ def test_persona_config_fleet_root_is_optional(tmp_path: Path) -> None:
         profile_root=tmp_path / "profile",
     )
     assert p.fleet_root is None
+
+
+def test_telegram_config_message_format_defaults_to_plain() -> None:
+    assert TelegramConfig().message_format == "plain"
