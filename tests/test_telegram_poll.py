@@ -1021,3 +1021,51 @@ def test_harness_config_http_posts_to_endpoint() -> None:
     result = poller._harness_config(12345, "task workers=2")
     assert "workers" in result
     assert "120.0" in result
+
+
+def test_stream_turn_heartbeat_wait_has_minimum_floor(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """The /turn long-poll wait must never drop below 5 s, even when a heartbeat is due."""
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+        stream_chunk_interval=0.0,
+    )
+    chat_input = ChatInput(chat_id=12345, message_id=1, text="hello")
+    worker = TurnWorker(poller, chat_input)
+
+    # Speed up the heartbeat interval so we hit the due path quickly.
+    monkeypatch.setattr(
+        "acp_fleet_harness.transport.telegram._HEARTBEAT_INTERVAL", 0.1
+    )
+
+    class FakeFuture:
+        _ticks = 0
+
+        def done(self) -> bool:
+            self._ticks += 1
+            return self._ticks > 4
+
+        def result(self) -> dict[str, Any]:
+            return {"reply": "", "notice": None}
+
+        def cancel(self) -> None:
+            pass
+
+    waits: list[float] = []
+
+    def fake_turn_status(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        waits.append(kwargs.get("wait", 0.0))
+        return {"status": "running", "message_text": "", "thought_text": ""}
+
+    worker._harness_turn_status = fake_turn_status  # type: ignore[method-assign]
+    poller._edit_message_text = lambda *args, **kwargs: None
+    poller._delete_message = lambda *args, **kwargs: None
+    poller._send_text = lambda *args, **kwargs: []
+    poller._send_message = lambda *args, **kwargs: 100
+
+    worker._stream_turn(FakeFuture(), 42, None)
+
+    assert all(w >= 5.0 for w in waits), waits

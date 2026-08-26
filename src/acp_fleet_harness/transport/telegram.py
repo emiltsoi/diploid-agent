@@ -272,11 +272,10 @@ class TurnWorker(threading.Thread):
         while not chat_future.done():
             now = time.monotonic()
             remaining = _HEARTBEAT_INTERVAL - (now - last_edit_at)
-            if remaining > 0:
-                wait = min(25.0, remaining)
-                wait = max(wait, 5.0)
-            else:
-                wait = 0.0
+            # Clamp wait between 5 s and 25 s. The 5 s floor prevents a tight
+            # busy loop if the heartbeat has no placeholder to edit (e.g. the
+            # initial sendMessage failed) while still letting us react quickly.
+            wait = min(25.0, max(remaining, 5.0))
             status = self._harness_turn_status(wait=wait)
             now = time.monotonic()
             running = status.get("status") == "running"
@@ -318,8 +317,9 @@ class TurnWorker(threading.Thread):
                         self.poller._edit_message_text(self.chat_id, thought_id, heartbeat)
                         last_thought_sent = heartbeat
                         edited = True
-                if edited:
-                    last_edit_at = now
+                # Reset the timer even if we had no placeholder to update, so a
+                # failed sendMessage cannot turn this loop into a tight poll.
+                last_edit_at = now
 
         try:
             result = chat_future.result()
