@@ -10,6 +10,7 @@ import httpx
 from diploid_agent.config import (
     NotificationsConfig,
     TaskConfig,
+    TelegramConfig,
     TimerConfig,
     WakerConfig,
 )
@@ -918,6 +919,7 @@ class _FakeConfigRuntime:
         self.waker = WakerConfig()
         self.timer = TimerConfig()
         self.notifications = NotificationsConfig()
+        self.telegram = TelegramConfig()
         self.notifier = "noop"
 
     def _apply(self, current: Any, new: Any) -> None:
@@ -952,6 +954,13 @@ class _FakeConfigRuntime:
         self._apply(self.notifications, cfg)
         self.notifier = f"notifier-{cfg.enabled}"
         return "Notifications config updated"
+
+    def get_telegram_config(self) -> TelegramConfig:
+        return self.telegram
+
+    def update_telegram_config(self, cfg: TelegramConfig) -> str:
+        self._apply(self.telegram, cfg)
+        return "Telegram config updated"
 
 
 def test_parse_config_value() -> None:
@@ -993,6 +1002,14 @@ def test_harness_config_direct_notifications_rebuilds_notifier() -> None:
     assert runtime.notifier == "notifier-False"
 
 
+def test_harness_config_direct_updates_telegram() -> None:
+    runtime = _FakeConfigRuntime()
+    poller = TelegramPoller(token="dummy", runtime=runtime)
+    result = poller._harness_config(12345, "telegram message_format=markdown_v2")
+    assert "markdown_v2" in result
+    assert runtime.telegram.message_format == "markdown_v2"
+
+
 def test_harness_config_direct_invalid_section() -> None:
     runtime = _FakeConfigRuntime()
     poller = TelegramPoller(token="dummy", runtime=runtime)
@@ -1023,9 +1040,7 @@ def test_harness_config_http_posts_to_endpoint() -> None:
     assert "120.0" in result
 
 
-def test_stream_turn_heartbeat_wait_has_minimum_floor(
-    tmp_path: Path, monkeypatch: Any
-) -> None:
+def test_stream_turn_heartbeat_wait_has_minimum_floor(tmp_path: Path, monkeypatch: Any) -> None:
     """The /turn long-poll wait must never drop below 5 s, even when a heartbeat is due."""
     poller = TelegramPoller(
         token="dummy",
@@ -1037,9 +1052,7 @@ def test_stream_turn_heartbeat_wait_has_minimum_floor(
     worker = TurnWorker(poller, chat_input)
 
     # Speed up the heartbeat interval so we hit the due path quickly.
-    monkeypatch.setattr(
-        "diploid_agent.transport.telegram._HEARTBEAT_INTERVAL", 0.1
-    )
+    monkeypatch.setattr("diploid_agent.transport.telegram._HEARTBEAT_INTERVAL", 0.1)
 
     class FakeFuture:
         _ticks = 0
@@ -1071,9 +1084,7 @@ def test_stream_turn_heartbeat_wait_has_minimum_floor(
     assert all(w >= 5.0 for w in waits), waits
 
 
-def test_stream_turn_splits_intermediate_messages(
-    tmp_path: Path, monkeypatch: Any
-) -> None:
+def test_stream_turn_splits_intermediate_messages(tmp_path: Path, monkeypatch: Any) -> None:
     """When the streamed reply pauses after a complete sentence, it is committed
     as its own message and the final reply is sent below it without duplicating
     the committed text.
@@ -1142,9 +1153,7 @@ def test_stream_turn_splits_intermediate_messages(
     def fake_edit_message_text(chat_id: int, message_id: int, text: str) -> None:
         edit_history.append((message_id, text))
 
-    monkeypatch.setattr(
-        "diploid_agent.transport.telegram.time.monotonic", fake_monotonic
-    )
+    monkeypatch.setattr("diploid_agent.transport.telegram.time.monotonic", fake_monotonic)
     worker._harness_turn_status = lambda *args, **kwargs: next(status_iter)  # type: ignore[method-assign]
     poller._send_message = fake_send_message  # type: ignore[method-assign]
     poller._send_text = fake_send_text  # type: ignore[method-assign]
@@ -1161,8 +1170,7 @@ def test_stream_turn_splits_intermediate_messages(
 
     # The new placeholder was edited with the full text.
     assert any(
-        mid == 101 and "I’ll check." in txt and "Done, love." in txt
-        for mid, txt in edit_history
+        mid == 101 and "I’ll check." in txt and "Done, love." in txt for mid, txt in edit_history
     )
 
     # The final reply was sliced to avoid duplicating the committed text.
@@ -1235,9 +1243,7 @@ def test_stream_turn_no_split_when_intermediate_messages_disabled(
         send_text_calls.append((chat_id, text, first_message_id))
         return [first_message_id or 100]
 
-    monkeypatch.setattr(
-        "diploid_agent.transport.telegram.time.monotonic", fake_monotonic
-    )
+    monkeypatch.setattr("diploid_agent.transport.telegram.time.monotonic", fake_monotonic)
     worker._harness_turn_status = lambda *args, **kwargs: next(status_iter)  # type: ignore[method-assign]
     poller._send_message = fake_send_message  # type: ignore[method-assign]
     poller._send_text = fake_send_text  # type: ignore[method-assign]
@@ -1250,3 +1256,77 @@ def test_stream_turn_no_split_when_intermediate_messages_disabled(
     assert len(send_text_calls) == 1
     assert send_text_calls[0][1] == "I’ll check.\n\nDone, love."
     assert send_text_calls[0][2] == 42
+
+
+def test_send_message_forwards_parse_mode(tmp_path: Path) -> None:
+    """_send_message should pass parse_mode to the Telegram API."""
+    poller = TelegramPoller(
+        token="dummy",
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(url: str, *, data: Any = None, **kwargs: Any) -> httpx.Response:
+        calls.append(data or {})
+        return _fake_response(200, {"ok": True, "result": {"message_id": 42}})
+
+    poller.client.post = fake_post  # type: ignore[method-assign]
+    msg_id = poller._send_message(123, "*bold*", parse_mode="MarkdownV2")
+
+    assert msg_id == 42
+    assert calls[0].get("parse_mode") == "MarkdownV2"
+
+
+def test_send_message_fallback_on_parse_error(tmp_path: Path) -> None:
+    """A 400 parse/markdown error should fall back to plain text."""
+    poller = TelegramPoller(
+        token="dummy",
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(url: str, *, data: Any = None, **kwargs: Any) -> httpx.Response:
+        calls.append(data or {})
+        if len(calls) == 1:
+            return _fake_response(
+                400,
+                {
+                    "ok": False,
+                    "error_code": 400,
+                    "description": "Bad Request: can't parse message text",
+                },
+            )
+        return _fake_response(200, {"ok": True, "result": {"message_id": 42}})
+
+    poller.client.post = fake_post  # type: ignore[method-assign]
+    msg_id = poller._send_message(123, "*bold*", parse_mode="MarkdownV2")
+
+    assert msg_id == 42
+    assert len(calls) == 2
+    assert calls[0].get("parse_mode") == "MarkdownV2"
+    assert calls[1].get("parse_mode") is None
+
+
+def test_send_text_uses_markdown_v2_when_configured(tmp_path: Path, monkeypatch: Any) -> None:
+    """_send_text should format replies as MarkdownV2 when configured."""
+    runtime = _FakeConfigRuntime()
+    runtime.telegram.message_format = "markdown_v2"
+    poller = TelegramPoller(
+        token="dummy",
+        state_dir=tmp_path / ".poller-placeholders",
+        runtime=runtime,
+    )
+
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(url: str, *, data: Any = None, **kwargs: Any) -> httpx.Response:
+        calls.append(data or {})
+        return _fake_response(200, {"ok": True, "result": {"message_id": 42}})
+
+    poller.client.post = fake_post  # type: ignore[method-assign]
+
+    sent = poller._send_text(123, "**bold**")
+
+    assert sent == [42]
+    assert calls[0].get("parse_mode") == "MarkdownV2"
+    assert calls[0].get("text") == "*bold*"

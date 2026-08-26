@@ -39,6 +39,14 @@ from diploid_agent.transport.base import (
     RuntimeAPI,
     Transport,
 )
+from diploid_agent.transport.telegram_format import (
+    _prefix_within_utf16_limit,
+    _strip_mdv2,
+    format_markdown_v2,
+    separate_chunk_indicator_from_fence,
+    split_telegram_text,
+    utf16_len,
+)
 
 # The Telegram token is part of the request URL, so suppress httpx's default
 # request logging to avoid leaking it.
@@ -120,7 +128,7 @@ _TELEGRAM_HELP = """Available commands:
 /recall <query> - search memory for relevant context
 /promote <fact> - append a fact to persona global memory
 /stream_thoughts on|off - toggle the optional real-time thought stream
-/config <section> <key>=<value> [key=value...] - update live runtime config (task|waker|timer|notifications)
+/config <section> <key>=<value> [key=value...] - update live runtime config (task|waker|timer|notifications|telegram)
 /help - show this list"""
 
 
@@ -316,9 +324,7 @@ class TurnWorker(threading.Thread):
             if message_id is None and text:
                 message_id = self._send_placeholder(_REPLY_PLACEHOLDER)
                 if message_id is not None:
-                    self.poller._save_placeholder_state(
-                        self.chat_id, message_id, thought_id
-                    )
+                    self.poller._save_placeholder_state(self.chat_id, message_id, thought_id)
                 last_text_sent = _REPLY_PLACEHOLDER
 
             if message_id is not None and text:
@@ -370,11 +376,7 @@ class TurnWorker(threading.Thread):
                         last_text_sent = heartbeat
                         edited = True
                 if thought_id is not None:
-                    base = (
-                        _format_thought(last_thought)
-                        if last_thought
-                        else _THINKING_PREFIX
-                    )
+                    base = _format_thought(last_thought) if last_thought else _THINKING_PREFIX
                     heartbeat = _build_heartbeat_text(base, elapsed)
                     if heartbeat != last_thought_sent:
                         self.poller._edit_message_text(self.chat_id, thought_id, heartbeat)
@@ -744,21 +746,59 @@ class TelegramPoller:
         text: str,
         *,
         reply_to_message_id: int | None = None,
+        parse_mode: str | None = None,
     ) -> int | None:
         """Send a Telegram message and return its message_id."""
         text = text[:4096]
         try:
             params: dict[str, Any] = {"chat_id": chat_id, "text": text}
+            if parse_mode:
+                params["parse_mode"] = parse_mode
             if reply_to_message_id is not None:
                 params["reply_to_message_id"] = reply_to_message_id
             data = self._api("sendMessage", **params)
             logger.info("Reply sent to chat %s", chat_id)
             return data.get("result", {}).get("message_id")
+        except httpx.HTTPStatusError as exc:
+            body: dict[str, Any] = {}
+            try:
+                body = exc.response.json()
+            except (ValueError, TypeError):
+                pass
+            description = (body.get("description") or "").lower()
+            is_parse_error = (
+                exc.response.status_code == 400
+                and ("parse" in description or "markdown" in description)
+                and parse_mode is not None
+            )
+            if is_parse_error:
+                logger.warning(
+                    "Telegram %s parse failed for chat %s, falling back to plain",
+                    parse_mode,
+                    chat_id,
+                )
+                plain = _strip_mdv2(text)
+                try:
+                    return self._send_message(
+                        chat_id, plain, reply_to_message_id=reply_to_message_id
+                    )
+                except Exception:
+                    logger.exception("Failed to send plain-text fallback to chat %s", chat_id)
+            else:
+                logger.exception("Failed to send Telegram message")
+            return None
         except Exception:
             logger.exception("Failed to send Telegram message")
             return None
 
-    def _edit_message_text(self, chat_id: int, message_id: int, text: str) -> bool:
+    def _edit_message_text(
+        self,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        *,
+        parse_mode: str | None = None,
+    ) -> bool:
         """Edit an existing Telegram message in place. Return True on success."""
         if message_id is None:
             return False
@@ -766,8 +806,47 @@ class TelegramPoller:
         if not text:
             return False
         try:
-            self._api("editMessageText", chat_id=chat_id, message_id=message_id, text=text)
+            params: dict[str, Any] = {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": text,
+            }
+            if parse_mode:
+                params["parse_mode"] = parse_mode
+            self._api("editMessageText", **params)
             return True
+        except httpx.HTTPStatusError as exc:
+            body: dict[str, Any] = {}
+            try:
+                body = exc.response.json()
+            except (ValueError, TypeError):
+                pass
+            description = (body.get("description") or "").lower()
+            is_parse_error = (
+                exc.response.status_code == 400
+                and ("parse" in description or "markdown" in description)
+                and parse_mode is not None
+            )
+            if is_parse_error:
+                logger.warning(
+                    "Telegram %s edit parse failed for chat %s, falling back to plain",
+                    parse_mode,
+                    chat_id,
+                )
+                plain = _strip_mdv2(text)
+                try:
+                    self._api(
+                        "editMessageText",
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=plain,
+                    )
+                    return True
+                except Exception:
+                    logger.exception("Failed to edit plain-text fallback in chat %s", chat_id)
+            else:
+                logger.exception("Failed to edit Telegram message")
+            return False
         except Exception:
             logger.exception("Failed to edit Telegram message")
             return False
@@ -1013,23 +1092,43 @@ class TelegramPoller:
         if not text:
             return []
 
-        chunks = self._split_telegram_text(text)
+        config = self._live_telegram_config
+        if config.message_format == "markdown_v2":
+            parse_mode = "MarkdownV2"
+            formatted = format_markdown_v2(text)
+            len_fn: Any = utf16_len
+            reserve = 16
+            marker_prefix = " \\("
+            marker_suffix = "\\)"
+        else:
+            parse_mode = None
+            formatted = text
+            len_fn = len
+            reserve = 16
+            marker_prefix = " ("
+            marker_suffix = ")"
+
+        chunks = split_telegram_text(formatted, max_length=4096, len_fn=len_fn, reserve=reserve)
         total = len(chunks)
         sent: list[int] = []
 
         for i, chunk in enumerate(chunks, start=1):
             if total > 1:
-                marker = f" ({i}/{total})"
-                # Guard against pathological marker lengths; truncate content if needed.
-                max_chunk = 4096 - len(marker)
-                if len(chunk) > max_chunk:
-                    chunk = chunk[:max_chunk]
-                content = chunk + marker
+                marker = f"{marker_prefix}{i}/{total}{marker_suffix}"
+                max_chunk = 4096 - (len_fn(marker) if len_fn is not len else len(marker))
+                if (len_fn or len)(chunk) > max_chunk:
+                    if len_fn is utf16_len:
+                        chunk = _prefix_within_utf16_limit(chunk, max_chunk)
+                    else:
+                        chunk = chunk[:max_chunk]
+                content = separate_chunk_indicator_from_fence(chunk + marker)
             else:
                 content = chunk
 
             if i == 1 and first_message_id is not None:
-                if self._edit_message_text(chat_id, first_message_id, content):
+                if self._edit_message_text(
+                    chat_id, first_message_id, content, parse_mode=parse_mode
+                ):
                     sent.append(first_message_id)
                 else:
                     # Edit failed (rate limit, deleted message, etc.). Remove the
@@ -1037,7 +1136,10 @@ class TelegramPoller:
                     # user still receives the reply.
                     self._delete_message(chat_id, first_message_id)
                     msg_id = self._send_message(
-                        chat_id, content, reply_to_message_id=reply_to_message_id
+                        chat_id,
+                        content,
+                        reply_to_message_id=reply_to_message_id,
+                        parse_mode=parse_mode,
                     )
                     if msg_id is None:
                         logger.error("Failed to send first chunk of reply to chat %s", chat_id)
@@ -1047,7 +1149,10 @@ class TelegramPoller:
                 # Edits cannot change a message's reply target, but any new
                 # message in a split reply should keep threading to the user.
                 msg_id = self._send_message(
-                    chat_id, content, reply_to_message_id=reply_to_message_id
+                    chat_id,
+                    content,
+                    reply_to_message_id=reply_to_message_id,
+                    parse_mode=parse_mode,
                 )
                 if msg_id is None:
                     logger.error(
@@ -1211,7 +1316,7 @@ class TelegramPoller:
         if len(parts) < 2:
             return (
                 "Usage: /config <section> <key>=<value> [key=value...]\n"
-                "Sections: task, waker, timer, notifications"
+                "Sections: task, waker, timer, notifications, telegram"
             )
 
         section, rest = parts
@@ -1221,10 +1326,13 @@ class TelegramPoller:
             "waker": (WakerConfig, "update_waker_config"),
             "timer": (TimerConfig, "update_timer_config"),
             "notifications": (NotificationsConfig, "update_notifications_config"),
+            "telegram": (TelegramConfig, "update_telegram_config"),
         }
 
         if section not in section_map:
-            return f"Unknown config section: {section}. Use task|waker|timer|notifications."
+            return (
+                f"Unknown config section: {section}. Use task|waker|timer|notifications|telegram."
+            )
 
         model_cls, update_method = section_map[section]
 
@@ -1861,7 +1969,7 @@ class TelegramPoller:
             if not arg:
                 reply = (
                     "Usage: /config <section> <key>=<value> [key=value...]\n"
-                    "Sections: task, waker, timer, notifications"
+                    "Sections: task, waker, timer, notifications, telegram"
                 )
             else:
                 reply = self._harness_config(chat_id, arg)
