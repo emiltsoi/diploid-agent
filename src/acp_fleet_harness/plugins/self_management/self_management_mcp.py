@@ -58,6 +58,8 @@ class SelfManagementMcpServer(StdioMcpServer):
         try:
             if method == "GET":
                 resp = self._client.get(path, headers=self._headers())
+            elif method == "DELETE":
+                resp = self._client.delete(path, headers=self._headers())
             else:
                 resp = self._client.post(path, json=body, headers=self._headers())
             resp.raise_for_status()
