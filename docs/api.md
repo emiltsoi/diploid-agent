@@ -370,6 +370,152 @@ curl -X POST http://127.0.0.1:4003/promote \
   -d '{"chat_id": "test-1", "message": "I prefer Rust over Python"}'
 ```
 
+## Plugin lifecycle
+
+Add, remove, update, toggle, and roll back plugins at runtime. All endpoints
+require the `X-API-Key` header when `HARNESS_API_KEY` is configured and return a
+`ChatResponse` shape.
+
+The `module` field, when provided, must be a valid Python file module name
+matching `^[A-Za-z_][A-Za-z0-9_.]*$`, must not contain `..`, and must expose a
+`Plugin` class. Built-in and frozen modules are rejected.
+
+### `POST /plugins`
+
+Add a new plugin. Pass `dry_run: true` to validate the module without applying
+the change.
+
+Request body:
+
+- `plugin` (object, required) — full plugin config; same fields as
+  `harness.plugins` entries.
+- `dry_run` (bool, default `false`) — if `true`, attempt to import
+  `plugin.module` and return `Dry run OK for <name>`.
+
+```bash
+curl -X POST http://127.0.0.1:4003/plugins \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $HARNESS_API_KEY" \
+  -d '{
+    "plugin": {
+      "name": "planner",
+      "enabled": true,
+      "module": "acp_fleet_harness.plugins.planner",
+      "prompt_slot": "persona_state"
+    },
+    "dry_run": true
+  }'
+```
+
+Response (dry run):
+
+```json
+{"reply": "Dry run OK for planner", "notice": null}
+```
+
+Response (applied):
+
+```json
+{"reply": "Plugin planner added", "notice": null}
+```
+
+### `DELETE /plugins/{name}`
+
+Remove a plugin. Its instances are stopped and its MCP server is no longer
+offered to new sessions.
+
+```bash
+curl -X DELETE http://127.0.0.1:4003/plugins/continuity \
+  -H "X-API-Key: $HARNESS_API_KEY"
+```
+
+Response:
+
+```json
+{"reply": "Plugin continuity removed", "notice": null}
+```
+
+### `PATCH /plugins/{name}`
+
+Update a plugin's config or swap its module. Pass `dry_run: true` to validate
+the new module.
+
+Request body:
+
+- `name` (string, required) — must match the path parameter.
+- `plugin` (object, required) — fields to overlay onto the existing config.
+- `dry_run` (bool, default `false`) — if `true`, attempt to import the new
+  module and return `Dry run OK for <name>`.
+
+```bash
+curl -X PATCH http://127.0.0.1:4003/plugins/continuity \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $HARNESS_API_KEY" \
+  -d '{
+    "name": "continuity",
+    "plugin": {
+      "module": "acp_fleet_harness.plugins.continuity"
+    },
+    "dry_run": true
+  }'
+```
+
+Response (dry run):
+
+```json
+{"reply": "Dry run OK for continuity", "notice": null}
+```
+
+Response (applied):
+
+```json
+{"reply": "Plugin continuity updated", "notice": null}
+```
+
+### `POST /plugins/{name}/toggle`
+
+Enable or disable a plugin globally, or for a specific chat when `chat_id` is
+provided.
+
+Request body:
+
+- `chat_id` (string, optional) — per-chat toggle; omit for a global toggle.
+- `enabled` (bool, required) — target state.
+
+```bash
+curl -X POST http://127.0.0.1:4003/plugins/continuity/toggle \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $HARNESS_API_KEY" \
+  -d '{"chat_id": "test-1", "enabled": false}'
+```
+
+Response:
+
+```json
+{"reply": "Plugin continuity disabled", "notice": null}
+```
+
+### `POST /config/rollback`
+
+Roll back the last `steps` plugin configuration changes.
+
+Request body:
+
+- `steps` (int, default `1`) — number of snapshots to roll back.
+
+```bash
+curl -X POST http://127.0.0.1:4003/config/rollback \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $HARNESS_API_KEY" \
+  -d '{"steps": 1}'
+```
+
+Response:
+
+```json
+{"reply": "Rolled back 1 plugin configuration(s)", "notice": null}
+```
+
 ## `POST /state`
 
 Dispatch an event to a state plugin for a chat.

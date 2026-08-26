@@ -297,6 +297,20 @@ class StatePlugin(abc.ABC):
     def on_shutdown(self, context: ShutdownContext) -> None:
         """Notify hook: called when the harness is shutting down."""
 
+    def start(self) -> None:
+        """Called when the plugin is first instantiated in a running harness.
+
+        Override to allocate per-plugin resources or start background work.
+        """
+        return
+
+    def stop(self) -> None:
+        """Called when the plugin is removed, globally disabled, or the harness shuts down.
+
+        Override to release resources or stop background work.
+        """
+        return
+
     # ---------------------------------------------------------------- partial / dispatch / event / idle
 
     def on_partial(self, partial: PartialTurn) -> None:

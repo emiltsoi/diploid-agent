@@ -23,12 +23,14 @@ from acp_fleet_harness.config import (
     Config,
     ConfigPersistenceError,
     NotificationsConfig,
+    PluginConfig,
     TaskConfig,
     TimerConfig,
     WakerConfig,
 )
-from acp_fleet_harness.models import RuntimeStatus, WakeEvent
+from acp_fleet_harness.models import ChatResult, RuntimeStatus, WakeEvent
 from acp_fleet_harness.plan.models import Plan, Task
+from acp_fleet_harness.plugins import PluginManager
 from acp_fleet_harness.runtime.agent_runtime import AgentRuntime
 from acp_fleet_harness.transport.base import OutboundMessage, RuntimeAPI, Transport
 
@@ -169,6 +171,29 @@ class PluginEnableRequest(BaseModel):
     chat_id: str
     name: str
     enabled: bool
+
+
+class PluginAddRequest(BaseModel):
+    chat_id: str | None = None
+    plugin: dict[str, Any]
+    dry_run: bool = False
+
+
+class PluginUpdateRequest(BaseModel):
+    chat_id: str | None = None
+    name: str
+    plugin: dict[str, Any]
+    dry_run: bool = False
+
+
+class PluginToggleRequest(BaseModel):
+    chat_id: str | None = None
+    name: str
+    enabled: bool
+
+
+class PluginRollbackRequest(BaseModel):
+    steps: int = Field(default=1, ge=1, description="Number of snapshots to roll back")
 
 
 class PlanCreateTask(BaseModel):
@@ -452,6 +477,91 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
     )
     def plugin_reload(req: PluginCommandRequest) -> ChatResponse:
         return _to_response(runtime.plugin_reload(req.chat_id, req.name))
+
+    @app.post(
+        "/plugins",
+        response_model=ChatResponse,
+        dependencies=[Depends(_require_api_key)],
+    )
+    def plugin_add(req: PluginAddRequest) -> ChatResponse:
+        config = PluginConfig(**req.plugin)
+        if req.dry_run:
+            try:
+                PluginManager.validate_module(config.module)
+                return _to_response(ChatResult(reply=f"Dry run OK for {config.name}"))
+            except Exception as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        try:
+            return _to_response(runtime.plugin_add(config))
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    @app.delete(
+        "/plugins/{name}",
+        response_model=ChatResponse,
+        dependencies=[Depends(_require_api_key)],
+    )
+    def plugin_remove(name: str) -> ChatResponse:
+        try:
+            return _to_response(runtime.plugin_remove(name))
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    @app.patch(
+        "/plugins/{name}",
+        response_model=ChatResponse,
+        dependencies=[Depends(_require_api_key)],
+    )
+    def plugin_update(name: str, req: PluginUpdateRequest) -> ChatResponse:
+        if req.name != name:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Name mismatch")
+        try:
+            # Validate the merged config before mutating runtime state.
+            merged = dict(req.plugin)
+            merged["name"] = name
+            config = PluginConfig(**merged)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        if req.dry_run:
+            try:
+                PluginManager.validate_module(config.module)
+                return _to_response(ChatResult(reply=f"Dry run OK for {name}"))
+            except Exception as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        # Validate the module before applying the update.
+        try:
+            PluginManager.validate_module(config.module)
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        # Merge via the existing update_plugins_config path, then reload.
+        patch = {"plugins": [{"name": name, **req.plugin}]}
+        runtime.update_config(patch)
+        runtime.plugin_reload(name=name, chat_id="0")  # chat_id is ignored by reload for modules
+        return _to_response(ChatResult(reply=f"Plugin {name} updated"))
+
+    @app.post(
+        "/plugins/{name}/toggle",
+        response_model=ChatResponse,
+        dependencies=[Depends(_require_api_key)],
+    )
+    def plugin_toggle(name: str, req: PluginToggleRequest) -> ChatResponse:
+        try:
+            return _to_response(
+                runtime.plugin_toggle(name=name, enabled=req.enabled, chat_id=req.chat_id)
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    @app.post(
+        "/config/rollback",
+        response_model=ChatResponse,
+        dependencies=[Depends(_require_api_key)],
+    )
+    def config_rollback(req: PluginRollbackRequest) -> ChatResponse:
+        try:
+            return _to_response(runtime.plugin_rollback(req.steps))
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     @app.get("/memory/{chat_id}")
     def memory(chat_id: str) -> dict[str, object]:

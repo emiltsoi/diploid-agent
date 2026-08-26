@@ -66,18 +66,118 @@ class PluginManager:
         self._dispatch_store = dispatch_store
         self._runtime: PluginRuntime | None = runtime
         self._instances: dict[str, dict[str, StatePlugin]] = defaultdict(dict)
+        self._config_history: list[list[PluginConfig]] = []
         self.reconfigure(plugins)
 
     def reconfigure(self, plugins: list[PluginConfig]) -> None:
-        """Replace the active plugin list and clear per-chat caches.
+        """Replace the active plugin list, stop removed plugins, and snapshot.
 
         Existing on-disk state is preserved; plugins are lazily reloaded on the
         next turn that needs them.
         """
-        self._plugins = sorted(
-            [p for p in plugins if p.name],
-            key=lambda p: p.prompt_order,
+        new_plugins = [p for p in plugins if p.name]
+        new_enabled = {p.name for p in new_plugins if p.enabled}
+
+        # Stop instances for plugins that are removed or globally disabled.
+        for chat_id, cache in list(self._instances.items()):
+            for name in list(cache.keys()):
+                if name not in new_enabled:
+                    plugin = cache.pop(name, None)
+                    if not isinstance(plugin, FailedPlugin):
+                        try:
+                            plugin.stop()
+                        except Exception:
+                            logger.exception("stop() failed for plugin %s", name)
+
+        self._plugins = sorted(new_plugins, key=lambda p: p.prompt_order)
+        self._instances.clear()
+        self._snapshot_config(self._plugins)
+
+    def _snapshot_config(self, plugins: list[PluginConfig]) -> None:
+        """Store a deep copy of the current plugin list."""
+        self._config_history.append(
+            [PluginConfig(**p.model_dump(exclude_none=False)) for p in plugins]
         )
+        if len(self._config_history) > 10:
+            self._config_history.pop(0)
+
+    def add_plugin(self, config: PluginConfig) -> str:
+        """Append a new plugin to the live config."""
+        if not config.name:
+            raise ValueError("Plugin must have a name")
+        if any(p.name == config.name for p in self._plugins):
+            raise ValueError(f"Plugin {config.name} already exists")
+        self._plugins.append(config)
+        self._plugins.sort(key=lambda p: p.prompt_order)
+        self._snapshot_config(self._plugins)
+        return f"Plugin {config.name} added"
+
+    def remove_plugin(self, name: str) -> str:
+        """Remove a plugin from the live config and stop all its instances."""
+        cfg = next((p for p in self._plugins if p.name == name), None)
+        if cfg is None:
+            raise ValueError(f"Unknown plugin: {name}")
+        self._plugins = [p for p in self._plugins if p.name != name]
+        for chat_id, cache in list(self._instances.items()):
+            plugin = cache.pop(name, None)
+            if plugin is not None and not isinstance(plugin, FailedPlugin):
+                try:
+                    plugin.stop()
+                except Exception:
+                    logger.exception("stop() failed for plugin %s", name)
+        self._snapshot_config(self._plugins)
+        return f"Plugin {name} removed"
+
+    def toggle_plugin(self, name: str, enabled: bool) -> str:
+        """Toggle a plugin on or off globally."""
+        cfg = next((p for p in self._plugins if p.name == name), None)
+        if cfg is None:
+            raise ValueError(f"Unknown plugin: {name}")
+        cfg.enabled = enabled
+        if not enabled:
+            for chat_id, cache in list(self._instances.items()):
+                plugin = cache.pop(name, None)
+                if plugin is not None and not isinstance(plugin, FailedPlugin):
+                    try:
+                        plugin.stop()
+                    except Exception:
+                        logger.exception("stop() failed for plugin %s", name)
+        self._snapshot_config(self._plugins)
+        return f"Plugin {name} {'enabled' if enabled else 'disabled'}"
+
+    def rollback(self, steps: int = 1) -> str:
+        """Restore the plugin list to an earlier snapshot."""
+        if steps < 1:
+            raise ValueError("steps must be >= 1")
+        if len(self._config_history) < steps + 1:
+            raise ValueError("No earlier configuration to roll back to")
+        # Stop instances for any plugin that will disappear or be disabled.
+        previous_names = {p.name for p in self._plugins if p.enabled}
+        target = self._config_history[-(steps + 1)]
+        target_names = {p.name for p in target if p.enabled}
+        for name in previous_names - target_names:
+            for chat_id, cache in list(self._instances.items()):
+                plugin = cache.pop(name, None)
+                if plugin is not None and not isinstance(plugin, FailedPlugin):
+                    try:
+                        plugin.stop()
+                    except Exception:
+                        logger.exception("stop() failed during rollback for plugin %s", name)
+        self._plugins = [PluginConfig(**p.model_dump()) for p in target]
+        # Replace the history tail with the restored config so the next snapshot is clean.
+        self._config_history = self._config_history[: -(steps + 1)]
+        self._snapshot_config(self._plugins)
+        return f"Rolled back {steps} plugin configuration(s)"
+
+    def stop_all(self) -> None:
+        """Stop every plugin instance and release all caches."""
+        for chat_id, cache in list(self._instances.items()):
+            for name, plugin in list(cache.items()):
+                if not isinstance(plugin, FailedPlugin):
+                    try:
+                        plugin.stop()
+                    except Exception:
+                        logger.exception("stop() failed for plugin %s", name)
         self._instances.clear()
 
     def _get_or_create(self, chat_id: str, config: PluginConfig) -> StatePlugin:
@@ -95,22 +195,37 @@ class PluginManager:
                     error=traceback.format_exc(),
                 )
             cache[config.name] = plugin
+            if not isinstance(plugin, FailedPlugin):
+                try:
+                    plugin.start()
+                except Exception:
+                    logger.exception("start() failed for plugin %s", config.name)
         return cache[config.name]
 
     _MODULE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
 
+    @staticmethod
+    def validate_module(module: str | None) -> None:
+        """Validate a plugin module name without instantiating it.
+
+        Raises ValueError for unsafe names and ImportError if the module cannot
+        be loaded or does not expose a ``Plugin`` class.
+        """
+        if not module:
+            return
+        if not PluginManager._MODULE_NAME_RE.match(module) or ".." in module:
+            raise ValueError(f"Invalid or unsafe plugin module name: {module}")
+        spec = importlib.util.find_spec(module)
+        if spec is None or spec.origin is None or spec.origin in ("built-in", "frozen"):
+            raise ImportError(f"Plugin module {module} cannot be loaded or is not a file")
+        mod = importlib.import_module(module)
+        if not hasattr(mod, "Plugin"):
+            raise ImportError(f"Plugin module {module} must expose a 'Plugin' class")
+
     def _load_plugin(self, config: PluginConfig, chat_id: str) -> StatePlugin:
         if config.module:
-            if not self._MODULE_NAME_RE.match(config.module) or ".." in config.module:
-                raise ValueError(f"Invalid or unsafe plugin module name: {config.module}")
-            spec = importlib.util.find_spec(config.module)
-            if spec is None or spec.origin is None or spec.origin in ("built-in", "frozen"):
-                raise ImportError(
-                    f"Plugin module {config.module} cannot be loaded or is not a file"
-                )
+            self.validate_module(config.module)
             module = importlib.import_module(config.module)
-            if not hasattr(module, "Plugin"):
-                raise ImportError(f"Plugin module {config.module} must expose a 'Plugin' class")
             return module.Plugin(config, chat_id, self._sessions_root, self._runtime)
 
         from acp_fleet_harness.plugins.json_state import JsonStatePlugin
@@ -135,7 +250,12 @@ class PluginManager:
             record.plugin_overrides = {}
         record.plugin_overrides[name] = enabled
         self._runtime._append_record(record)
-        self._instances[chat_id].pop(name, None)
+        instance = self._instances[chat_id].pop(name, None)
+        if instance is not None and not isinstance(instance, FailedPlugin):
+            try:
+                instance.stop()
+            except Exception:
+                logger.exception("stop() failed for plugin %s", name)
         return f"Plugin {name} {'enabled' if enabled else 'disabled'}"
 
     def list_plugin_status(self, chat_id: str) -> list[dict[str, Any]]:

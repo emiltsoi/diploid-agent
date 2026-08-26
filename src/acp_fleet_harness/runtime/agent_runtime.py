@@ -210,6 +210,7 @@ class AgentRuntime(RuntimeAPI):
             dispatch_store=self.dispatch_store,
             runtime=self,
         )
+        self._plugin_mcp_server_names: set[str] = set()
         self._register_plugin_mcp_servers()
 
         self.mcp = McpManager(config)
@@ -738,11 +739,36 @@ class AgentRuntime(RuntimeAPI):
 
     def _register_plugin_mcp_servers(self) -> None:
         """Append plugin MCP server configs to the harness config before McpManager sees it."""
-        plugin_servers = self._plugins.mcp_server_configs()
-        existing = {s.name for s in self.config.harness.mcp.servers}
-        for server in plugin_servers:
-            if server.name not in existing:
-                self.config.harness.mcp.servers.append(server)
+        active_plugin_servers = self._plugins.mcp_server_configs()
+        active_names = {s.name for s in active_plugin_servers}
+        stale = self._plugin_mcp_server_names - active_names
+
+        kept: list[Any] = []
+        replaced: set[str] = set()
+        for server in self.config.harness.mcp.servers:
+            if server.name in stale:
+                # This server was provided by a plugin that is now disabled or removed.
+                continue
+            if server.name in active_names:
+                # Replace in place so updates to args/env are picked up.
+                for ps in active_plugin_servers:
+                    if ps.name == server.name:
+                        kept.append(ps)
+                        replaced.add(ps.name)
+                        break
+                else:
+                    kept.append(server)
+            else:
+                # Static or otherwise non-plugin server; preserve it.
+                kept.append(server)
+
+        # Append any brand-new plugin servers.
+        for ps in active_plugin_servers:
+            if ps.name not in replaced:
+                kept.append(ps)
+
+        self.config.harness.mcp.servers = kept
+        self._plugin_mcp_server_names = active_names
 
     def plugin_event(
         self,
@@ -768,6 +794,45 @@ class AgentRuntime(RuntimeAPI):
     @_locked
     def plugin_reload(self, chat_id: str, name: str) -> ChatResult:
         return ChatResult(reply=self._plugins.reload_plugin(chat_id, name))
+
+    @_locked
+    def plugin_add(self, config: PluginConfig) -> ChatResult:
+        result = self._plugins.add_plugin(config)
+        self.config.harness.plugins = self._plugins._plugins
+        self._register_plugin_mcp_servers()
+        self.context_builder.plugin_manager = self._plugins
+        self._save_runtime_overrides()
+        return ChatResult(reply=result)
+
+    @_locked
+    def plugin_remove(self, name: str) -> ChatResult:
+        result = self._plugins.remove_plugin(name)
+        self.config.harness.plugins = self._plugins._plugins
+        self._register_plugin_mcp_servers()
+        self.context_builder.plugin_manager = self._plugins
+        self._save_runtime_overrides()
+        return ChatResult(reply=result)
+
+    @_locked
+    def plugin_toggle(self, name: str, enabled: bool, chat_id: str | None = None) -> ChatResult:
+        if chat_id is not None:
+            result = self._plugins.set_plugin_enabled(chat_id, name, enabled)
+        else:
+            result = self._plugins.toggle_plugin(name, enabled)
+            self.config.harness.plugins = self._plugins._plugins
+            self._register_plugin_mcp_servers()
+            self.context_builder.plugin_manager = self._plugins
+            self._save_runtime_overrides()
+        return ChatResult(reply=result)
+
+    @_locked
+    def plugin_rollback(self, steps: int = 1) -> ChatResult:
+        result = self._plugins.rollback(steps)
+        self.config.harness.plugins = self._plugins._plugins
+        self._register_plugin_mcp_servers()
+        self.context_builder.plugin_manager = self._plugins
+        self._save_runtime_overrides()
+        return ChatResult(reply=result)
 
     def start(self) -> None:
         """Start background services. Idempotent."""
@@ -818,6 +883,7 @@ class AgentRuntime(RuntimeAPI):
                     instance_started_at=self.instance_started_at,
                 ),
             )
+        self._plugins.stop_all()
 
         with self._lock:
             managers = list(self._memory_managers.values())

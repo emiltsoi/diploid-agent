@@ -91,6 +91,10 @@ There are three kinds of hook:
 | `on_sleeping` | Notify | End of a turn, and again during `shutdown` with reason `shutdown` | `SleepContext` |
 | `on_shutdown` | Notify | `AgentRuntime.shutdown()` (also invokes `on_sleeping`) | `ShutdownContext` |
 
+`start()` and `stop()` are optional lifecycle hooks called when a plugin
+instance is first created and when it is removed, globally disabled, or the
+harness shuts down. Use them to allocate and release per-plugin resources.
+
 ### Chain and return rules
 
 - Plugins run in `harness.plugins` order.
