@@ -169,6 +169,25 @@ harness:
       prompt_order: 90
       state_file: chat_self_state.md
       max_prompt_chars: 512
+    - name: self_management
+      enabled: true
+      module: acp_fleet_harness.plugins.self_management
+      prompt_slot: persona_state
+      prompt_order: 95
+      max_prompt_chars: 0
+      mcp_server:
+        name: devin-self-management
+        command: python
+        args:
+          - "-m"
+          - "acp_fleet_harness.plugins.self_management.self_management_mcp"
+          - "--chat-id"
+          - "{chat_id}"
+          - "--harness-url"
+          - "{harness_url}"
+          - "--sessions-root"
+          - "{sessions_root}"
+        env: []
   telegram:
     enabled: false
     webhook_port: 8080
@@ -233,7 +252,7 @@ harness:
           - "--sessions-root"
           - "{sessions_root}"
         env: []
-    default_enabled: [github, devin-memory, devin-working-memory, devin-identity]
+    default_enabled: [github, devin-memory, devin-working-memory, devin-identity, devin-self-management]
   skills:
     shared_root: personas/shared
     default_lazy: true  # only match skills by keyword; do not auto-load all default_enabled
