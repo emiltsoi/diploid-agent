@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import threading
 import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -64,6 +65,140 @@ def _run_unlocked(method: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
+class _NotifyStream:
+    """Stream a turn to a Telegram-like notifier when ``notify=True``.
+
+    This is used for turns that are not driven by the Telegram poller's
+    ``TurnWorker`` -- for example, an ``auto_continue`` wake or a dispatch
+    continuation.  It creates a reply placeholder (and a thought placeholder
+    when ``stream_thoughts`` is enabled), keeps the typing indicator alive,
+    and edits the placeholders as the turn produces output.
+    """
+
+    def __init__(
+        self,
+        turn_controller: TurnController,
+        chat_id: str,
+        notify: bool,
+        stream_thoughts: bool,
+        min_edit_interval: float,
+    ) -> None:
+        self.turn_controller = turn_controller
+        self.chat_id = chat_id
+        self.notify = notify
+        self.notifier = turn_controller.runtime.notifier
+        self.stream_thoughts = stream_thoughts
+        self.min_edit_interval = min_edit_interval
+        self._reply_id: int | None = None
+        self._thought_id: int | None = None
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._last_text = ""
+        self._last_thought = ""
+        self._last_edit = 0.0
+        self._lock = threading.Lock()
+
+    def start(self) -> None:
+        if not self.notify:
+            return
+        if not hasattr(self.notifier, "send_placeholder"):
+            return
+        self._reply_id = self.notifier.send_placeholder(self.chat_id, "...")
+        if self._reply_id is None:
+            return
+        if self.stream_thoughts and hasattr(self.notifier, "send_placeholder"):
+            self._thought_id = self.notifier.send_placeholder(self.chat_id, "Thinking...")
+        if hasattr(self.notifier, "begin_typing"):
+            self.notifier.begin_typing(self.chat_id)
+        self._last_edit = time.monotonic()
+        self._thread = threading.Thread(
+            target=self._stream_loop,
+            daemon=True,
+            name=f"notify-stream-{self.chat_id}",
+        )
+        self._thread.start()
+
+    def _stream_loop(self) -> None:
+        while not self._stop.is_set():
+            status = self.turn_controller.turn_status(self.chat_id, wait=0.2)
+            if self._stop.is_set():
+                break
+            if status.get("status") != "running":
+                break
+            self._update(status)
+
+    def _update(self, status: dict[str, Any]) -> None:
+        with self._lock:
+            now = time.monotonic()
+            if now - self._last_edit < self.min_edit_interval:
+                return
+            message_text = status.get("message_text", "")
+            thought_text = status.get("thought_text", "")
+            edited = False
+            if (
+                message_text
+                and message_text != self._last_text
+                and self._reply_id is not None
+                and hasattr(self.notifier, "edit_message")
+            ):
+                self.notifier.edit_message(self.chat_id, self._reply_id, message_text)
+                self._last_text = message_text
+                edited = True
+            if (
+                thought_text
+                and thought_text != self._last_thought
+                and self._thought_id is not None
+                and hasattr(self.notifier, "edit_message")
+            ):
+                self.notifier.edit_message(self.chat_id, self._thought_id, thought_text)
+                self._last_thought = thought_text
+                edited = True
+            if edited:
+                self._last_edit = now
+
+    def finish(self, chat_result: ChatResult) -> list[Any]:
+        if not self.notify or self._reply_id is None:
+            if self.notify:
+                sent = self.notifier.send(self.chat_id, chat_result.reply or "")
+                return [sent] if sent is not None else []
+            return []
+
+        self._stop.set()
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=0.5)
+
+        if hasattr(self.notifier, "end_typing"):
+            self.notifier.end_typing(self.chat_id)
+
+        sent: list[Any] = []
+        with self._lock:
+            if chat_result.reply:
+                if self._reply_id is not None and self.notifier.edit_message(
+                    self.chat_id, self._reply_id, chat_result.reply
+                ):
+                    sent.append(self._reply_id)
+                else:
+                    fallback = self.notifier.send(self.chat_id, chat_result.reply)
+                    if fallback is not None:
+                        sent.append(fallback)
+            else:
+                if self._reply_id is not None and hasattr(self.notifier, "delete_message"):
+                    self.notifier.delete_message(self.chat_id, self._reply_id)
+
+            if self._thought_id is not None and hasattr(self.notifier, "edit_message"):
+                if self._last_thought:
+                    self.notifier.edit_message(self.chat_id, self._thought_id, self._last_thought)
+                elif hasattr(self.notifier, "delete_message"):
+                    self.notifier.delete_message(self.chat_id, self._thought_id)
+
+        if chat_result.notice:
+            notice_id = self.notifier.send(self.chat_id, f"System: {chat_result.notice}")
+            if notice_id is not None:
+                sent.append(notice_id)
+
+        return sent
+
+
 class TurnController:
     """Per-chat turn and session orchestration."""
 
@@ -88,6 +223,7 @@ class TurnController:
         The RLock is released while the ACP call is in flight so `stop` can
         acquire it and request cancellation.
         """
+        notifier_stream: _NotifyStream | None = None
         with self.runtime._lock:
             if chat_id in self.runtime._active_turns:
                 return ChatResult(
@@ -186,6 +322,16 @@ class TurnController:
                 old_record = record
 
         rehydrate_notice: str | None = None
+
+        telegram_config = self.runtime.config.harness.telegram
+        notifier_stream = _NotifyStream(
+            self,
+            chat_id,
+            notify,
+            telegram_config.stream_thoughts,
+            telegram_config.min_edit_message_interval,
+        )
+        notifier_stream.start()
 
         def _maybe_emit_partial() -> None:
             a = self.runtime._active_turns.get(chat_id)
@@ -578,9 +724,12 @@ class TurnController:
             if active is not None:
                 with active._condition:
                     active._condition.notify_all()
+            if notifier_stream is not None:
+                if "chat_result" in vars():
+                    notifier_stream.finish(chat_result)
+                else:
+                    notifier_stream.finish(ChatResult(reply=""))
 
-        if notify:
-            self.runtime.notifier.send(chat_id, chat_result.reply)
         return chat_result
 
     @_locked
