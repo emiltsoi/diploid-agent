@@ -834,6 +834,46 @@ class AgentRuntime(RuntimeAPI):
         self._save_runtime_overrides()
         return ChatResult(reply=result)
 
+    @_locked
+    def plugin_sandbox(self, module: str, plugin: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Run a candidate plugin module through start/stop in a subprocess."""
+        import json as _json
+        import subprocess
+
+        data: dict[str, Any] = {"name": "sandbox", "module": module, **(plugin or {})}
+        cfg = PluginConfig(**data)
+        cmd = [
+            sys.executable,
+            "-m",
+            "acp_fleet_harness.plugin_sandbox",
+            "--module",
+            module,
+            "--name",
+            cfg.name,
+            "--chat-id",
+            "0",
+            "--prompt-slot",
+            cfg.prompt_slot,
+        ]
+        if cfg.state_file:
+            cmd.extend(["--state-file", cfg.state_file])
+        if cfg.config:
+            cmd.extend(["--config-json", _json.dumps(cfg.config, ensure_ascii=False)])
+        for p in self.config.harness.plugin_paths:
+            if p.exists():
+                cmd.extend(["--plugin-path", str(p)])
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30.0,
+        )
+        try:
+            return _json.loads(result.stdout.splitlines()[-1])
+        except (IndexError, _json.JSONDecodeError) as exc:
+            return {"ok": False, "error": f"Invalid sandbox output: {result.stdout!r} ({exc})"}
+
     def start(self) -> None:
         """Start background services. Idempotent."""
         if self._started:

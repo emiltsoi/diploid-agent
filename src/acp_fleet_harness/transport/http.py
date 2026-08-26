@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -194,6 +195,12 @@ class PluginToggleRequest(BaseModel):
 
 class PluginRollbackRequest(BaseModel):
     steps: int = Field(default=1, ge=1, description="Number of snapshots to roll back")
+
+
+class PluginSandboxRequest(BaseModel):
+    chat_id: str | None = None
+    module: str
+    plugin: dict[str, Any] | None = None
 
 
 class PlanCreateTask(BaseModel):
@@ -495,6 +502,18 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
             return _to_response(runtime.plugin_add(config))
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    @app.post(
+        "/plugin/sandbox",
+        response_model=ChatResponse,
+        dependencies=[Depends(_require_api_key)],
+    )
+    def plugin_sandbox(req: PluginSandboxRequest) -> ChatResponse:
+        try:
+            result = runtime.plugin_sandbox(req.module, req.plugin or {})
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        return _to_response(ChatResult(reply=json.dumps(result, ensure_ascii=False)))
 
     @app.delete(
         "/plugins/{name}",
