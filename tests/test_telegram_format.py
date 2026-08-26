@@ -97,3 +97,10 @@ def test_split_avoids_inline_backtick_split() -> None:
 def test_separate_chunk_indicator_from_fence() -> None:
     assert separate_chunk_indicator_from_fence("``` (1/2)") == "```\n(1/2)"
     assert separate_chunk_indicator_from_fence("``` \\(1/2\\)") == "```\n\\(1/2\\)"
+
+
+def test_format_inline_code_with_backtick() -> None:
+    """Double-backtick markdown code spans become valid Telegram MarkdownV2."""
+    out = format_markdown_v2("`` `code` ``")
+    # Should be a single Telegram code span containing a literal `code`.
+    assert out == "`\\`code\\``"

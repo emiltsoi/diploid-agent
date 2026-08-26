@@ -251,10 +251,20 @@ def format_markdown_v2(content: str) -> str:
         text,
     )
 
-    # 2) Protect inline code (`...`). Escape \ inside inline code.
+    # 2) Protect inline code spans. Telegram MarkdownV2 uses single backticks
+    # for code; to include a backtick in the content, escape it with \.
+    def _protect_inline(m: re.Match) -> str:
+        inner = m.group(2)
+        # Standard Markdown trims a single leading/trailing space when both are present.
+        if inner.startswith(" ") and inner.endswith(" ") and len(inner) > 2:
+            inner = inner[1:-1]
+        # Telegram inline code: single backticks, escape \ and ` inside.
+        escaped = inner.replace("\\", "\\\\").replace("`", "\\`")
+        return _ph(f"`{escaped}`")
+
     text = re.sub(
-        r"(`[^`]+`)",
-        lambda m: _ph(m.group(0).replace("\\", "\\\\")),
+        r"(?<!`)(`+)(.+?)\1(?!`)",
+        _protect_inline,
         text,
     )
 
