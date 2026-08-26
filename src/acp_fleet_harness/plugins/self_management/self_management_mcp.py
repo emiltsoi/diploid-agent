@@ -101,6 +101,22 @@ class SelfManagementMcpServer(StdioMcpServer):
                 },
             },
             {
+                "name": "plugin_create",
+                "description": "Scaffold a new plugin module, validate it in the sandbox, and return a config ready for plugin_add.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "module": {"type": "string"},
+                        "prompt_slot": {"type": "string"},
+                        "state_file": {"type": "string"},
+                        "mcp_server": {"type": "object"},
+                        "config": {"type": "object"},
+                    },
+                    "required": ["name"],
+                },
+            },
+            {
                 "name": "plugin_propose",
                 "description": "Request approval for a plugin mutation. Returns a token.",
                 "inputSchema": {
@@ -201,6 +217,19 @@ class SelfManagementMcpServer(StdioMcpServer):
                 "plugin": arguments.get("plugin") or {},
             }
             result = self._request("POST", "/plugin/sandbox", body)
+            text = json.dumps(result, ensure_ascii=False, indent=2)
+            return _tool_result(req_id, text, is_error="error" in result)
+
+        if name == "plugin_create":
+            body = {
+                "name": arguments.get("name"),
+                "module": arguments.get("module"),
+                "prompt_slot": arguments.get("prompt_slot", "persona_state"),
+                "state_file": arguments.get("state_file"),
+                "mcp_server": arguments.get("mcp_server"),
+                "config": arguments.get("config"),
+            }
+            result = self._request("POST", "/plugins/create", body)
             text = json.dumps(result, ensure_ascii=False, indent=2)
             return _tool_result(req_id, text, is_error="error" in result)
 

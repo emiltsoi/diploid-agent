@@ -910,6 +910,82 @@ class AgentRuntime(RuntimeAPI):
             )
         return output
 
+    @_locked
+    def plugin_create(
+        self,
+        name: str,
+        module: str | None = None,
+        prompt_slot: str = "persona_state",
+        state_file: str | None = None,
+        mcp_server: dict[str, Any] | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Scaffold a new plugin module on disk, sandbox it, and return a ready config."""
+        target_module = module or name
+        if not target_module.replace("_", "").replace("-", "").isalnum():
+            raise ValueError(f"Unsafe plugin module name: {target_module}")
+        if target_module.count(".") or target_module.startswith("/"):
+            raise ValueError(f"Plugin module name must be a bare package name: {target_module}")
+
+        plugin_root = self.config.harness.plugin_paths[0].expanduser()
+        plugin_root.mkdir(parents=True, exist_ok=True)
+        if str(plugin_root) not in sys.path:
+            sys.path.append(str(plugin_root))
+
+        plugin_dir = plugin_root / target_module
+        if plugin_dir.exists():
+            raise ValueError(f"Plugin directory already exists: {plugin_dir}")
+        plugin_dir.mkdir(parents=True)
+
+        init_path = plugin_dir / "__init__.py"
+        init_path.write_text(
+            f'"""{target_module} plugin for acp-fleet-harness."""\n\n'
+            f"from __future__ import annotations\n\n"
+            f"from typing import Any\n\n"
+            f"from acp_fleet_harness.config import PluginConfig\n"
+            f"from acp_fleet_harness.plugins.base import StatePlugin\n\n\n"
+            f"class Plugin(StatePlugin):\n"
+            f'    """A minimal state plugin."""\n\n'
+            f"    def __init__(\n"
+            f"        self,\n"
+            f"        config: PluginConfig,\n"
+            f"        chat_id: str,\n"
+            f"        sessions_root: Any,\n"
+            f"        runtime: Any = None,\n"
+            f"    ) -> None:\n"
+            f"        super().__init__(config, chat_id, sessions_root, runtime=runtime)\n\n"
+            f"    def prompt_block(self, max_chars: int | None = None) -> str | None:\n"
+            f"        return None\n",
+            encoding="utf-8",
+        )
+
+        plugin_config: dict[str, Any] = {
+            "name": name,
+            "enabled": True,
+            "module": target_module,
+            "prompt_slot": prompt_slot,
+            "prompt_order": 100,
+            "max_prompt_chars": 0,
+        }
+        if state_file:
+            plugin_config["state_file"] = state_file
+        if mcp_server:
+            plugin_config["mcp_server"] = mcp_server
+        if config:
+            plugin_config["config"] = config
+
+        sandbox_result = self.plugin_sandbox(target_module, plugin_config)
+        if not sandbox_result.get("ok"):
+            # Don't leave a broken scaffold behind.
+            try:
+                shutil.rmtree(plugin_dir)
+            except OSError:
+                pass
+            error = sandbox_result.get("error", "unknown")
+            raise ValueError(f"Sandbox failed for {target_module}: {error}")
+
+        return plugin_config
+
     def incidents(self) -> list[dict[str, Any]]:
         return self._incidents.recent()
 

@@ -203,6 +203,15 @@ class PluginSandboxRequest(BaseModel):
     plugin: dict[str, Any] | None = None
 
 
+class PluginCreateRequest(BaseModel):
+    name: str
+    module: str | None = None
+    prompt_slot: str = "persona_state"
+    state_file: str | None = None
+    mcp_server: dict[str, Any] | None = None
+    config: dict[str, Any] | None = None
+
+
 class PluginIncidentListResponse(BaseModel):
     incidents: list[dict[str, Any]]
 
@@ -526,6 +535,25 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         return _to_response(ChatResult(reply=json.dumps(result, ensure_ascii=False)))
+
+    @app.post(
+        "/plugins/create",
+        response_model=ChatResponse,
+        dependencies=[Depends(_require_api_key)],
+    )
+    def plugin_create(req: PluginCreateRequest) -> ChatResponse:
+        try:
+            result = runtime.plugin_create(
+                name=req.name,
+                module=req.module,
+                prompt_slot=req.prompt_slot,
+                state_file=req.state_file,
+                mcp_server=req.mcp_server,
+                config=req.config,
+            )
+            return _to_response(ChatResult(reply=json.dumps(result, ensure_ascii=False)))
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     @app.delete(
         "/plugins/{name}",
