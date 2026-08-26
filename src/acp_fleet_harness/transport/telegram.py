@@ -54,6 +54,8 @@ logger = logging.getLogger("telegram_poll")
 
 _THINKING_PREFIX = "Thinking..."
 _THINKING_CONTINUED = "... (thinking continues)"
+_HEARTBEAT_INTERVAL = 30.0
+_REPLY_PLACEHOLDER = "..."
 
 
 def _format_thought(thought: str, limit: int = 4096) -> str:
@@ -73,6 +75,28 @@ def _format_thought(thought: str, limit: int = 4096) -> str:
     if tail_limit <= 0:
         return thought[-limit:]
     return f"{_THINKING_CONTINUED}\n{thought[-tail_limit:]}"
+
+
+def _format_elapsed(seconds: float) -> str:
+    """Return a short, human-readable elapsed time."""
+    minutes, secs = divmod(int(seconds), 60)
+    if minutes:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
+def _build_heartbeat_text(base: str, elapsed: float, limit: int = 4096) -> str:
+    """Return ``base`` with a small liveness suffix, truncating if needed."""
+    suffix = f"\n\n(still working, {_format_elapsed(elapsed)})"
+    if not base:
+        return suffix[1:] if len(suffix) > limit else suffix
+    total = base + suffix
+    if len(total) <= limit:
+        return total
+    max_base = limit - len(suffix) - 3
+    if max_base <= 0:
+        return total[:limit]
+    return base[:max_base] + "..." + suffix
 
 
 _TELEGRAM_HELP = """Available commands:
@@ -219,7 +243,7 @@ class TurnWorker(threading.Thread):
             resp = self.poller.client.get(
                 f"{self.poller.harness_url}/turn/{self.chat_id}",
                 params={"wait": wait},
-                timeout=max(wait + 10.0, 30.0),
+                timeout=max(wait + 30.0, 60.0),
             )
             resp.raise_for_status()
             return resp.json()
@@ -242,15 +266,29 @@ class TurnWorker(threading.Thread):
         last_thought = ""
         last_thought_sent = ""
         text = ""
+        # Track when we last touched a placeholder so we can send a liveness
+        # heartbeat during a long turn with no new model output.
+        last_edit_at = turn_start_at = time.monotonic()
         while not chat_future.done():
-            status = self._harness_turn_status(wait=25.0)
-            if status.get("status") == "running":
+            now = time.monotonic()
+            remaining = _HEARTBEAT_INTERVAL - (now - last_edit_at)
+            if remaining > 0:
+                wait = min(25.0, remaining)
+                wait = max(wait, 5.0)
+            else:
+                wait = 0.0
+            status = self._harness_turn_status(wait=wait)
+            now = time.monotonic()
+            running = status.get("status") == "running"
+            if running:
                 text = status.get("message_text", "")
+            edited = False
             if message_id is not None and text:
                 visible = text[:4096]
                 if visible != last_text_sent:
                     self.poller._edit_message_text(self.chat_id, message_id, visible)
                     last_text_sent = visible
+                    edited = True
             if thought_id is not None:
                 thought = status.get("thought_text", "")
                 if thought:
@@ -258,8 +296,30 @@ class TurnWorker(threading.Thread):
                     if visible and visible != last_thought_sent:
                         self.poller._edit_message_text(self.chat_id, thought_id, visible)
                         last_thought_sent = visible
+                        edited = True
                     last_thought = thought
-            # Long-poll already waits for the next change, so no extra sleep is needed.
+            if edited:
+                last_edit_at = now
+            elif now - last_edit_at >= _HEARTBEAT_INTERVAL:
+                # Nothing new from the model; nudge the placeholder so the user
+                # knows the harness is still alive.
+                elapsed = now - turn_start_at
+                if message_id is not None:
+                    base = text[:4096] if text else _REPLY_PLACEHOLDER
+                    heartbeat = _build_heartbeat_text(base, elapsed)
+                    if heartbeat != last_text_sent:
+                        self.poller._edit_message_text(self.chat_id, message_id, heartbeat)
+                        last_text_sent = heartbeat
+                        edited = True
+                if thought_id is not None:
+                    base = _format_thought(last_thought) if last_thought else _THINKING_PREFIX
+                    heartbeat = _build_heartbeat_text(base, elapsed)
+                    if heartbeat != last_thought_sent:
+                        self.poller._edit_message_text(self.chat_id, thought_id, heartbeat)
+                        last_thought_sent = heartbeat
+                        edited = True
+                if edited:
+                    last_edit_at = now
 
         try:
             result = chat_future.result()

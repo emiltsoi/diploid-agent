@@ -146,17 +146,22 @@ class AutoContinuePlugin(StatePlugin):
             self._save_state()
             return
 
-        # Suppress the generic partial notice for now; show a working indicator
-        # to the user so the auto-continue chain is not a silent black box.
-        if turn.partial_notice:
-            self._state["deferred_notice"] = turn.partial_notice
-            turn.partial_notice = None
-
+        # Show the working indicator, but keep the partial notice visible so the
+        # user can see what was already completed before the auto-continuation.
         delay = self._backoff_delay(base_delay, attempt, delay_cap)
-        turn.notice = _join_notices(
-            turn.notice,
-            f"Working... (attempt {attempt}/{max_attempts}); continuing automatically in {delay:.0f}s.",
-        )
+        working = f"Working... (attempt {attempt}/{max_attempts}); continuing automatically in {delay:.0f}s."
+        if turn.partial_notice:
+            turn.notice = _join_notices(
+                turn.notice,
+                turn.partial_notice,
+                working,
+            )
+            turn.partial_notice = None
+            # Do not carry a stale deferred notice from a previous version.
+            self._state.pop("deferred_notice", None)
+            self._state.pop("send_deferred", None)
+        else:
+            turn.notice = _join_notices(turn.notice, working)
 
         self._schedule(attempt, max_attempts, delay)
 
