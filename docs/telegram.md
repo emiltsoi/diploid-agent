@@ -54,6 +54,23 @@ watches the streamed text:
 - At the end, the final reply is sliced to remove the already-committed prefix,
   so the user does not see the same text twice.
 
+## Message format
+
+`harness.telegram.message_format` controls how the final assistant reply is sent to Telegram:
+
+- `plain` (default): sends the raw markdown text without formatting.
+- `markdown_v2`: converts standard markdown to Telegram MarkdownV2 so `**bold**`, `*italic*`, `` `code` ``, ```` ``` ```` blocks, `[links](url)`, `~~strikethrough~~`, `||spoiler||`, `# headings`, and `>` blockquotes render correctly.
+
+Tables are rewritten to bold headings with bullet groups because Telegram MarkdownV2 has no table syntax. Citation tags like `<ref_file file="..." />` and `<ref_snippet file="..." lines="..." />` are replaced with short source notes.
+
+Streaming edits and intermediate placeholder commits remain plain text to avoid parsing incomplete markdown. If a formatted chunk fails Telegram parsing, the poller falls back to plain text for that chunk.
+
+You can change the format live with:
+
+```
+/config telegram message_format=markdown_v2
+```
+
 ## Replying to messages
 
 If you reply to any earlier message in the Telegram chat, the poller extracts
@@ -103,7 +120,7 @@ message, so the conversation thread is visible.
 | `/recall <query>` | Search memory for relevant context. |
 | `/promote <fact>` | Append a fact to the persona's global memory. |
 | `/help` | Show the list of Telegram slash commands. |
-| `/config <section> <key>=<value> [key=value...]` | Update live runtime config (task, waker, timer, notifications) without restarting. |
+| `/config <section> <key>=<value> [key=value...]` | Update live runtime config (task, waker, timer, notifications, telegram) without restarting. |
 
 Anything else is treated as a normal chat message.
 
@@ -122,6 +139,7 @@ You can adjust the harness's live runtime configuration directly from Telegram w
 /config notifications webhook_url=https://example.com/notify
 /config telegram intermediate_idle=3.0
 /config telegram intermediate_messages=false
+/config telegram message_format=markdown_v2
 ```
 
 For the `telegram` section, the following keys may be updated live:
@@ -133,6 +151,7 @@ For the `telegram` section, the following keys may be updated live:
 | `intermediate_min_chars` | integer | Minimum length of the uncommitted tail before it can become its own message. |
 | `stream_thoughts` | `true` / `false` | Toggle the real-time thought stream. |
 | `stream_chunk_interval` | seconds | Reserved; currently unused. |
+| `message_format` | `plain` / `markdown_v2` | How the final reply is formatted. |
 
 Because the Telegram poller is a separate process, live `telegram` config changes only take effect after the poller restarts. Other sections (`task`, `waker`, `timer`, `notifications`) take effect immediately on the running harness.
 
