@@ -1110,9 +1110,26 @@ class TelegramPoller:
             marker_prefix = " ("
             marker_suffix = ")"
 
+        logger.info(
+            "_send_text chat=%s message_format=%s parse_mode=%s first_message_id=%s",
+            chat_id,
+            config.message_format,
+            parse_mode,
+            first_message_id,
+        )
+
         chunks = split_telegram_text(formatted, max_length=4096, len_fn=len_fn, reserve=reserve)
         total = len(chunks)
         sent: list[int] = []
+
+        # If a streaming placeholder exists and we want it rendered with
+        # MarkdownV2, delete it and send the formatted reply as a new message.
+        # Telegram's editMessageText does not reliably re-apply a new parse_mode
+        # to a message that was sent without one, so editing would leave raw
+        # Markdown characters in the chat.
+        if first_message_id is not None and parse_mode is not None:
+            self._delete_message(chat_id, first_message_id)
+            first_message_id = None
 
         for i, chunk in enumerate(chunks, start=1):
             if total > 1:
@@ -1148,8 +1165,7 @@ class TelegramPoller:
                         break
                     sent.append(msg_id)
             else:
-                # Edits cannot change a message's reply target, but any new
-                # message in a split reply should keep threading to the user.
+                # Any new message in a split reply should keep threading to the user.
                 msg_id = self._send_message(
                     chat_id,
                     content,
