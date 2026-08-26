@@ -530,6 +530,7 @@ class TelegramPoller:
         max_telegram_retries: int = 3,
         max_telegram_backoff: float = 30.0,
         metrics: Any | None = None,
+        message_format: str = "plain",
     ):
         self.token = token
         self.metrics = metrics
@@ -547,6 +548,7 @@ class TelegramPoller:
             intermediate_min_chars=intermediate_min_chars,
             min_telegram_interval=min_telegram_interval,
             min_edit_message_interval=min_edit_message_interval,
+            message_format=message_format,
         )
         self.state_dir = state_dir or Path("sessions") / ".poller-placeholders"
         self.reply_preview_chars = reply_preview_chars
@@ -2113,6 +2115,7 @@ def main() -> int:
         intermediate_min_chars=config.harness.telegram.intermediate_min_chars,
         min_telegram_interval=config.harness.telegram.min_telegram_interval,
         min_edit_message_interval=config.harness.telegram.min_edit_message_interval,
+        message_format=config.harness.telegram.message_format,
         state_dir=config.harness.sessions_root / ".poller-placeholders",
         reply_preview_chars=config.harness.memory.max_bot_reply_quote_chars,
         metrics=metrics,
