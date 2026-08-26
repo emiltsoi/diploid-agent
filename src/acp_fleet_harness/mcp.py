@@ -88,11 +88,18 @@ class McpManager:
             sessions_root=self._sessions_root,
             harness_url=self._harness_url,
         )
+        env = [fmt.format(e) for e in server.env]
+        # Pass the harness API key to child MCP processes so they can call back.
+        harness_api_key = (
+            self.config.secrets.harness_api_key if self.config.secrets else None
+        )
+        if harness_api_key:
+            env.append(f"HARNESS_API_KEY={harness_api_key}")
         return {
             "name": server.name,
             "command": fmt.format(server.command),
             "args": [fmt.format(a) for a in server.args],
-            "env": [fmt.format(e) for e in server.env],
+            "env": env,
         }
 
     def default_enabled_names(self) -> set[str]:
