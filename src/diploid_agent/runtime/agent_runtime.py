@@ -1146,7 +1146,16 @@ class AgentRuntime(RuntimeAPI):
             logger.warning("Runtime overrides '%s' entry is not a dict; skipping", key)
             return
         try:
-            setattr(self.config.harness, key, model_cls(**section))
+            existing = getattr(self.config.harness, key)
+            if isinstance(existing, model_cls):
+                # Merge the override values into the existing section so fields
+                # that are missing from the runtime-overrides file keep the
+                # defaults from harness.yaml. Re-validate to skip malformed
+                # overrides just like a fresh model construction would.
+                merged = {**existing.model_dump(), **section}
+                setattr(self.config.harness, key, model_cls(**merged))
+            else:
+                setattr(self.config.harness, key, model_cls(**section))
         except (ValueError, TypeError):
             logger.exception("Invalid %s override in %s", key, self._runtime_overrides_path)
 
