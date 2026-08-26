@@ -1,0 +1,160 @@
+"""A fake PluginRuntime for safely exercising plugins outside the live harness."""
+
+from __future__ import annotations
+
+import tempfile
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+from acp_fleet_harness.config import Config, EngineConfig, HarnessConfig, PersonaConfig
+from acp_fleet_harness.engine.base import AgentEngine, TurnRequest, TurnResult
+from acp_fleet_harness.models import ChatResult, SessionRecord
+from acp_fleet_harness.plan.models import Plan, Task
+from acp_fleet_harness.runtime.wake_queue import WakeQueue
+
+
+class FakeAgentEngine(AgentEngine):
+    """AgentEngine that never leaves the sandbox."""
+
+    def prompt(
+        self,
+        request: TurnRequest,
+        *,
+        session_id: str | None = None,
+        on_chunk: Callable[[str], None] | None = None,
+        on_update: Callable[[dict[str, Any]], None] | None = None,
+    ) -> TurnResult:
+        return TurnResult(reply="ok", session_id=session_id or "sandbox")
+
+    def cancel(self, session_id: str) -> None:
+        return
+
+    def list_models(self) -> list[str]:
+        return ["swe-1-7"]
+
+    def session_alive(self, session_id: str) -> bool:
+        return True
+
+    def close(self) -> None:
+        return
+
+
+class FakeWakeQueue:
+    """In-memory wake queue that never writes to disk."""
+
+    def __init__(self) -> None:
+        self._events: dict[str, Any] = {}
+
+    def due_count(self, now: float | None = None) -> int:
+        return 0
+
+    def pending_count(self) -> int:
+        return 0
+
+    def pending(
+        self,
+        chat_id: str | None = None,
+        now: float | None = None,
+    ) -> list[Any]:
+        return []
+
+    def enqueue(self, event: Any) -> Any:
+        event.id = event.id or f"wake-sandbox-{id(event)}"
+        self._events[event.id] = event
+        return event
+
+    def complete(self, event_id: str) -> Any | None:
+        return self._events.pop(event_id, None)
+
+    def ready(self, event_id: str, now: float | None = None) -> Any | None:
+        return self._events.get(event_id)
+
+    def pop_due(self, now: float | None = None, lease_seconds: float = 300.0) -> list[Any]:
+        return []
+
+
+class FakePluginRuntime:
+    """Minimal, safe runtime surface for the plugin sandbox.
+
+    Implements the same shape as acp_fleet_harness.runtime.plugin_runtime.PluginRuntime
+    so candidate plugins can call engine, wake_queue, plan_create, recall, etc. without
+    touching the live harness.
+    """
+
+    def __init__(self, sessions_root: Path | None = None, chat_id: str = "sandbox") -> None:
+        self._sessions_root = sessions_root or Path(tempfile.mkdtemp())
+        self._chat_id = chat_id
+
+    @property
+    def config(self) -> Config:
+        return Config(
+            devin=EngineConfig(),
+            persona=PersonaConfig(name="sandbox", profile_root=Path("/tmp")),
+            harness=HarnessConfig(
+                sessions_root=self._sessions_root,
+                session_store_path=self._sessions_root / "sessions.jsonl",
+                session_prune_enabled=False,
+            ),
+        )
+
+    @property
+    def instance_id(self) -> str:
+        return "harness-sandbox"
+
+    @property
+    def instance_started_at(self) -> float:
+        return 0.0
+
+    @property
+    def sessions_root(self) -> Path:
+        return self._sessions_root
+
+    @property
+    def engine(self) -> AgentEngine:
+        return FakeAgentEngine()
+
+    @property
+    def wake_queue(self) -> WakeQueue:
+        return FakeWakeQueue()  # type: ignore[return-value]
+
+    def plan_create(
+        self,
+        name: str,
+        description: str = "",
+        chat_id: str | None = None,
+        tasks: list[Task] | None = None,
+    ) -> Plan:
+        return Plan(
+            name=name,
+            description=description,
+            chat_id=chat_id or self._chat_id,
+            tasks=tasks or [],
+        )
+
+    def plan_task_start(self, plan_id: str, task_id: str | None = None) -> Task:
+        return Task(name="sandbox", plan_id=plan_id, chat_id=self._chat_id)
+
+    def call_engine_unlocked(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        return fn(*args, **kwargs)
+
+    def is_continuation_message(self, text: str) -> bool:
+        return text.lower() in {"continue", "go on", "proceed", "resume"}
+
+    def recall(
+        self,
+        chat_id: str,
+        query: str,
+        tags: list[str] | None = None,
+        max_tokens: int | None = None,
+    ) -> ChatResult:
+        return ChatResult(reply="")
+
+    def promote(self, chat_id: str, fact: str) -> ChatResult:
+        return ChatResult(reply="promoted")
+
+    def _active_record(self, chat_id: str) -> SessionRecord | None:
+        return None
+
+    def _append_record(self, record: SessionRecord) -> None:
+        return
