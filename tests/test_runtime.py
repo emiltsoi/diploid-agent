@@ -7,23 +7,23 @@ keeping the service container and non-turn API on AgentRuntime.
 
 from pathlib import Path
 
-from acp_fleet_harness.config import (
+from diploid_agent.config import (
     Config,
-    DevinConfig,
+    DiploidConfig,
     HarnessConfig,
     PersonaConfig,
     PlanConfig,
     Secrets,
 )
-from acp_fleet_harness.harness import ConversationHarness
-from acp_fleet_harness.runtime import AgentRuntime, TurnController
-from acp_fleet_harness.transport.base import RuntimeAPI
+from diploid_agent.harness import ConversationHarness
+from diploid_agent.runtime import AgentRuntime, TurnController
+from diploid_agent.transport.base import RuntimeAPI
 
 
 def _make_config(tmp_path: Path) -> Config:
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
     return Config(
-        devin=DevinConfig(bin="/bin/echo", model="swe-1-7"),
+        diploid=DiploidConfig(bin="/bin/echo", model="swe-1-7"),
         persona=PersonaConfig(
             name="test-pilot",
             profile_root=fixture_root,

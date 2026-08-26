@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from acp_fleet_harness.runtime.event_bus import Event, EventBus
+from diploid_agent.runtime.event_bus import Event, EventBus
 
 
 def _wait_for(captured: list[Event], timeout: float = 1.0) -> None:

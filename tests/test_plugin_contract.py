@@ -1,12 +1,12 @@
 from pathlib import Path
 
-from acp_fleet_harness.config import Config, DevinConfig, HarnessConfig, PersonaConfig, PluginConfig
-from acp_fleet_harness.runtime.agent_runtime import AgentRuntime
+from diploid_agent.config import Config, DiploidConfig, HarnessConfig, PersonaConfig, PluginConfig
+from diploid_agent.runtime.agent_runtime import AgentRuntime
 
 
 class FakeEngine:
     def prompt(self, *a, **k):
-        from acp_fleet_harness.engine import TurnResult
+        from diploid_agent.engine import TurnResult
         return TurnResult(reply="ok", session_id="s1")
 
     def list_models(self):
@@ -24,7 +24,7 @@ class FakeEngine:
 
 def _make_config(tmp_path: Path, plugins: list[PluginConfig]) -> Config:
     return Config(
-        devin=DevinConfig(bin="/bin/echo", model="swe-1-7"),
+        diploid=DiploidConfig(bin="/bin/echo", model="swe-1-7"),
         persona=PersonaConfig(name="test", profile_root=tmp_path / "persona"),
         harness=HarnessConfig(
             sessions_root=tmp_path / "sessions",
@@ -36,7 +36,7 @@ def _make_config(tmp_path: Path, plugins: list[PluginConfig]) -> Config:
 
 
 def test_validate_contract_rejects_builtin_module(tmp_path: Path) -> None:
-    from acp_fleet_harness.plugins.manager import PluginManager
+    from diploid_agent.plugins.manager import PluginManager
 
     pm = PluginManager(
         plugins=[],
@@ -49,7 +49,7 @@ def test_validate_contract_rejects_builtin_module(tmp_path: Path) -> None:
 
 
 def test_runtime_health_reports_plugin_health(tmp_path: Path) -> None:
-    config = _make_config(tmp_path, [PluginConfig(name="continuity", enabled=True, module="acp_fleet_harness.plugins.continuity")])
+    config = _make_config(tmp_path, [PluginConfig(name="continuity", enabled=True, module="diploid_agent.plugins.continuity")])
     runtime = AgentRuntime(config)
     runtime.engine = FakeEngine()
     health = runtime.health()

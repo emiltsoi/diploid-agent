@@ -303,7 +303,7 @@ Response:
   "model": "swe-1-7",
   "session_number": 2,
   "session_id": "nickel-tango",
-  "cwd": "/path/to/acp-fleet-harness/sessions/test-1",
+  "cwd": "/path/to/diploid-agent/sessions/test-1",
   "turn_number": 3,
   "persona_memory_exceeded": false,
   "chat_memory_exceeded": false,
@@ -413,7 +413,7 @@ curl -X POST http://127.0.0.1:4003/plugins \
     "plugin": {
       "name": "planner",
       "enabled": true,
-      "module": "acp_fleet_harness.plugins.planner",
+      "module": "diploid_agent.plugins.planner",
       "prompt_slot": "persona_state"
     },
     "dry_run": true
@@ -467,7 +467,7 @@ curl -X PATCH http://127.0.0.1:4003/plugins/continuity \
   -d '{
     "name": "continuity",
     "plugin": {
-      "module": "acp_fleet_harness.plugins.continuity"
+      "module": "diploid_agent.plugins.continuity"
     },
     "dry_run": true
   }'
@@ -563,7 +563,7 @@ Valid commands: `list`, `enable`, `disable`. `name` is required for `enable` and
 
 Configured plugin MCP servers are listed automatically per chat. Notable servers:
 
-- `devin-self-management` — list, sandbox, add, remove, toggle, and roll back plugins. Mutations require a per-chat approval token.
+- `diploid-self-management` — list, sandbox, add, remove, toggle, and roll back plugins. Mutations require a per-chat approval token.
 - `acp-harness-watchdog` — systemd user service that polls `/health`, rolls back on failure, and restarts the harness only if rollback does not restore health.
 
 ## `GET /skill/{chat_id}`

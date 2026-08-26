@@ -7,7 +7,7 @@ allowed-tools: [mcp_call_tool]
 
 # Self-management
 
-You can inspect, validate, add, remove, toggle, and roll back plugins using the `devin-self-management` MCP server.
+You can inspect, validate, add, remove, toggle, and roll back plugins using the `diploid-self-management` MCP server.
 
 ## Tools
 

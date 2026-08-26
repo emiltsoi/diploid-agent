@@ -1,4 +1,4 @@
-"""Tests for the devin-memory MCP server."""
+"""Tests for the diploid-memory MCP server."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 import respx
 from httpx import Response
 
-from acp_fleet_harness.memory_mcp import MemoryMcpServer
+from diploid_agent.memory_mcp import MemoryMcpServer
 
 
 def _exchange(monkeypatch, messages, chat_id="chat-1", harness_url="http://127.0.0.1:4003"):

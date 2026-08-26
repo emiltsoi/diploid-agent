@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import httpx
 
-from acp_fleet_harness.notifier import NoopNotifier, TelegramNotifier, WebhookNotifier
+from diploid_agent.notifier import NoopNotifier, TelegramNotifier, WebhookNotifier
 
 
 def test_noop_notifier_returns_none() -> None:
@@ -67,7 +67,7 @@ def test_telegram_notifier_retries_read_timeout(monkeypatch) -> None:
             raise_for_status=MagicMock(),
         ),
     ]
-    monkeypatch.setattr("acp_fleet_harness.notifier.time.sleep", lambda *_: None)
+    monkeypatch.setattr("diploid_agent.notifier.time.sleep", lambda *_: None)
 
     notifier = TelegramNotifier("test-token", client=client)
     result = notifier.send("12345", "Task done.")
@@ -88,7 +88,7 @@ def test_telegram_notifier_retries_502_and_logs_body(monkeypatch) -> None:
         httpx.HTTPStatusError("502", request=MagicMock(), response=bad_response),
         good_response,
     ]
-    monkeypatch.setattr("acp_fleet_harness.notifier.time.sleep", lambda *_: None)
+    monkeypatch.setattr("diploid_agent.notifier.time.sleep", lambda *_: None)
 
     notifier = TelegramNotifier("test-token", client=client)
     result = notifier.send("12345", "Task done.")
@@ -101,7 +101,7 @@ def test_telegram_notifier_default_client_uses_30s_timeout(monkeypatch) -> None:
     client = MagicMock()
     client.post.return_value.json.return_value = {"ok": True, "result": {"message_id": 1}}
     client.post.return_value.raise_for_status = MagicMock()
-    monkeypatch.setattr("acp_fleet_harness.notifier.httpx.Client", lambda **kw: client)
+    monkeypatch.setattr("diploid_agent.notifier.httpx.Client", lambda **kw: client)
     notifier = TelegramNotifier("test-token")
     _ = notifier.send("12345", "hello")
 

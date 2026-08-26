@@ -7,7 +7,7 @@ import respx
 from httpx import Response
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "probes"))
-import acp_harness_watchdog as watchdog
+import diploid_harness_watchdog as watchdog
 
 
 @respx.mock

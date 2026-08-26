@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from acp_fleet_harness.config import TaskConfig
-from acp_fleet_harness.plan.manager import PlanManager
-from acp_fleet_harness.plan.models import Task, TaskStatus, TaskType
-from acp_fleet_harness.runtime.event_bus import Event, EventBus
-from acp_fleet_harness.task.engine import TaskEngine
-from acp_fleet_harness.task.worker import WorkerPool
+from diploid_agent.config import TaskConfig
+from diploid_agent.plan.manager import PlanManager
+from diploid_agent.plan.models import Task, TaskStatus, TaskType
+from diploid_agent.runtime.event_bus import Event, EventBus
+from diploid_agent.task.engine import TaskEngine
+from diploid_agent.task.worker import WorkerPool
 
 
 def _fixture_engine(tmp_path: Path, workers: int = 2, shell_timeout: float = 5.0):
@@ -159,11 +159,11 @@ def test_start_unknown_task_raises(tmp_path: Path) -> None:
 
 
 def _acp_fixture_engine(tmp_path: Path, workers: int = 2, shell_timeout: float = 5.0):
-    from acp_fleet_harness.config import Config, DevinConfig, HarnessConfig, PersonaConfig
-    from acp_fleet_harness.engine.fake import FakeAgentEngine
+    from diploid_agent.config import Config, DiploidConfig, HarnessConfig, PersonaConfig
+    from diploid_agent.engine.fake import FakeAgentEngine
 
     config = Config(
-        devin=DevinConfig(bin="/bin/echo", model="test-model"),
+        diploid=DiploidConfig(bin="/bin/echo", model="test-model"),
         persona=PersonaConfig(name="test", profile_root=tmp_path),
         harness=HarnessConfig(sessions_root=tmp_path / "sessions"),
     )

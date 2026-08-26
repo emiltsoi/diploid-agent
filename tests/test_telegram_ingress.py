@@ -6,18 +6,18 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from acp_fleet_harness.acp_client import AcpPromptResult
-from acp_fleet_harness.config import (
+from diploid_agent.acp_client import AcpPromptResult
+from diploid_agent.config import (
     Config,
-    DevinConfig,
+    DiploidConfig,
     HarnessConfig,
     PersonaConfig,
     PluginConfig,
     Secrets,
 )
-from acp_fleet_harness.engine import TurnResult
-from acp_fleet_harness.models import ChatResult
-from acp_fleet_harness.telegram_ingress import create_app
+from diploid_agent.engine import TurnResult
+from diploid_agent.models import ChatResult
+from diploid_agent.telegram_ingress import create_app
 
 
 class FakeClient:
@@ -83,7 +83,7 @@ class FakeClient:
 
 def _test_config(tmp_path: Path) -> Config:
     return Config(
-        devin=DevinConfig(bin="/bin/echo", model="swe-1-7"),
+        diploid=DiploidConfig(bin="/bin/echo", model="swe-1-7"),
         persona=PersonaConfig(
             name="test-pilot",
             profile_root=Path(__file__).parent / "fixtures" / "test-pilot",
@@ -97,7 +97,7 @@ def _test_config(tmp_path: Path) -> Config:
             plugins=[
                 PluginConfig(
                     name="curriculum",
-                    module="acp_fleet_harness.plugins.curriculum",
+                    module="diploid_agent.plugins.curriculum",
                     prompt_slot="persona_state",
                     state_file="chat_curriculum.json",
                     max_prompt_chars=1024,
@@ -110,7 +110,7 @@ def _test_config(tmp_path: Path) -> Config:
 
 def _test_config_with_auth(tmp_path: Path) -> Config:
     return Config(
-        devin=DevinConfig(bin="/bin/echo", model="swe-1-7"),
+        diploid=DiploidConfig(bin="/bin/echo", model="swe-1-7"),
         persona=PersonaConfig(
             name="test-pilot",
             profile_root=Path(__file__).parent / "fixtures" / "test-pilot",
@@ -124,7 +124,7 @@ def _test_config_with_auth(tmp_path: Path) -> Config:
             plugins=[
                 PluginConfig(
                     name="curriculum",
-                    module="acp_fleet_harness.plugins.curriculum",
+                    module="diploid_agent.plugins.curriculum",
                     prompt_slot="persona_state",
                     state_file="chat_curriculum.json",
                     max_prompt_chars=1024,
@@ -396,7 +396,7 @@ def test_state_event(client: TestClient) -> None:
 
 
 def test_dispatch_and_continue_endpoints(client: TestClient, monkeypatch) -> None:
-    from acp_fleet_harness.acp_client import AcpPromptResult
+    from diploid_agent.acp_client import AcpPromptResult
 
     def fake_create_session(prompt, **kwargs):
         return AcpPromptResult(reply="Ready.", session_id="session-1")

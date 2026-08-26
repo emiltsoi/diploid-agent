@@ -5,20 +5,20 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from acp_fleet_harness.config import (
+from diploid_agent.config import (
     Config,
-    DevinConfig,
+    DiploidConfig,
     HarnessConfig,
     PersonaConfig,
     PluginConfig,
     Secrets,
 )
-from acp_fleet_harness.transport.http import create_app
+from diploid_agent.transport.http import create_app
 
 
 def _test_config(tmp_path: Path) -> Config:
     return Config(
-        devin=DevinConfig(bin="/bin/echo", model="swe-1-7"),
+        diploid=DiploidConfig(bin="/bin/echo", model="swe-1-7"),
         persona=PersonaConfig(
             name="test-pilot",
             profile_root=Path(__file__).parent / "fixtures" / "test-pilot",
@@ -32,7 +32,7 @@ def _test_config(tmp_path: Path) -> Config:
             plugins=[
                 PluginConfig(
                     name="curriculum",
-                    module="acp_fleet_harness.plugins.curriculum",
+                    module="diploid_agent.plugins.curriculum",
                     prompt_slot="persona_state",
                     state_file="chat_curriculum.json",
                     max_prompt_chars=1024,

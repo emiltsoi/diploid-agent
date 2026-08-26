@@ -1,0 +1,26 @@
+[Unit]
+Description=ACP fleet harness — ingress + telegram poller
+After=network-online.target
+
+[Service]
+Type=simple
+# Adjust WorkingDirectory/ExecStart to your installation path. ExecStart
+# points at the supervisor wrapper (systemd/diploid-agent-run.sh) so the unit
+# runs BOTH the ingress and the telegram poller; if either dies the unit
+# restarts as a pair.
+WorkingDirectory=/home/USER/diploid-agent
+ExecStart=/home/USER/diploid-agent/systemd/diploid-agent-run.sh
+Restart=on-failure
+RestartSec=10
+EnvironmentFile=-/home/USER/diploid-agent/config/secrets.env
+
+# Authentication: `devin acp` uses either `WINDSURF_API_KEY` from
+# config/secrets.env or the credentials file written by `devin auth login`
+# (~/.local/share/devin/credentials.toml). The user running this unit must
+# have one of those available.
+
+# For a system unit, add `User=YOUR_USER` here. For a user unit
+# (`systemctl --user ...`), leave User out.
+
+[Install]
+WantedBy=default.target

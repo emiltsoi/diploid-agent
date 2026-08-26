@@ -1,0 +1,12 @@
+[Unit]
+Description=ACP Fleet Harness Watchdog
+After=diploid-agent.service
+
+[Service]
+Type=simple
+ExecStart=%h/CascadeProjects/diploid-agent/.venv/bin/python %h/CascadeProjects/diploid-agent/probes/acp_harness_watchdog.py --harness-url http://127.0.0.1:4003 --user
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

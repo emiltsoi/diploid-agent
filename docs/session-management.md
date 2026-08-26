@@ -1,12 +1,12 @@
 # Session management
 
 This page describes the multi-session, resume, branch, and pruning features
-for `acp-fleet-harness`.
+for `diploid-agent`.
 
 For the current implementation, see:
 
-- `ConversationHarness` in `src/acp_fleet_harness/harness.py`
-- `AcpClient` in `src/acp_fleet_harness/acp_client.py`
+- `ConversationHarness` in `src/diploid_agent/harness.py`
+- `AcpClient` in `src/diploid_agent/acp_client.py`
 - `telegram_poll.py` for the Telegram command surface.
 
 ## Background

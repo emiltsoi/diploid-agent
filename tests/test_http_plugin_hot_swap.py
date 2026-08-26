@@ -7,22 +7,22 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from acp_fleet_harness.config import (
+from diploid_agent.config import (
     Config,
-    DevinConfig,
+    DiploidConfig,
     HarnessConfig,
     PersonaConfig,
     PlanConfig,
     Secrets,
     TimerConfig,
 )
-from acp_fleet_harness.runtime.agent_runtime import AgentRuntime
-from acp_fleet_harness.transport.http import create_app
+from diploid_agent.runtime.agent_runtime import AgentRuntime
+from diploid_agent.transport.http import create_app
 
 
 class FakeEngine:
     def prompt(self, *a, **k):
-        from acp_fleet_harness.engine import TurnResult
+        from diploid_agent.engine import TurnResult
 
         return TurnResult(reply="ok", session_id="s1")
 
@@ -41,7 +41,7 @@ class FakeEngine:
 
 def _make_config(tmp_path: Path) -> Config:
     return Config(
-        devin=DevinConfig(bin="/bin/echo", model="swe-1-7"),
+        diploid=DiploidConfig(bin="/bin/echo", model="swe-1-7"),
         persona=PersonaConfig(name="test", profile_root=tmp_path / "persona"),
         harness=HarnessConfig(
             sessions_root=tmp_path / "sessions",
@@ -54,7 +54,7 @@ def _make_config(tmp_path: Path) -> Config:
                 {
                     "name": "continuity",
                     "enabled": True,
-                    "module": "acp_fleet_harness.plugins.continuity",
+                    "module": "diploid_agent.plugins.continuity",
                 }
             ],
         ),
@@ -75,7 +75,7 @@ def test_plugin_add_and_remove(client: TestClient) -> None:
         "plugin": {
             "name": "self_state",
             "enabled": True,
-            "module": "acp_fleet_harness.plugins.self_state",
+            "module": "diploid_agent.plugins.self_state",
             "prompt_slot": "persona_state",
             "state_file": "chat_self_state.md",
         }
@@ -112,7 +112,7 @@ def test_plugin_dry_run_validates_module(client: TestClient) -> None:
             "plugin": {
                 "name": "self_state",
                 "enabled": True,
-                "module": "acp_fleet_harness.plugins.self_state",
+                "module": "diploid_agent.plugins.self_state",
                 "prompt_slot": "persona_state",
             },
             "dry_run": True,
@@ -151,7 +151,7 @@ def test_plugin_update_validates_module(client: TestClient) -> None:
         "/plugins/continuity",
         json={
             "name": "continuity",
-            "plugin": {"module": "acp_fleet_harness.plugins.continuity"},
+            "plugin": {"module": "diploid_agent.plugins.continuity"},
             "dry_run": True,
         },
     )

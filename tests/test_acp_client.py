@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from acp_fleet_harness.acp_client import (
+from diploid_agent.acp_client import (
     AcpClient,
     AcpPromptResult,
     _load_windsurf_api_key,
@@ -31,26 +31,26 @@ def test_load_windsurf_api_key_from_credentials(monkeypatch, tmp_path: Path) -> 
 
 
 def test_resolve_agent_bin_existing_path(tmp_path: Path) -> None:
-    devin = tmp_path / "devin"
-    devin.write_text("#!/bin/sh\n")
-    devin.chmod(0o755)
-    assert _resolve_agent_bin(str(devin)) == devin
+    agent_bin = tmp_path / "devin"
+    agent_bin.write_text("#!/bin/sh\n")
+    agent_bin.chmod(0o755)
+    assert _resolve_agent_bin(str(agent_bin)) == agent_bin
 
 
 def test_resolve_agent_bin_prefers_path_arg(monkeypatch, tmp_path: Path) -> None:
     # If the explicit path exists, it should win over PATH lookup.
-    devin = tmp_path / "devin"
-    devin.write_text("#!/bin/sh\n")
-    devin.chmod(0o755)
-    assert _resolve_agent_bin(str(devin)) == devin
+    agent_bin = tmp_path / "devin"
+    agent_bin.write_text("#!/bin/sh\n")
+    agent_bin.chmod(0o755)
+    assert _resolve_agent_bin(str(agent_bin)) == agent_bin
 
 
 def test_resolve_agent_bin_falls_back_to_path(monkeypatch, tmp_path: Path) -> None:
-    devin = tmp_path / "devin"
-    devin.write_text("#!/bin/sh\n")
-    devin.chmod(0o755)
+    agent_bin = tmp_path / "devin"
+    agent_bin.write_text("#!/bin/sh\n")
+    agent_bin.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path))
-    assert _resolve_agent_bin("/nonexistent/devin") == devin
+    assert _resolve_agent_bin("/nonexistent/devin") == agent_bin
 
 
 def test_resolve_agent_bin_raises_when_not_found(tmp_path: Path) -> None:
@@ -84,10 +84,10 @@ def test_acp_client_raises_when_no_key(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.delenv("WINDSURF_API_KEY", raising=False)
     monkeypatch.delenv("ACP_API_KEY", raising=False)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    devin_bin = tmp_path / "devin"
-    devin_bin.write_text("#!/bin/sh\n")
+    agent_bin = tmp_path / "devin"
+    agent_bin.write_text("#!/bin/sh\n")
     with pytest.raises(RuntimeError, match="No api_key provided"):
-        AcpClient(agent_bin=str(devin_bin))
+        AcpClient(agent_bin=str(agent_bin))
 
 
 def test_route_update_collects_full_and_chunked_messages() -> None:

@@ -1,9 +1,9 @@
 # Plugin Contract
 
-A valid `acp-fleet-harness` plugin module:
+A valid `diploid-agent` plugin module:
 
 - Exposes a top-level `Plugin` class.
-- Inherits from `acp_fleet_harness.plugins.base.StatePlugin` (recommended).
+- Inherits from `diploid_agent.plugins.base.StatePlugin` (recommended).
 - Implements optional `start()` and `stop()` lifecycle hooks.
 - Implements an optional `health()` method returning `{"healthy": bool, ...}` or `None`.
 - Provides an MCP server via `PluginConfig.mcp_server` or by overriding `StatePlugin.mcp_server()`.

@@ -2,8 +2,8 @@
 
 from dataclasses import fields
 
-from acp_fleet_harness.models import PartialTurn, WakeEvent
-from acp_fleet_harness.plugins.contexts import IdleContext
+from diploid_agent.models import PartialTurn, WakeEvent
+from diploid_agent.plugins.contexts import IdleContext
 
 
 def test_wake_event_defaults() -> None:

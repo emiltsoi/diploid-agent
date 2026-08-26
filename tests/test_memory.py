@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from acp_fleet_harness.memory import (
+from diploid_agent.memory import (
     FileMemoryBackend,
     HindsightMemoryBackend,
     MemoryItem,
@@ -195,7 +195,7 @@ def test_hindsight_retain_rejects_empty_content(tmp_path: Path, monkeypatch) -> 
 
 
 def test_record_turn_document_id_is_unique_per_session(tmp_path: Path) -> None:
-    from acp_fleet_harness.config import MemoryConfig, PersonaConfig
+    from diploid_agent.config import MemoryConfig, PersonaConfig
 
     class FakeClient:
         pass
@@ -230,7 +230,7 @@ def test_record_turn_document_id_is_unique_per_session(tmp_path: Path) -> None:
 
 
 def test_promote_to_persona_indexes_in_hindsight(tmp_path: Path) -> None:
-    from acp_fleet_harness.config import MemoryConfig, PersonaConfig
+    from diploid_agent.config import MemoryConfig, PersonaConfig
 
     class FakeClient:
         pass
@@ -266,7 +266,7 @@ def test_promote_to_persona_indexes_in_hindsight(tmp_path: Path) -> None:
 
 
 def test_memory_manager_file_backend_recall(tmp_path: Path) -> None:
-    from acp_fleet_harness.config import MemoryConfig, PersonaConfig
+    from diploid_agent.config import MemoryConfig, PersonaConfig
 
     class FakeClient:
         pass
@@ -293,7 +293,7 @@ def test_recall_context_loaded_not_greater_than_total(tmp_path: Path) -> None:
     class FakeClient:
         pass
 
-    from acp_fleet_harness.config import MemoryConfig, PersonaConfig
+    from diploid_agent.config import MemoryConfig, PersonaConfig
 
     persona = PersonaConfig(name="test", profile_root=tmp_path / "persona")
     persona.profile_root.mkdir(parents=True, exist_ok=True)
@@ -324,7 +324,7 @@ def test_recall_context_short_term_always_included(tmp_path: Path) -> None:
     class FakeClient:
         pass
 
-    from acp_fleet_harness.config import MemoryConfig, PersonaConfig
+    from diploid_agent.config import MemoryConfig, PersonaConfig
 
     persona = PersonaConfig(name="test", profile_root=tmp_path / "persona")
     persona.profile_root.mkdir(parents=True, exist_ok=True)
@@ -348,7 +348,7 @@ def test_recall_context_short_term_always_included(tmp_path: Path) -> None:
 
 
 def test_smart_short_term_summarizes_older_turns(tmp_path: Path) -> None:
-    from acp_fleet_harness.config import MemoryConfig, PersonaConfig
+    from diploid_agent.config import MemoryConfig, PersonaConfig
 
     class FakeClient:
         def create_session(self, *args, **kwargs):
@@ -400,7 +400,7 @@ def test_smart_short_term_summarizes_older_turns(tmp_path: Path) -> None:
 
 
 def test_memory_manager_retain_appends_to_file(tmp_path: Path) -> None:
-    from acp_fleet_harness.config import MemoryConfig, PersonaConfig
+    from diploid_agent.config import MemoryConfig, PersonaConfig
 
     class FakeClient:
         pass
@@ -423,7 +423,7 @@ def test_memory_manager_retain_appends_to_file(tmp_path: Path) -> None:
 
 
 def test_record_turn_uses_notice_when_reply_empty(tmp_path: Path) -> None:
-    from acp_fleet_harness.config import MemoryConfig, PersonaConfig
+    from diploid_agent.config import MemoryConfig, PersonaConfig
 
     class FakeClient:
         pass
@@ -456,7 +456,7 @@ def test_record_turn_uses_notice_when_reply_empty(tmp_path: Path) -> None:
 
 
 def test_persona_memory_loads_and_truncates(tmp_path: Path) -> None:
-    from acp_fleet_harness.config import MemoryConfig, PersonaConfig
+    from diploid_agent.config import MemoryConfig, PersonaConfig
 
     class FakeClient:
         pass

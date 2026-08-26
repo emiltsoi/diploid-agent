@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from acp_fleet_harness.config import PluginConfig
-from acp_fleet_harness.models import ChatResult
-from acp_fleet_harness.plugins.base import StatePlugin
-from acp_fleet_harness.runtime.plugin_runtime import PluginRuntime
+from diploid_agent.config import PluginConfig
+from diploid_agent.models import ChatResult
+from diploid_agent.plugins.base import StatePlugin
+from diploid_agent.runtime.plugin_runtime import PluginRuntime
 
 
 class FakeRuntime:

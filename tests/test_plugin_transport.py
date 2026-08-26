@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from acp_fleet_harness.config import (
+from diploid_agent.config import (
     Config,
-    DevinConfig,
+    DiploidConfig,
     HarnessConfig,
     PersonaConfig,
     PlanConfig,
@@ -17,8 +17,8 @@ from acp_fleet_harness.config import (
     Secrets,
     TimerConfig,
 )
-from acp_fleet_harness.runtime.agent_runtime import AgentRuntime
-from acp_fleet_harness.transport.http import create_app
+from diploid_agent.runtime.agent_runtime import AgentRuntime
+from diploid_agent.transport.http import create_app
 
 
 def _fixture_root() -> Path:
@@ -27,7 +27,7 @@ def _fixture_root() -> Path:
 
 def _make_config(tmp_path: Path) -> Config:
     return Config(
-        devin=DevinConfig(bin="/bin/echo", model="swe-1-7"),
+        diploid=DiploidConfig(bin="/bin/echo", model="swe-1-7"),
         persona=PersonaConfig(
             name="test-pilot",
             profile_root=_fixture_root(),
@@ -46,7 +46,7 @@ def _make_config(tmp_path: Path) -> Config:
 
 class FakeEngine:
     def prompt(self, *a, **k):
-        from acp_fleet_harness.engine import TurnResult
+        from diploid_agent.engine import TurnResult
 
         return TurnResult(reply="ok", session_id="s1")
 

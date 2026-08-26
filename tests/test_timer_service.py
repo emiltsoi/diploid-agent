@@ -6,20 +6,20 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from acp_fleet_harness.config import (
+from diploid_agent.config import (
     Config,
-    DevinConfig,
+    DiploidConfig,
     HarnessConfig,
     PersonaConfig,
     PlanConfig,
     Secrets,
     TimerConfig,
 )
-from acp_fleet_harness.models import WakeEvent
-from acp_fleet_harness.runtime.agent_runtime import AgentRuntime
-from acp_fleet_harness.runtime.event_bus import Event, EventBus
-from acp_fleet_harness.runtime.timer_service import TimerService
-from acp_fleet_harness.runtime.wake_queue import WakeQueue
+from diploid_agent.models import WakeEvent
+from diploid_agent.runtime.agent_runtime import AgentRuntime
+from diploid_agent.runtime.event_bus import Event, EventBus
+from diploid_agent.runtime.timer_service import TimerService
+from diploid_agent.runtime.wake_queue import WakeQueue
 
 
 def _fixture_root() -> Path:
@@ -28,7 +28,7 @@ def _fixture_root() -> Path:
 
 def _make_config(tmp_path: Path) -> Config:
     return Config(
-        devin=DevinConfig(bin="/bin/echo", model="swe-1-7"),
+        diploid=DiploidConfig(bin="/bin/echo", model="swe-1-7"),
         persona=PersonaConfig(
             name="test-pilot",
             profile_root=_fixture_root(),
@@ -91,7 +91,7 @@ def test_timer_service_posts_timer_fired_event(tmp_path: Path) -> None:
 
 class FakeEngine:
     def prompt(self, *a, **k):
-        from acp_fleet_harness.engine import TurnResult
+        from diploid_agent.engine import TurnResult
 
         return TurnResult(reply="woken", session_id="s1")
 

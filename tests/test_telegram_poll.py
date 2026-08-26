@@ -7,14 +7,14 @@ from typing import Any
 
 import httpx
 
-from acp_fleet_harness.config import (
+from diploid_agent.config import (
     NotificationsConfig,
     TaskConfig,
     TimerConfig,
     WakerConfig,
 )
-from acp_fleet_harness.telegram_poll import ChatInput, TelegramPoller, TurnWorker
-from acp_fleet_harness.transport.telegram import _format_thought
+from diploid_agent.telegram_poll import ChatInput, TelegramPoller, TurnWorker
+from diploid_agent.transport.telegram import _format_thought
 
 
 def _update(**kwargs) -> dict:
@@ -1038,7 +1038,7 @@ def test_stream_turn_heartbeat_wait_has_minimum_floor(
 
     # Speed up the heartbeat interval so we hit the due path quickly.
     monkeypatch.setattr(
-        "acp_fleet_harness.transport.telegram._HEARTBEAT_INTERVAL", 0.1
+        "diploid_agent.transport.telegram._HEARTBEAT_INTERVAL", 0.1
     )
 
     class FakeFuture:

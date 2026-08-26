@@ -8,9 +8,9 @@ from unittest.mock import MagicMock
 import pytest
 import yaml
 
-from acp_fleet_harness.config import (
+from diploid_agent.config import (
     Config,
-    DevinConfig,
+    DiploidConfig,
     HarnessConfig,
     MemoryConfig,
     PersonaConfig,
@@ -19,8 +19,8 @@ from acp_fleet_harness.config import (
     Secrets,
     TimerConfig,
 )
-from acp_fleet_harness.engine import TurnResult
-from acp_fleet_harness.runtime.agent_runtime import AgentRuntime
+from diploid_agent.engine import TurnResult
+from diploid_agent.runtime.agent_runtime import AgentRuntime
 
 
 class FakeEngine:
@@ -46,7 +46,7 @@ def _make_runtime(tmp_path: Path) -> AgentRuntime:
     profile_root = tmp_path / "persona"
     profile_root.mkdir(parents=True, exist_ok=True)
     config = Config(
-        devin=DevinConfig(bin="/bin/echo", model="swe-1-7"),
+        diploid=DiploidConfig(bin="/bin/echo", model="swe-1-7"),
         persona=PersonaConfig(name="test", profile_root=profile_root),
         harness=HarnessConfig(
             sessions_root=tmp_path / "sessions",
@@ -59,7 +59,7 @@ def _make_runtime(tmp_path: Path) -> AgentRuntime:
                 PluginConfig(
                     name="continuity",
                     enabled=True,
-                    module="acp_fleet_harness.plugins.continuity",
+                    module="diploid_agent.plugins.continuity",
                 ),
             ],
         ),
@@ -75,7 +75,7 @@ def test_add_plugin(tmp_path: Path) -> None:
     cfg = PluginConfig(
         name="self_state",
         enabled=True,
-        module="acp_fleet_harness.plugins.self_state",
+        module="diploid_agent.plugins.self_state",
         prompt_slot="persona_state",
         state_file="chat_self_state.md",
     )
@@ -107,7 +107,7 @@ def test_rollback(tmp_path: Path) -> None:
         PluginConfig(
             name="planner",
             enabled=True,
-            module="acp_fleet_harness.plugins.planner",
+            module="diploid_agent.plugins.planner",
             prompt_slot="persona_state",
         )
     )
@@ -115,7 +115,7 @@ def test_rollback(tmp_path: Path) -> None:
         PluginConfig(
             name="self_state",
             enabled=True,
-            module="acp_fleet_harness.plugins.self_state",
+            module="diploid_agent.plugins.self_state",
             prompt_slot="persona_state",
         )
     )
@@ -135,7 +135,7 @@ def test_persisted_to_runtime_overrides(tmp_path: Path) -> None:
         PluginConfig(
             name="self_state",
             enabled=True,
-            module="acp_fleet_harness.plugins.self_state",
+            module="diploid_agent.plugins.self_state",
             prompt_slot="persona_state",
         )
     )
@@ -167,7 +167,7 @@ def test_reconfigure_stops_removed_plugin(tmp_path: Path) -> None:
 
     before_snapshots = len(runtime._plugins._config_history)
     runtime._plugins.reconfigure(
-        [PluginConfig(name="continuity", enabled=True, module="acp_fleet_harness.plugins.continuity")]
+        [PluginConfig(name="continuity", enabled=True, module="diploid_agent.plugins.continuity")]
     )
 
     assert fake.stop.called, "reconfigure() should stop a plugin no longer in the new list"
@@ -185,7 +185,7 @@ def test_add_plugin_rejects_empty_name_and_duplicates(tmp_path: Path) -> None:
             PluginConfig(
                 name="continuity",
                 enabled=True,
-                module="acp_fleet_harness.plugins.continuity",
+                module="diploid_agent.plugins.continuity",
             )
         )
 
@@ -210,7 +210,7 @@ def test_persisted_plugins_loaded_on_new_runtime(tmp_path: Path) -> None:
         PluginConfig(
             name="self_state",
             enabled=True,
-            module="acp_fleet_harness.plugins.self_state",
+            module="diploid_agent.plugins.self_state",
             prompt_slot="persona_state",
         )
     )

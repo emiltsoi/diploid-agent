@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from acp_fleet_harness.config import PluginConfig
-from acp_fleet_harness.plugins.manager import PluginManager
+from diploid_agent.config import PluginConfig
+from diploid_agent.plugins.manager import PluginManager
 
 
 def test_reload_plugin_clears_instance() -> None:

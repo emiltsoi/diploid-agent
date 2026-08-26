@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from acp_fleet_harness.skills import SkillManager
+from diploid_agent.skills import SkillManager
 
 
 def _write_skill(root: Path, name: str, content: str) -> Path:
@@ -108,8 +108,8 @@ def test_skill_manager_loads_curriculum_skill() -> None:
 
 
 def test_memory_skill_is_available_in_shared_root(tmp_path: Path) -> None:
-    from acp_fleet_harness.config import Config, SkillsConfig
-    from acp_fleet_harness.skills import SkillManager
+    from diploid_agent.config import Config, SkillsConfig
+    from diploid_agent.skills import SkillManager
 
     config = Config(
         persona={"name": "test-pilot", "profile_root": "/tmp"},

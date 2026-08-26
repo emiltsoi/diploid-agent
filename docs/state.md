@@ -127,7 +127,7 @@ Tracks a language-learning target, unit, and vocabulary. The `curriculum` skill 
 - `/state curriculum set_unit Greetings`
 - `/state curriculum add_word hola hello`
 
-State is stored in `sessions/<chat_id>/chat_curriculum.json`. An MCP server `devin-curriculum` is also exposed.
+State is stored in `sessions/<chat_id>/chat_curriculum.json`. An MCP server `diploid-curriculum` is also exposed.
 
 ## Adding custom plugins
 
@@ -137,10 +137,10 @@ Drop a package directory in `~/.devin/plugins/<name>/` with an `__init__.py` tha
 
 ```python
 from pathlib import Path
-from acp_fleet_harness.config import PluginConfig
-from acp_fleet_harness.models import ChatResult
-from acp_fleet_harness.plugins.base import StatePlugin
-from acp_fleet_harness.plugins.contexts import TurnStartContext
+from diploid_agent.config import PluginConfig
+from diploid_agent.models import ChatResult
+from diploid_agent.plugins.base import StatePlugin
+from diploid_agent.plugins.contexts import TurnStartContext
 
 
 class MyPlugin(StatePlugin):

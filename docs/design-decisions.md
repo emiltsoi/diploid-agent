@@ -34,7 +34,7 @@ harness therefore generates the "Now running on model X" text itself and uses
 direct HTTP callers.
 - The poller is a lightweight, replaceable client. A webhook can replace it
 without code changes.
-- `systemd/acp-fleet-harness-run.sh` runs both under one unit and restarts them as a
+- `systemd/diploid-agent-run.sh` runs both under one unit and restarts them as a
 pair if either dies.
 
 ## Why spool on Hindsight retain failures

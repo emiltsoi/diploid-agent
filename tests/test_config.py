@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from acp_fleet_harness.config import Config, PersonaConfig
+from diploid_agent.config import Config, PersonaConfig
 
 
 def test_config_loads_windsurf_api_key(tmp_path: Path) -> None:
@@ -14,7 +14,7 @@ def test_config_loads_windsurf_api_key(tmp_path: Path) -> None:
     config_path.write_text(
         yaml.safe_dump(
             {
-                "devin": {"bin": "/bin/devin"},
+                "diploid": {"bin": "/bin/devin"},
                 "persona": {
                     "name": "test-pilot",
                     "profile_root": "/tmp/profile",
@@ -28,7 +28,7 @@ def test_config_loads_windsurf_api_key(tmp_path: Path) -> None:
 
 
 def test_skill_config_parses() -> None:
-    from acp_fleet_harness.config import Config
+    from diploid_agent.config import Config
 
     data = {
         "persona": {"name": "test-pilot", "profile_root": "/tmp"},
@@ -45,7 +45,7 @@ def test_skill_config_parses() -> None:
 
 
 def test_mcp_config_parses() -> None:
-    from acp_fleet_harness.config import Config
+    from diploid_agent.config import Config
 
     data = {
         "persona": {
@@ -79,7 +79,7 @@ def test_config_loads_acp_backend(tmp_path: Path) -> None:
     config_path.write_text(
         yaml.safe_dump(
             {
-                "devin": {"bin": "/bin/devin", "model": "swe-1-7"},
+                "diploid": {"bin": "/bin/devin", "model": "swe-1-7"},
                 "persona": {
                     "name": "test-pilot",
                     "profile_root": "/tmp/profile",

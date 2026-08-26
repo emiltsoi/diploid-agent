@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0 — 2026-08-26
+
+### Summary
+Rebranded the project from `acp-fleet-harness` to `diploid-agent`. All code
+imports, package names, systemd units, probes, MCP server prefixes, and
+internal config keys now use `diploid_agent` / `diploid`. The engine provider
+is now `diploid`; the real binary path still defaults to `~/.local/bin/devin`.
+
 ## 0.3.0 — 2026-08-25
 
 ### Summary

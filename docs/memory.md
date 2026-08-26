@@ -258,7 +258,7 @@ tools when it sees a `## System notice`.
 
 ## Agent-facing memory tools
 
-The `devin-memory` MCP server gives the agent three memory tools:
+The `diploid-memory` MCP server gives the agent three memory tools:
 
 - `memory_recall(query, tags, max_tokens)` — search prior turns and retained facts.
 - `memory_retain(content, tags, context)` — save an observation to the chat ledger.

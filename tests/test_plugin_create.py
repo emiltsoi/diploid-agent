@@ -6,13 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from acp_fleet_harness.config import Config, DevinConfig, HarnessConfig, PersonaConfig, PluginConfig
-from acp_fleet_harness.runtime.agent_runtime import AgentRuntime
+from diploid_agent.config import Config, DiploidConfig, HarnessConfig, PersonaConfig, PluginConfig
+from diploid_agent.runtime.agent_runtime import AgentRuntime
 
 
 class FakeEngine:
     def prompt(self, *a, **k):
-        from acp_fleet_harness.engine import TurnResult
+        from diploid_agent.engine import TurnResult
         return TurnResult(reply="ok", session_id="s1")
 
     def list_models(self):
@@ -30,7 +30,7 @@ class FakeEngine:
 
 def _make_config(tmp_path: Path) -> Config:
     return Config(
-        devin=DevinConfig(bin="/bin/echo", model="swe-1-7"),
+        diploid=DiploidConfig(bin="/bin/echo", model="swe-1-7"),
         persona=PersonaConfig(name="test", profile_root=tmp_path / "persona"),
         harness=HarnessConfig(
             sessions_root=tmp_path / "sessions",
@@ -38,7 +38,7 @@ def _make_config(tmp_path: Path) -> Config:
             session_prune_enabled=False,
             plugin_paths=[tmp_path / "plugins"],
             plugins=[
-                PluginConfig(name="continuity", enabled=True, module="acp_fleet_harness.plugins.continuity")
+                PluginConfig(name="continuity", enabled=True, module="diploid_agent.plugins.continuity")
             ],
         ),
     )

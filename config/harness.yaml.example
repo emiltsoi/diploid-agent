@@ -1,7 +1,7 @@
-engine:                 # `devin:` is still accepted as a backward-compatible alias
-  provider: devin       # `devin`, `generic`, or `fake`
+engine:                 # `diploid:` is the YAML alias for this block
+  provider: diploid       # `generic` or `fake`
   bin: ~/.local/bin/devin
-  # start_args: ["acp", "--model", "swe-1-7"]  # override command-line args for non-Devin binaries
+  # start_args: ["acp", "--model", "swe-1-7"]  # override command-line args for other ACP binaries
   model: swe-1-7
   permission_mode: dangerous
   timeout: 900.0      # absolute ACP call limit
@@ -56,7 +56,7 @@ harness:
   plugins:
     - name: continuity
       enabled: true
-      module: acp_fleet_harness.plugins.continuity
+      module: diploid_agent.plugins.continuity
       prompt_slot: wake
       first_prompt_only: true
       prompt_order: 0
@@ -64,7 +64,7 @@ harness:
       max_prompt_chars: 1024
     - name: identity
       enabled: true
-      module: acp_fleet_harness.plugins.identity
+      module: diploid_agent.plugins.identity
       prompt_slot: self_narrative
       first_prompt_only: true
       prompt_order: 5
@@ -72,11 +72,11 @@ harness:
       max_prompt_chars: 2048
       skill: identity
       mcp_server:
-        name: devin-identity
+        name: diploid-identity
         command: python
         args:
           - "-m"
-          - "acp_fleet_harness.plugins.identity.identity_mcp"
+          - "diploid_agent.plugins.identity.identity_mcp"
           - "--chat-id"
           - "{chat_id}"
           - "--sessions-root"
@@ -84,18 +84,18 @@ harness:
         env: []
     - name: working_memory
       enabled: true
-      module: acp_fleet_harness.plugins.working_memory
+      module: diploid_agent.plugins.working_memory
       prompt_slot: working_memory
       first_prompt_only: false
       prompt_order: 40
       state_file: chat_working_memory.json
       max_prompt_chars: 1024
       mcp_server:
-        name: devin-working-memory
+        name: diploid-working-memory
         command: python
         args:
           - "-m"
-          - "acp_fleet_harness.plugins.working_memory.working_memory_mcp"
+          - "diploid_agent.plugins.working_memory.working_memory_mcp"
           - "--chat-id"
           - "{chat_id}"
           - "--sessions-root"
@@ -103,7 +103,7 @@ harness:
         env: []
     - name: persistent_memory
       enabled: false  # enable once you trust the auto-promotion and recall
-      module: acp_fleet_harness.plugins.persistent_memory
+      module: diploid_agent.plugins.persistent_memory
       prompt_slot: persistent_memory
       first_prompt_only: false
       prompt_order: 32
@@ -117,18 +117,18 @@ harness:
         recall_max_tokens: 1500
     - name: curriculum
       enabled: false  # example plugin; not needed for this persona
-      module: acp_fleet_harness.plugins.curriculum
+      module: diploid_agent.plugins.curriculum
       prompt_slot: persona_state
       first_prompt_only: false
       prompt_order: 100
       state_file: chat_curriculum.json
       max_prompt_chars: 1024
       mcp_server:
-        name: devin-curriculum
+        name: diploid-curriculum
         command: python
         args:
           - "-m"
-          - "acp_fleet_harness.plugins.curriculum.curriculum_mcp"
+          - "diploid_agent.plugins.curriculum.curriculum_mcp"
           - "--chat-id"
           - "{chat_id}"
           - "--sessions-root"
@@ -136,7 +136,7 @@ harness:
       skill: curriculum
     - name: planner
       enabled: true
-      module: acp_fleet_harness.plugins.planner
+      module: diploid_agent.plugins.planner
       prompt_slot: persona_state
       first_prompt_only: false
       prompt_order: 50
@@ -150,7 +150,7 @@ harness:
         max_tasks: 10
     - name: auto_continue
       enabled: true
-      module: acp_fleet_harness.plugins.auto_continue
+      module: diploid_agent.plugins.auto_continue
       prompt_slot: persona_state
       first_prompt_only: false
       prompt_order: 55
@@ -164,23 +164,23 @@ harness:
           - cancelled
     - name: self_state
       enabled: true
-      module: acp_fleet_harness.plugins.self_state
+      module: diploid_agent.plugins.self_state
       prompt_slot: persona_state
       prompt_order: 90
       state_file: chat_self_state.md
       max_prompt_chars: 512
     - name: self_management
       enabled: true
-      module: acp_fleet_harness.plugins.self_management
+      module: diploid_agent.plugins.self_management
       prompt_slot: persona_state
       prompt_order: 95
       max_prompt_chars: 0
       mcp_server:
-        name: devin-self-management
+        name: diploid-self-management
         command: python
         args:
           - "-m"
-          - "acp_fleet_harness.plugins.self_management.self_management_mcp"
+          - "diploid_agent.plugins.self_management.self_management_mcp"
           - "--chat-id"
           - "{chat_id}"
           - "--harness-url"
@@ -232,27 +232,27 @@ harness:
         command: npx
         args: ["-y", "@modelcontextprotocol/server-github"]
         env: []
-      - name: devin-memory
+      - name: diploid-memory
         command: python
         args:
           - "-m"
-          - "acp_fleet_harness.memory_mcp"
+          - "diploid_agent.memory_mcp"
           - "--chat-id"
           - "{chat_id}"
           - "--harness-url"
           - "{harness_url}"
         env: []
-      - name: devin-curriculum
+      - name: diploid-curriculum
         command: python
         args:
           - "-m"
-          - "acp_fleet_harness.plugins.curriculum.curriculum_mcp"
+          - "diploid_agent.plugins.curriculum.curriculum_mcp"
           - "--chat-id"
           - "{chat_id}"
           - "--sessions-root"
           - "{sessions_root}"
         env: []
-    default_enabled: [github, devin-memory, devin-working-memory, devin-identity, devin-self-management]
+    default_enabled: [github, diploid-memory, diploid-working-memory, diploid-identity, diploid-self-management]
   skills:
     shared_root: personas/shared
     default_lazy: true  # only match skills by keyword; do not auto-load all default_enabled

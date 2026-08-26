@@ -4,21 +4,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from acp_fleet_harness.acp_client import AcpPromptResult
-from acp_fleet_harness.config import (
+from diploid_agent.acp_client import AcpPromptResult
+from diploid_agent.config import (
     Config,
-    DevinConfig,
+    DiploidConfig,
     HarnessConfig,
     PersonaConfig,
     PluginConfig,
     Secrets,
 )
-from acp_fleet_harness.harness import ConversationHarness
+from diploid_agent.harness import ConversationHarness
 
 
 def _make_config(tmp_path: Path, fixture_root: Path) -> Config:
     return Config(
-        devin=DevinConfig(bin="/bin/echo", model="swe-1-7"),
+        diploid=DiploidConfig(bin="/bin/echo", model="swe-1-7"),
         persona=PersonaConfig(
             name="test-pilot",
             profile_root=fixture_root,
@@ -33,7 +33,7 @@ def _make_config(tmp_path: Path, fixture_root: Path) -> Config:
                 PluginConfig(
                     name="self_state",
                     enabled=True,
-                    module="acp_fleet_harness.plugins.self_state",
+                    module="diploid_agent.plugins.self_state",
                     prompt_slot="persona_state",
                     prompt_order=90,
                     state_file="chat_self_state.md",

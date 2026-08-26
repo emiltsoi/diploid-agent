@@ -3,14 +3,14 @@
 import time
 from pathlib import Path
 
-from acp_fleet_harness.config import Config, DevinConfig, HarnessConfig, PersonaConfig
-from acp_fleet_harness.context import ContextBuilder
-from acp_fleet_harness.dispatch import DispatchStore
-from acp_fleet_harness.engine.fake import FakeAgentEngine
-from acp_fleet_harness.memory import MemoryManager
-from acp_fleet_harness.models import SessionRecord
-from acp_fleet_harness.plugins import PluginManager
-from acp_fleet_harness.skills import SkillManager
+from diploid_agent.config import Config, DiploidConfig, HarnessConfig, PersonaConfig
+from diploid_agent.context import ContextBuilder
+from diploid_agent.dispatch import DispatchStore
+from diploid_agent.engine.fake import FakeAgentEngine
+from diploid_agent.memory import MemoryManager
+from diploid_agent.models import SessionRecord
+from diploid_agent.plugins import PluginManager
+from diploid_agent.skills import SkillManager
 
 
 def _fixture_root() -> Path:
@@ -19,7 +19,7 @@ def _fixture_root() -> Path:
 
 def _make_config(tmp_path: Path) -> Config:
     return Config(
-        devin=DevinConfig(bin="/bin/echo", model="swe-1-7"),
+        diploid=DiploidConfig(bin="/bin/echo", model="swe-1-7"),
         persona=PersonaConfig(
             name="test-pilot",
             profile_root=_fixture_root(),

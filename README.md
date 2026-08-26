@@ -1,4 +1,4 @@
-# acp-fleet-harness
+# diploid-agent
 
 A persistent, persona-driven harness around an ACP-compatible agent engine.
 
@@ -22,7 +22,7 @@ retention to a Hindsight memory server.
 - Supports background dispatches that continue the conversation when they complete (`/dispatch`, `/continue`).
 - Supports live runtime configuration of task, waker, timer, and notifications via HTTP and Telegram without restarting.
 - Supports state plugins with a rich lifecycle hook surface: plugins can intercept turns, sessions, dispatches, memory transitions, skill/MCP commands, retain/promote, and shutdown.
-- Runs a `devin-memory` MCP server with `memory_recall`, `memory_retain`, and
+- Runs a `diploid-memory` MCP server with `memory_recall`, `memory_retain`, and
   `memory_promote` tools, plus a shared `memory` skill that lets the agent use them.
 
 ## Quick start
@@ -35,9 +35,9 @@ pip install -e ".[dev]"
 cp config/harness.yaml.example config/harness.yaml
 # edit config/harness.yaml
 
-cp systemd/acp-fleet-harness.service.example systemd/acp-fleet-harness.service
+cp systemd/diploid-agent.service.example systemd/diploid-agent.service
 # edit paths, then:
-systemctl --user enable --now "$(pwd)/systemd/acp-fleet-harness.service"
+systemctl --user enable --now "$(pwd)/systemd/diploid-agent.service"
 ```
 
 Add `TELEGRAM_BOT_TOKEN=...` to `config/secrets.env` for Telegram.
@@ -52,7 +52,7 @@ service:
 - CLI: run `devin auth login` and complete the browser/manual token flow.
 
 This writes credentials to `~/.local/share/devin/credentials.toml`. The
-`systemd/acp-fleet-harness.service.example` unit runs as your user and inherits your
+`systemd/diploid-agent.service.example` unit runs as your user and inherits your
 `HOME`, so the credentials file is found automatically.
 
 Other engines may use `WINDSURF_API_KEY`, `ACP_API_KEY`, or a per-engine
@@ -118,7 +118,7 @@ prompt with a clear label. Long quotes are trimmed to
 ## Important caveats
 
 - Authentication is handled by the configured engine (`devin auth login` or
-  Devin Desktop when `provider: devin`). The harness only works if the user
+  Devin Desktop when `provider: diploid`). The harness only works if the user
   running it is already authenticated, or if `WINDSURF_API_KEY` / `ACP_API_KEY` is
   supplied in `config/secrets.env`.
 - An ACP session's model is set at creation. Switching models starts a new

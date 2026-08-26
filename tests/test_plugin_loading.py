@@ -2,9 +2,9 @@
 
 from pathlib import Path
 
-from acp_fleet_harness.config import PluginConfig
-from acp_fleet_harness.plugins import PluginManager
-from acp_fleet_harness.plugins.broken import FailedPlugin
+from diploid_agent.config import PluginConfig
+from diploid_agent.plugins import PluginManager
+from diploid_agent.plugins.broken import FailedPlugin
 
 
 def _manager(tmp_path: Path, plugins: list[PluginConfig]) -> PluginManager:
@@ -23,7 +23,7 @@ def test_missing_module_loads_failed_plugin(tmp_path: Path) -> None:
         [
             PluginConfig(
                 name="missing",
-                module="acp_fleet_harness.plugins.this_module_does_not_exist",
+                module="diploid_agent.plugins.this_module_does_not_exist",
                 enabled=True,
             ),
         ],
@@ -68,7 +68,7 @@ def test_plugin_without_plugin_class_loads_failed_plugin(tmp_path: Path) -> None
         [
             PluginConfig(
                 name="no_plugin_class",
-                module="acp_fleet_harness.config",
+                module="diploid_agent.config",
                 enabled=True,
             ),
         ],

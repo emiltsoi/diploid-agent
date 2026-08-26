@@ -5,22 +5,22 @@ import time
 from pathlib import Path
 from typing import Any
 
-from acp_fleet_harness.acp_client import AcpPromptResult
-from acp_fleet_harness.config import (
+from diploid_agent.acp_client import AcpPromptResult
+from diploid_agent.config import (
     Config,
-    DevinConfig,
+    DiploidConfig,
     HarnessConfig,
     McpConfig,
     McpServerConfig,
     PersonaConfig,
     Secrets,
 )
-from acp_fleet_harness.harness import ConversationHarness
+from diploid_agent.harness import ConversationHarness
 
 
 def _make_config(tmp_path: Path, fixture_root: Path) -> Config:
     return Config(
-        devin=DevinConfig(bin="/bin/echo", model="swe-1-7"),
+        diploid=DiploidConfig(bin="/bin/echo", model="swe-1-7"),
         persona=PersonaConfig(
             name="test-pilot",
             profile_root=fixture_root,
@@ -273,7 +273,7 @@ def test_stop_calls_cancel_and_returns_message(monkeypatch, tmp_path: Path) -> N
 
     monkeypatch.setattr(harness.client, "cancel", fake_cancel)
 
-    from acp_fleet_harness.models import ActiveTurn
+    from diploid_agent.models import ActiveTurn
 
     harness._active_turns["chat-stop"] = ActiveTurn("chat-stop", "s-1", "hello", time.time())
 
@@ -348,8 +348,8 @@ def test_system_notice_uses_recall_numbers_not_disk_size(monkeypatch, tmp_path: 
     config = _make_config(tmp_path, fixture_root)
     harness = ConversationHarness(config)
 
-    from acp_fleet_harness.memory import RecallResult
-    from acp_fleet_harness.persona_composer import PersonaPrompt
+    from diploid_agent.memory import RecallResult
+    from diploid_agent.persona_composer import PersonaPrompt
 
     path = tmp_path / "chat-MEMORY.md"
     recall = RecallResult(
@@ -433,8 +433,8 @@ def test_system_notice_uses_chat_status_when_file_exceeds(tmp_path: Path) -> Non
     config = _make_config(tmp_path, fixture_root)
     harness = ConversationHarness(config)
 
-    from acp_fleet_harness.memory import RecallResult
-    from acp_fleet_harness.persona_composer import PersonaPrompt
+    from diploid_agent.memory import RecallResult
+    from diploid_agent.persona_composer import PersonaPrompt
 
     path = tmp_path / "chat-MEMORY.md"
     recall = RecallResult(
@@ -695,7 +695,7 @@ def test_metrics_exposed_in_prompt_when_enabled(monkeypatch, tmp_path: Path) -> 
     """When expose_in_prompt is true, cumulative usage is injected into the prompt."""
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
     config = Config(
-        devin=DevinConfig(bin="/bin/echo", model="swe-1-7"),
+        diploid=DiploidConfig(bin="/bin/echo", model="swe-1-7"),
         persona=PersonaConfig(
             name="test-pilot",
             profile_root=fixture_root,
@@ -858,7 +858,7 @@ def test_mcp_enable_disable_persists(monkeypatch, tmp_path: Path) -> None:
 
 def test_new_session_syncs_skills(monkeypatch, tmp_path: Path) -> None:
     """New sessions sync enabled skills into the chat working directory."""
-    from acp_fleet_harness.config import SkillsConfig
+    from diploid_agent.config import SkillsConfig
 
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
     config = _make_config(tmp_path, fixture_root)
@@ -1055,7 +1055,7 @@ def test_harness_has_dispatch_store_and_notifier(tmp_path: Path) -> None:
 
 
 def test_harness_continue_turn_after_dispatch(monkeypatch, tmp_path: Path) -> None:
-    from acp_fleet_harness.acp_client import AcpPromptResult
+    from diploid_agent.acp_client import AcpPromptResult
 
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
     config = _make_config(tmp_path, fixture_root)
@@ -1097,7 +1097,7 @@ def test_harness_continue_turn_after_dispatch(monkeypatch, tmp_path: Path) -> No
 
 
 def test_harness_continue_turn_rehydrates_stale_session(monkeypatch, tmp_path: Path) -> None:
-    from acp_fleet_harness.acp_client import AcpPromptResult
+    from diploid_agent.acp_client import AcpPromptResult
 
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
     config = _make_config(tmp_path, fixture_root)

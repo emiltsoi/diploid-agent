@@ -5,19 +5,19 @@ from typing import Any
 
 import pytest
 
-from acp_fleet_harness.acp_client import AcpPromptResult
-from acp_fleet_harness.config import (
+from diploid_agent.acp_client import AcpPromptResult
+from diploid_agent.config import (
     Config,
-    DevinConfig,
+    DiploidConfig,
     HarnessConfig,
     PersonaConfig,
     PluginConfig,
     Secrets,
 )
-from acp_fleet_harness.harness import ConversationHarness
-from acp_fleet_harness.models import ChatResult
-from acp_fleet_harness.plugins.base import StatePlugin
-from acp_fleet_harness.plugins.contexts import (
+from diploid_agent.harness import ConversationHarness
+from diploid_agent.models import ChatResult
+from diploid_agent.plugins.base import StatePlugin
+from diploid_agent.plugins.contexts import (
     DispatchCompleteContext,
     DispatchContinueContext,
     DispatchCreateContext,
@@ -43,7 +43,7 @@ from acp_fleet_harness.plugins.contexts import (
 
 def _make_config(tmp_path: Path, fixture_root: Path) -> Config:
     return Config(
-        devin=DevinConfig(bin="/bin/echo", model="swe-1-7"),
+        diploid=DiploidConfig(bin="/bin/echo", model="swe-1-7"),
         persona=PersonaConfig(
             name="test-pilot",
             profile_root=fixture_root,
@@ -627,7 +627,7 @@ def test_retain_and_promote_hooks_fire(monkeypatch, tmp_path: Path) -> None:
 
     monkeypatch.setattr(harness.client, "create_session", fake_create_session)
     monkeypatch.setattr(
-        "acp_fleet_harness.memory.MemoryManager.promote_to_persona",
+        "diploid_agent.memory.MemoryManager.promote_to_persona",
         lambda self, fact: None,
     )
 

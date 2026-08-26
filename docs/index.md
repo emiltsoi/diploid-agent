@@ -1,6 +1,6 @@
-# acp-fleet-harness documentation
+# diploid-agent documentation
 
-This is the wiki for the `acp-fleet-harness`.
+This is the wiki for the `diploid-agent`.
 
 ## Pages
 

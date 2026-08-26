@@ -9,7 +9,7 @@
    TELEGRAM_BOT_TOKEN=...
    ```
 
-3. Start the service. `systemd/acp-fleet-harness-run.sh` starts both the ingress and
+3. Start the service. `systemd/diploid-agent-run.sh` starts both the ingress and
 the long-polling bot.
 
 The token is never logged. `httpx` request logging is suppressed to avoid

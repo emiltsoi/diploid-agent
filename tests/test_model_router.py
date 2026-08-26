@@ -2,21 +2,21 @@
 
 from pathlib import Path
 
-from acp_fleet_harness.config import (
+from diploid_agent.config import (
     Config,
     ConversationBudget,
-    DevinConfig,
+    DiploidConfig,
     HarnessConfig,
     PersonaConfig,
     RoutingConfig,
     Secrets,
 )
-from acp_fleet_harness.engine.router import ModelRouter
+from diploid_agent.engine.router import ModelRouter
 
 
 def _make_config(routing: RoutingConfig | None = None) -> Config:
     return Config(
-        devin=DevinConfig(bin="/bin/echo", model="swe-1-7"),
+        diploid=DiploidConfig(bin="/bin/echo", model="swe-1-7"),
         persona=PersonaConfig(
             name="test-pilot",
             profile_root=Path(__file__).parent / "fixtures" / "test-pilot",

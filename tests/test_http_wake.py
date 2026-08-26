@@ -4,9 +4,9 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from acp_fleet_harness.config import Config, DevinConfig, HarnessConfig, PersonaConfig, Secrets
-from acp_fleet_harness.runtime.agent_runtime import AgentRuntime
-from acp_fleet_harness.transport.http import create_app
+from diploid_agent.config import Config, DiploidConfig, HarnessConfig, PersonaConfig, Secrets
+from diploid_agent.runtime.agent_runtime import AgentRuntime
+from diploid_agent.transport.http import create_app
 
 
 def _fixture_root() -> Path:
@@ -15,7 +15,7 @@ def _fixture_root() -> Path:
 
 def _make_config(tmp_path: Path) -> Config:
     return Config(
-        devin=DevinConfig(bin="/bin/echo", model="swe-1-7"),
+        diploid=DiploidConfig(bin="/bin/echo", model="swe-1-7"),
         persona=PersonaConfig(
             name="test-pilot",
             profile_root=_fixture_root(),
@@ -31,7 +31,7 @@ def _make_config(tmp_path: Path) -> Config:
 
 class FakeEngine:
     def prompt(self, *a, **k):
-        from acp_fleet_harness.engine import TurnResult
+        from diploid_agent.engine import TurnResult
 
         return TurnResult(reply="woken", session_id="s1")
 
@@ -54,7 +54,7 @@ def test_post_wake(tmp_path: Path, monkeypatch) -> None:
     app = create_app(_make_config(tmp_path), runtime)
     client = TestClient(app)
 
-    from acp_fleet_harness.models import WakeEvent
+    from diploid_agent.models import WakeEvent
 
     e = runtime.wake_queue.enqueue(
         WakeEvent(
@@ -83,7 +83,7 @@ def test_post_wake_silent_does_not_notify(tmp_path: Path, monkeypatch) -> None:
     app = create_app(_make_config(tmp_path), runtime)
     client = TestClient(app)
 
-    from acp_fleet_harness.models import WakeEvent
+    from diploid_agent.models import WakeEvent
 
     e = runtime.wake_queue.enqueue(
         WakeEvent(

@@ -2,14 +2,14 @@ import json
 
 from fastapi.testclient import TestClient
 
-from acp_fleet_harness.config import Config, DevinConfig, HarnessConfig, PersonaConfig, PluginConfig
-from acp_fleet_harness.runtime.agent_runtime import AgentRuntime
-from acp_fleet_harness.transport.http import create_app
+from diploid_agent.config import Config, DiploidConfig, HarnessConfig, PersonaConfig, PluginConfig
+from diploid_agent.runtime.agent_runtime import AgentRuntime
+from diploid_agent.transport.http import create_app
 
 
 class FakeEngine:
     def prompt(self, *a, **k):
-        from acp_fleet_harness.engine import TurnResult
+        from diploid_agent.engine import TurnResult
         return TurnResult(reply="ok", session_id="s1")
 
     def list_models(self):
@@ -27,14 +27,14 @@ class FakeEngine:
 
 def _make_config(tmp_path):
     return Config(
-        devin=DevinConfig(bin="/bin/echo", model="swe-1-7"),
+        diploid=DiploidConfig(bin="/bin/echo", model="swe-1-7"),
         persona=PersonaConfig(name="test", profile_root=tmp_path / "persona"),
         harness=HarnessConfig(
             sessions_root=tmp_path / "sessions",
             session_store_path=tmp_path / "sessions.jsonl",
             session_prune_enabled=False,
             plugins=[
-                PluginConfig(name="continuity", enabled=True, module="acp_fleet_harness.plugins.continuity")
+                PluginConfig(name="continuity", enabled=True, module="diploid_agent.plugins.continuity")
             ],
         ),
     )
@@ -44,7 +44,7 @@ def test_plugin_sandbox_valid_module(tmp_path):
     runtime = AgentRuntime(_make_config(tmp_path))
     runtime.engine = FakeEngine()
     client = TestClient(create_app(_make_config(tmp_path), runtime))
-    resp = client.post("/plugin/sandbox", json={"module": "acp_fleet_harness.plugins.continuity"})
+    resp = client.post("/plugin/sandbox", json={"module": "diploid_agent.plugins.continuity"})
     assert resp.status_code == 200
     data = json.loads(resp.json()["reply"])
     assert data["ok"] is True

@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from acp_fleet_harness.config import Config, McpConfig, McpServerConfig
-from acp_fleet_harness.mcp import McpManager
+from diploid_agent.config import Config, McpConfig, McpServerConfig
+from diploid_agent.mcp import McpManager
 
 
 def test_mcp_manager_returns_enabled_servers() -> None:
@@ -88,7 +88,7 @@ def test_mcp_manager_renders_placeholders(tmp_path: Path) -> None:
                         command="python",
                         args=[
                             "-m",
-                            "acp_fleet_harness.example_mcp",
+                            "diploid_agent.example_mcp",
                             "--chat-id",
                             "{chat_id}",
                             "--sessions-root",
@@ -111,7 +111,7 @@ def test_mcp_manager_renders_placeholders(tmp_path: Path) -> None:
 
 
 def test_mcp_manager_renders_harness_url(tmp_path: Path) -> None:
-    from acp_fleet_harness.config import Config, McpConfig, McpServerConfig
+    from diploid_agent.config import Config, McpConfig, McpServerConfig
 
     config = Config(
         persona={"name": "test-pilot", "profile_root": "/tmp"},
@@ -122,11 +122,11 @@ def test_mcp_manager_renders_harness_url(tmp_path: Path) -> None:
             "mcp": McpConfig(
                 servers=[
                     McpServerConfig(
-                        name="devin-memory",
+                        name="diploid-memory",
                         command="python",
                         args=[
                             "-m",
-                            "acp_fleet_harness.memory_mcp",
+                            "diploid_agent.memory_mcp",
                             "--chat-id",
                             "{chat_id}",
                             "--harness-url",
@@ -135,7 +135,7 @@ def test_mcp_manager_renders_harness_url(tmp_path: Path) -> None:
                         env=[],
                     ),
                 ],
-                default_enabled=["devin-memory"],
+                default_enabled=["diploid-memory"],
             ),
         },
     )

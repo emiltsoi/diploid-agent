@@ -2,12 +2,12 @@
 
 from pathlib import Path
 
-from acp_fleet_harness.config import PluginConfig
-from acp_fleet_harness.dispatch import Dispatch
-from acp_fleet_harness.models import PartialTurn
-from acp_fleet_harness.plugins.base import StatePlugin
-from acp_fleet_harness.plugins.contexts import IdleContext
-from acp_fleet_harness.plugins.manager import PluginManager
+from diploid_agent.config import PluginConfig
+from diploid_agent.dispatch import Dispatch
+from diploid_agent.models import PartialTurn
+from diploid_agent.plugins.base import StatePlugin
+from diploid_agent.plugins.contexts import IdleContext
+from diploid_agent.plugins.manager import PluginManager
 
 
 class HookSpy(StatePlugin):
