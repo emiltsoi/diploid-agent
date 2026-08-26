@@ -119,7 +119,7 @@ class HindsightConfig(BaseModel):
     base_url: str = "http://localhost:8888"
     bank: str | None = None
     api_key: str | None = None
-    timeout: float = 30.0
+    timeout: float = 120.0
     max_recall_tokens: int = 1500
     recall_min_scores: dict[str, float] = Field(
         default_factory=lambda: {"semantic": 0.25, "reranker": 0.5}

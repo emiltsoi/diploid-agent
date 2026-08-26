@@ -219,7 +219,7 @@ harness:
       base_url: http://localhost:8888
       bank: example                 # defaults to persona name if unset
       api_key: null
-      timeout: 30.0
+      timeout: 120.0
       max_recall_tokens: 1500
       recall_min_scores:
         semantic: 0.25
