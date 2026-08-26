@@ -59,15 +59,34 @@ class PluginManager:
         instance_started_at: float,
         dispatch_store: DispatchStore | None = None,
         runtime: PluginRuntime | None = None,
+        incident_store: Any | None = None,
     ) -> None:
         self._sessions_root = sessions_root
         self._instance_id = instance_id
         self._instance_started_at = instance_started_at
         self._dispatch_store = dispatch_store
         self._runtime: PluginRuntime | None = runtime
+        self._incident_store = incident_store
         self._instances: dict[str, dict[str, StatePlugin]] = defaultdict(dict)
         self._config_history: list[list[PluginConfig]] = []
         self.reconfigure(plugins)
+
+    def _record_incident(
+        self,
+        plugin: str,
+        phase: str,
+        error: str,
+        action: str = "",
+        chat_id: str = "",
+    ) -> None:
+        if self._incident_store is not None:
+            self._incident_store.record(
+                plugin=plugin,
+                chat_id=chat_id or "",
+                phase=phase,
+                error=error,
+                action=action,
+            )
 
     def reconfigure(self, plugins: list[PluginConfig]) -> None:
         """Replace the active plugin list, stop removed plugins, and snapshot.
@@ -88,6 +107,13 @@ class PluginManager:
                             plugin.stop()
                         except BaseException:
                             logger.exception("stop() failed for plugin %s", name)
+                            self._record_incident(
+                                plugin=name,
+                                phase="lifecycle",
+                                error=traceback.format_exc(),
+                                action="failed_plugin",
+                                chat_id=chat_id,
+                            )
 
         self._plugins = sorted(new_plugins, key=lambda p: p.prompt_order)
         self._instances.clear()
@@ -125,6 +151,13 @@ class PluginManager:
                     plugin.stop()
                 except BaseException:
                     logger.exception("stop() failed for plugin %s", name)
+                    self._record_incident(
+                        plugin=name,
+                        phase="lifecycle",
+                        error=traceback.format_exc(),
+                        action="failed_plugin",
+                        chat_id=chat_id,
+                    )
         self._snapshot_config(self._plugins)
         return f"Plugin {name} removed"
 
@@ -142,6 +175,13 @@ class PluginManager:
                         plugin.stop()
                     except BaseException:
                         logger.exception("stop() failed for plugin %s", name)
+                        self._record_incident(
+                            plugin=name,
+                            phase="lifecycle",
+                            error=traceback.format_exc(),
+                            action="failed_plugin",
+                            chat_id=chat_id,
+                        )
         self._snapshot_config(self._plugins)
         return f"Plugin {name} {'enabled' if enabled else 'disabled'}"
 
@@ -163,6 +203,13 @@ class PluginManager:
                         plugin.stop()
                     except BaseException:
                         logger.exception("stop() failed during rollback for plugin %s", name)
+                        self._record_incident(
+                            plugin=name,
+                            phase="rollback",
+                            error=traceback.format_exc(),
+                            action="failed_plugin",
+                            chat_id=chat_id,
+                        )
         self._plugins = [PluginConfig(**p.model_dump()) for p in target]
         # Replace the history tail with the restored config so the next snapshot is clean.
         self._config_history = self._config_history[: -(steps + 1)]
@@ -178,6 +225,13 @@ class PluginManager:
                         plugin.stop()
                     except BaseException:
                         logger.exception("stop() failed for plugin %s", name)
+                        self._record_incident(
+                            plugin=name,
+                            phase="lifecycle",
+                            error=traceback.format_exc(),
+                            action="failed_plugin",
+                            chat_id=chat_id,
+                        )
         self._instances.clear()
 
     def _get_or_create(self, chat_id: str, config: PluginConfig) -> StatePlugin:
@@ -187,6 +241,13 @@ class PluginManager:
                 plugin = self._load_plugin(config, chat_id)
             except BaseException:
                 logger.exception("Failed to load plugin %s", config.name)
+                self._record_incident(
+                    plugin=config.name,
+                    phase="lifecycle",
+                    error=traceback.format_exc(),
+                    action="failed_plugin",
+                    chat_id=chat_id,
+                )
                 plugin = FailedPlugin(
                     config,
                     chat_id,
@@ -200,6 +261,13 @@ class PluginManager:
                     plugin.start()
                 except BaseException:
                     logger.exception("start() failed for plugin %s", config.name)
+                    self._record_incident(
+                        plugin=config.name,
+                        phase="lifecycle",
+                        error=traceback.format_exc(),
+                        action="failed_plugin",
+                        chat_id=chat_id,
+                    )
                     cache[config.name] = FailedPlugin(
                         config,
                         chat_id,
@@ -238,6 +306,12 @@ class PluginManager:
                     self.validate_module(cfg.module)
                 except Exception:
                     logger.exception("Validation failed for plugin %s", cfg.name)
+                    self._record_incident(
+                        plugin=cfg.name,
+                        phase="startup",
+                        error=traceback.format_exc(),
+                        action="validation_failed",
+                    )
                     failed.append(cfg.name)
         return failed
 
@@ -247,6 +321,44 @@ class PluginManager:
             if cfg.name in names:
                 cfg.enabled = False
         self._snapshot_config(self._plugins)
+
+    def plugin_health(self, chat_id: str) -> list[dict[str, Any]]:
+        results = []
+        for cfg in self._plugins:
+            if not cfg.enabled:
+                continue
+            plugin = self._get_or_create(chat_id, cfg)
+            if isinstance(plugin, FailedPlugin):
+                results.append({"name": cfg.name, "healthy": False, "error": plugin.error})
+            else:
+                try:
+                    h = plugin.health()
+                except BaseException:
+                    logger.exception("health() failed for plugin %s", cfg.name)
+                    self._record_incident(
+                        plugin=cfg.name,
+                        phase="health",
+                        error=traceback.format_exc(),
+                        action="failed_plugin",
+                        chat_id=chat_id,
+                    )
+                    h = {"error": traceback.format_exc()}
+                results.append({
+                    "name": cfg.name,
+                    "healthy": h is None or h.get("healthy", True),
+                    "details": h,
+                })
+        return results
+
+    def validate_contract(self, module: str) -> list[str]:
+        """Return contract violations for a plugin module without instantiating it."""
+        try:
+            mod = importlib.import_module(module)
+        except Exception as exc:  # noqa: BLE001
+            return [f"Failed to import {module}: {exc}"]
+        if not hasattr(mod, "Plugin"):
+            return [f"Module {module} must expose a 'Plugin' class"]
+        return []
 
     def _load_plugin(self, config: PluginConfig, chat_id: str) -> StatePlugin:
         if config.module:
@@ -282,6 +394,13 @@ class PluginManager:
                 instance.stop()
             except BaseException:
                 logger.exception("stop() failed for plugin %s", name)
+                self._record_incident(
+                    plugin=name,
+                    phase="lifecycle",
+                    error=traceback.format_exc(),
+                    action="failed_plugin",
+                    chat_id=chat_id,
+                )
         return f"Plugin {name} {'enabled' if enabled else 'disabled'}"
 
     def list_plugin_status(self, chat_id: str) -> list[dict[str, Any]]:

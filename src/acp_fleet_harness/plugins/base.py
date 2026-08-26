@@ -311,6 +311,10 @@ class StatePlugin(abc.ABC):
         """
         return
 
+    def health(self) -> dict[str, Any] | None:
+        """Return plugin-specific health metrics, or None if not applicable."""
+        return None
+
     # ---------------------------------------------------------------- partial / dispatch / event / idle
 
     def on_partial(self, partial: PartialTurn) -> None:

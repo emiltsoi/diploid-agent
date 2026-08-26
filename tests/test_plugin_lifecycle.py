@@ -768,8 +768,9 @@ def test_plugin_list_shows_status(monkeypatch, tmp_path: Path) -> None:
     assert by_name["ok"]["enabled"] is True
     assert by_name["ok"]["failed"] is False
     assert by_name["off"]["enabled"] is False
-    assert by_name["broken"]["enabled"] is True
-    assert by_name["broken"]["failed"] is True
+    # Startup validation disables plugins whose module cannot be loaded.
+    assert by_name["broken"]["enabled"] is False
+    assert by_name["broken"]["failed"] is False
 
     harness.plugin_set_enabled("chat-1", "ok", False)
     status = harness.plugin_list("chat-1")

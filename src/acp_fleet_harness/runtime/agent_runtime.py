@@ -47,6 +47,7 @@ from acp_fleet_harness.notifier import NoopNotifier, Notifier, TelegramNotifier,
 from acp_fleet_harness.persona_composer import PersonaPrompt
 from acp_fleet_harness.plan.manager import PlanManager
 from acp_fleet_harness.plan.models import Plan, PlanStatus, Task, TaskStatus
+from acp_fleet_harness.plugin_incidents import PluginIncidentStore
 from acp_fleet_harness.plugins import PluginManager
 from acp_fleet_harness.plugins.contexts import (
     McpCommandContext,
@@ -201,6 +202,11 @@ class AgentRuntime(RuntimeAPI):
             self._prune_all()
         self._rehydrate_metrics()
 
+        # Durable record of plugin incidents (sandbox, lifecycle, health, watchdog).
+        self._incidents = PluginIncidentStore(
+            self.store_path.parent / "plugin-incidents.jsonl"
+        )
+
         # Plugins can declare MCP servers and skills; add them before McpManager.
         self._plugins = PluginManager(
             plugins=list(self.config.harness.plugins),
@@ -209,9 +215,17 @@ class AgentRuntime(RuntimeAPI):
             instance_started_at=self.instance_started_at,
             dispatch_store=self.dispatch_store,
             runtime=self,
+            incident_store=self._incidents,
         )
         failed = self._plugins.validate_all()
         if failed:
+            for name in failed:
+                self._incidents.record(
+                    plugin=name,
+                    phase="startup",
+                    error=f"Startup validation failed for {name}",
+                    action="disabled",
+                )
             self._plugins.disable_plugins(set(failed))
             self.config.harness.plugins = self._plugins._plugins
             self._save_runtime_overrides()
@@ -659,6 +673,14 @@ class AgentRuntime(RuntimeAPI):
             "healthy": telegram_healthy,
         }
 
+        plugin_health = self._plugins.plugin_health("0")
+        plugins_healthy = all(p["healthy"] for p in plugin_health)
+        components["plugins"] = {
+            "status": "ok" if plugins_healthy else "error",
+            "healthy": plugins_healthy,
+            "details": plugin_health,
+        }
+
         overall = "ok" if all(c["healthy"] for c in components.values()) else "degraded"
         return {
             "status": overall,
@@ -873,11 +895,44 @@ class AgentRuntime(RuntimeAPI):
             capture_output=True,
             text=True,
             timeout=30.0,
+            check=False,
         )
         try:
-            return _json.loads(result.stdout.splitlines()[-1])
+            output = _json.loads(result.stdout.splitlines()[-1])
         except (IndexError, _json.JSONDecodeError) as exc:
-            return {"ok": False, "error": f"Invalid sandbox output: {result.stdout!r} ({exc})"}
+            output = {"ok": False, "error": f"Invalid sandbox output: {result.stdout!r} ({exc})"}
+        if not output.get("ok") and self._incidents is not None:
+            self._incidents.record(
+                plugin=cfg.name,
+                phase="sandbox",
+                error=output.get("error", "unknown"),
+                action="rejected",
+            )
+        return output
+
+    def incidents(self) -> list[dict[str, Any]]:
+        return self._incidents.recent()
+
+    def incidents_for_plugin(self, name: str) -> list[dict[str, Any]]:
+        return self._incidents.for_plugin(name)
+
+    @_locked
+    def record_incident(
+        self,
+        plugin: str,
+        phase: str,
+        error: str,
+        action: str = "",
+        chat_id: str = "",
+    ) -> ChatResult:
+        self._incidents.record(
+            plugin=plugin,
+            phase=phase,
+            error=error,
+            action=action,
+            chat_id=chat_id,
+        )
+        return ChatResult(reply="incident recorded")
 
     def start(self) -> None:
         """Start background services. Idempotent."""

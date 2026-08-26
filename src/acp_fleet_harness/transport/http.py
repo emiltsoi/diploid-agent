@@ -203,6 +203,18 @@ class PluginSandboxRequest(BaseModel):
     plugin: dict[str, Any] | None = None
 
 
+class PluginIncidentListResponse(BaseModel):
+    incidents: list[dict[str, Any]]
+
+
+class PluginIncidentCreateRequest(BaseModel):
+    plugin: str
+    phase: str
+    error: str
+    action: str = ""
+    chat_id: str = ""
+
+
 class PlanCreateTask(BaseModel):
     """A task definition used when creating a plan over HTTP."""
 
@@ -581,6 +593,37 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
             return _to_response(runtime.plugin_rollback(req.steps))
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    @app.get(
+        "/plugin-incidents",
+        response_model=PluginIncidentListResponse,
+        dependencies=[Depends(_require_api_key)],
+    )
+    def plugin_incidents() -> PluginIncidentListResponse:
+        return PluginIncidentListResponse(incidents=runtime.incidents())
+
+    @app.get(
+        "/plugin-incidents/{plugin_name}",
+        response_model=PluginIncidentListResponse,
+        dependencies=[Depends(_require_api_key)],
+    )
+    def plugin_incidents_for(plugin_name: str) -> PluginIncidentListResponse:
+        return PluginIncidentListResponse(incidents=runtime.incidents_for_plugin(plugin_name))
+
+    @app.post(
+        "/plugin-incidents",
+        response_model=ChatResponse,
+        dependencies=[Depends(_require_api_key)],
+    )
+    def plugin_incident_create(req: PluginIncidentCreateRequest) -> ChatResponse:
+        runtime.record_incident(
+            plugin=req.plugin,
+            phase=req.phase,
+            error=req.error,
+            action=req.action,
+            chat_id=req.chat_id,
+        )
+        return _to_response(ChatResult(reply="incident recorded"))
 
     @app.get("/memory/{chat_id}")
     def memory(chat_id: str) -> dict[str, object]:

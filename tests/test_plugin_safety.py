@@ -2,8 +2,6 @@
 
 from pathlib import Path
 
-import pytest
-
 from acp_fleet_harness.config import Config, DevinConfig, HarnessConfig, PersonaConfig, PluginConfig
 from acp_fleet_harness.runtime.agent_runtime import AgentRuntime
 

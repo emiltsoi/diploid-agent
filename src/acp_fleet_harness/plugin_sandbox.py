@@ -6,7 +6,6 @@ import argparse
 import importlib
 import importlib.util
 import json
-import os
 import re
 import sys
 import tempfile
@@ -16,7 +15,6 @@ from typing import Any
 
 from acp_fleet_harness.config import PluginConfig
 from acp_fleet_harness.plugins.base import StatePlugin
-
 
 _MODULE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
 
@@ -77,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
         plugin.stop()
         _dump({"ok": True, "module": args.module, "name": config.name})
         return 0
-    except Exception:
+    except Exception:  # noqa: BLE001
         _dump({
             "ok": False,
             "module": args.module,

@@ -370,6 +370,19 @@ curl -X POST http://127.0.0.1:4003/promote \
   -d '{"chat_id": "test-1", "message": "I prefer Rust over Python"}'
 ```
 
+## Plugin sandbox
+
+- `POST /plugin/sandbox` — validate a plugin module in an isolated subprocess.
+  - Body: `{ "module": "my.module", "plugin": { "name": "my_plugin" } }`
+  - Returns: `{ "ok": true }` or `{ "ok": false, "error": "..." }`
+
+## Plugin incidents
+
+- `GET /plugin-incidents` — return recent plugin failures and recovery actions.
+- `GET /plugin-incidents/{plugin_name}` — incidents for one plugin.
+- `POST /plugin-incidents` — record a plugin incident (used by the watchdog).
+  - Body: `{ "plugin": "name", "phase": "start", "error": "...", "action": "..." }`
+
 ## Plugin lifecycle
 
 Add, remove, update, toggle, and roll back plugins at runtime. All endpoints
@@ -547,6 +560,11 @@ curl -X POST http://127.0.0.1:4003/mcp \
 ```
 
 Valid commands: `list`, `enable`, `disable`. `name` is required for `enable` and `disable`.
+
+Configured plugin MCP servers are listed automatically per chat. Notable servers:
+
+- `devin-self-management` — list, sandbox, add, remove, toggle, and roll back plugins. Mutations require a per-chat approval token.
+- `acp-harness-watchdog` — systemd user service that polls `/health`, rolls back on failure, and restarts the harness only if rollback does not restore health.
 
 ## `GET /skill/{chat_id}`
 

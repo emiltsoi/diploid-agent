@@ -64,7 +64,7 @@ class SelfManagementMcpServer(StdioMcpServer):
                 resp = self._client.post(path, json=body, headers=self._headers())
             resp.raise_for_status()
             return resp.json()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
 
     def _check_approval(self, token: str | None) -> tuple[bool, str]:
