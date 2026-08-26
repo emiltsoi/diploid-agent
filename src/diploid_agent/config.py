@@ -66,9 +66,11 @@ class TelegramConfig(BaseModel):
     token: str | None = None
     stream_thoughts: bool = False
     stream_chunk_interval: float = 2.0
+    intermediate_messages: bool = True
+    intermediate_idle: float = 3.0
+    intermediate_min_chars: int = 20
     min_telegram_interval: float = 1.0
     min_edit_message_interval: float = 2.0
-
 
 class MetricsConfig(BaseModel):
     expose_in_prompt: bool = False

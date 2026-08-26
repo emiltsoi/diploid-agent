@@ -193,6 +193,9 @@ harness:
     webhook_port: 8080
     stream_thoughts: true
     stream_chunk_interval: 2.0
+    intermediate_messages: true
+    intermediate_idle: 3.0
+    intermediate_min_chars: 20
     min_telegram_interval: 1.0
     min_edit_message_interval: 2.0
   notifications:
@@ -201,14 +204,14 @@ harness:
   memory:
     backend: file                  # file | hindsight
     n_turns_summarization: null    # set to 10 to auto-summarize every 10 turns
-    max_chat_memory_chars: 8192
+    max_chat_memory_chars: 16384
     max_persona_memory_chars: 16384
     max_reply_quote_chars: 2048    # max chars of a Telegram reply-to quote to inject
     max_bot_reply_quote_chars: 240  # max chars to quote when replying to a bot message
     short_term_strategy: smart     # raw | smart
     short_term_turns: 10           # max raw turns to load
     min_short_term_turns: 2        # always keep this many raw turns
-    max_short_term_chars: 4096     # cap the short-term block; older turns summarized
+    max_short_term_chars: 6144     # cap the short-term block; older turns summarized
     include_short_term: true
     short_term_summary_cache_days: 7  # stale .cache/*.md entries are removed after this many days
     hindsight:

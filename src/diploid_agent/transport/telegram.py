@@ -261,14 +261,42 @@ class TurnWorker(threading.Thread):
     def _stream_turn(
         self, chat_future: Any, message_id: int | None, thought_id: int | None
     ) -> dict[str, Any]:
-        """Long-poll partial status and edit the placeholder(s) until the turn completes."""
+        """Long-poll partial status and edit the placeholder(s) until the turn completes.
+
+        When ``intermediate_messages`` is enabled and the streamed reply pauses,
+        the current placeholder is committed as a real message and a fresh
+        placeholder is started below it. This makes tool-call gaps readable as
+        separate Telegram messages instead of one confusing, edited block.
+        """
         last_text_sent = ""
         last_thought = ""
         last_thought_sent = ""
         text = ""
-        # Track when we last touched a placeholder so we can send a liveness
-        # heartbeat during a long turn with no new model output.
-        last_edit_at = turn_start_at = time.monotonic()
+        committed_text = ""
+        last_growth_at = turn_start_at = time.monotonic()
+        last_edit_at = turn_start_at
+        config = self.poller._live_telegram_config
+
+        def _uncommitted_tail(full: str) -> str:
+            if not full:
+                return ""
+            if committed_text and full.startswith(committed_text):
+                return full[len(committed_text) :]
+            # The model somehow backtracked; restart the commit baseline.
+            return full
+
+        def _should_commit(tail: str, idle: float) -> bool:
+            if not config.intermediate_messages:
+                return False
+            if idle < config.intermediate_idle:
+                return False
+            if len(tail) < config.intermediate_min_chars:
+                return False
+            stripped = tail.rstrip()
+            if not stripped:
+                return False
+            return stripped[-1] in ".!?\n"
+
         while not chat_future.done():
             now = time.monotonic()
             remaining = _HEARTBEAT_INTERVAL - (now - last_edit_at)
@@ -282,12 +310,43 @@ class TurnWorker(threading.Thread):
             if running:
                 text = status.get("message_text", "")
             edited = False
+
+            # Start a reply placeholder the moment text starts arriving, even
+            # when thought streaming is still active.
+            if message_id is None and text:
+                message_id = self._send_placeholder(_REPLY_PLACEHOLDER)
+                if message_id is not None:
+                    self.poller._save_placeholder_state(
+                        self.chat_id, message_id, thought_id
+                    )
+                last_text_sent = _REPLY_PLACEHOLDER
+
             if message_id is not None and text:
                 visible = text[:4096]
+                # If the visible text changed, the model is still writing.
                 if visible != last_text_sent:
                     self.poller._edit_message_text(self.chat_id, message_id, visible)
                     last_text_sent = visible
+                    last_growth_at = now
                     edited = True
+                else:
+                    # No new text: check whether the tail we already showed
+                    # has been sitting idle long enough to be its own message.
+                    tail = _uncommitted_tail(text)
+                    if _should_commit(tail, now - last_growth_at):
+                        # Freeze the current placeholder as a sent message and
+                        # start a fresh one so the rest of the reply can stream
+                        # below it.
+                        committed_text = text
+                        last_text_sent = _REPLY_PLACEHOLDER
+                        last_growth_at = now
+                        message_id = self._send_placeholder(_REPLY_PLACEHOLDER)
+                        if message_id is not None:
+                            self.poller._save_placeholder_state(
+                                self.chat_id, message_id, thought_id
+                            )
+                        edited = True
+
             if thought_id is not None:
                 thought = status.get("thought_text", "")
                 if thought:
@@ -311,7 +370,11 @@ class TurnWorker(threading.Thread):
                         last_text_sent = heartbeat
                         edited = True
                 if thought_id is not None:
-                    base = _format_thought(last_thought) if last_thought else _THINKING_PREFIX
+                    base = (
+                        _format_thought(last_thought)
+                        if last_thought
+                        else _THINKING_PREFIX
+                    )
                     heartbeat = _build_heartbeat_text(base, elapsed)
                     if heartbeat != last_thought_sent:
                         self.poller._edit_message_text(self.chat_id, thought_id, heartbeat)
@@ -356,8 +419,12 @@ class TurnWorker(threading.Thread):
             if message_id is not None:
                 self.poller._save_placeholder_state(self.chat_id, message_id, thought_id)
 
-        # Replace the placeholder with the final reply, splitting if it is too long.
+        # Replace the placeholder with the final reply. If we already committed
+        # an earlier chunk as its own message, send only the uncommitted suffix
+        # so the user does not see the same text twice.
         reply = result.get("reply", "")
+        if committed_text and reply.startswith(committed_text):
+            reply = reply[len(committed_text) :].lstrip("\n")
         if not reply:
             # If the turn produced no final text, do not leave the placeholder
             # hanging. Delete it and send the notice (if any) as a fresh message.
@@ -451,6 +518,9 @@ class TelegramPoller:
         reply_timeout: float = 300.0,
         stream_thoughts_default: bool = False,
         stream_chunk_interval: float = 2.0,
+        intermediate_messages: bool = True,
+        intermediate_idle: float = 5.0,
+        intermediate_min_chars: int = 20,
         state_dir: Path | None = None,
         reply_preview_chars: int = 240,
         min_telegram_interval: float = 1.0,
@@ -470,6 +540,9 @@ class TelegramPoller:
         self._static_telegram_config = TelegramConfig(
             stream_thoughts=stream_thoughts_default,
             stream_chunk_interval=stream_chunk_interval,
+            intermediate_messages=intermediate_messages,
+            intermediate_idle=intermediate_idle,
+            intermediate_min_chars=intermediate_min_chars,
             min_telegram_interval=min_telegram_interval,
             min_edit_message_interval=min_edit_message_interval,
         )
@@ -1927,6 +2000,9 @@ def main() -> int:
         api_key=config.secrets.harness_api_key,
         stream_thoughts_default=config.harness.telegram.stream_thoughts,
         stream_chunk_interval=config.harness.telegram.stream_chunk_interval,
+        intermediate_messages=config.harness.telegram.intermediate_messages,
+        intermediate_idle=config.harness.telegram.intermediate_idle,
+        intermediate_min_chars=config.harness.telegram.intermediate_min_chars,
         min_telegram_interval=config.harness.telegram.min_telegram_interval,
         min_edit_message_interval=config.harness.telegram.min_edit_message_interval,
         state_dir=config.harness.sessions_root / ".poller-placeholders",

@@ -19,8 +19,10 @@ retention to a Hindsight memory server.
   (`hindsight`).
 - Supports session history: `/new`, `/sessions`, `/resume <n>`, `/branch <n>`.
 - Exposes both a FastAPI HTTP ingress and a Telegram long-polling bot.
+- Splits long or pausing Telegram replies into separate intermediate messages so
+  tool-call gaps do not mash into one confusing block.
 - Supports background dispatches that continue the conversation when they complete (`/dispatch`, `/continue`).
-- Supports live runtime configuration of task, waker, timer, and notifications via HTTP and Telegram without restarting.
+- Supports live runtime configuration of task, waker, timer, notifications, and Telegram settings via HTTP and Telegram without restarting.
 - Supports state plugins with a rich lifecycle hook surface: plugins can intercept turns, sessions, dispatches, memory transitions, skill/MCP commands, retain/promote, and shutdown.
 - Runs a `diploid-memory` MCP server with `memory_recall`, `memory_retain`, and
   `memory_promote` tools, plus a shared `memory` skill that lets the agent use them.
@@ -83,6 +85,7 @@ curl -X POST http://127.0.0.1:4003/switch-model \
 - `/model <name>` — switch this chat to a new model.
 - `/new` — start a fresh session.
 - `/stop` — cancel the current turn and return a partial reply.
+- `/continue` — resume the previous turn after a partial reply or timeout.
 - `/sessions` — list numbered sessions.
 - `/resume <n>` — resume session `n`.
 - `/branch <n>` — branch from session `n`.

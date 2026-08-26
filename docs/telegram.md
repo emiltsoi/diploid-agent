@@ -24,14 +24,35 @@ message:
 2. Check for bot commands.
 3. For normal messages, `POST /chat`.
 4. For commands, `GET` or `POST` the relevant endpoint.
-5. Stream the reply to Telegram by editing a placeholder message in place, then
-   replace the placeholder with the final reply (splitting into multiple
-   Telegram messages if it exceeds 4096 characters). The first bot message is
-   sent as a Telegram reply to the user's message.
+5. Stream the reply to Telegram by editing a placeholder message in place. When the
+   streamed text pauses after a complete sentence and `intermediate_messages` is
+   enabled, the current placeholder is committed as a sent message and a fresh
+   placeholder is started below it. At the end the last placeholder is replaced
+   with the final reply (splitting into multiple Telegram messages if it exceeds
+   4096 characters). The first bot message is sent as a Telegram reply to the
+   user's message.
 
 The poller is intentionally simple: all business logic lives in the FastAPI
 ingress, so a `/webhook` endpoint could replace the poller without changing
 behavior.
+
+## Intermediate messages
+
+When the model pauses while writing a reply — typically while it is running a
+tool — the placeholder text can end up combining the pre-tool statement and the
+post-tool result into one message. This is confusing in a chat UI.
+
+With `harness.telegram.intermediate_messages: true` (default), the poller
+watches the streamed text:
+
+- If the text is idle for at least `intermediate_idle` seconds, the
+  uncommitted tail is at least `intermediate_min_chars` long, and it ends on a
+  sentence or paragraph boundary (`.`, `!`, `?`, or a newline), the current
+  placeholder is committed as a real message.
+- A new `...` placeholder is sent below it.
+- The rest of the reply streams into the new placeholder.
+- At the end, the final reply is sliced to remove the already-committed prefix,
+  so the user does not see the same text twice.
 
 ## Replying to messages
 
@@ -94,12 +115,26 @@ You can adjust the harness's live runtime configuration directly from Telegram w
 /config <section> <key>=<value> [key=value...]
 ```
 
-`<section>` is one of `task`, `waker`, `timer`, or `notifications`. The poller parses each `key=value` pair and POSTs it to the corresponding `/config` endpoint on the ingress. For example:
+`<section>` is one of `task`, `waker`, `timer`, `notifications`, or `telegram`. The poller parses each `key=value` pair and POSTs it to the corresponding `/config` endpoint on the ingress. For example:
 
 ```
 /config task workers=5
 /config notifications webhook_url=https://example.com/notify
+/config telegram intermediate_idle=3.0
+/config telegram intermediate_messages=false
 ```
+
+For the `telegram` section, the following keys may be updated live:
+
+| Key | Type | Description |
+|---|---|---|
+| `intermediate_messages` | `true` / `false` | Whether to commit intermediate replies as separate messages. |
+| `intermediate_idle` | seconds | How long the streamed text must be idle before an intermediate chunk is committed. |
+| `intermediate_min_chars` | integer | Minimum length of the uncommitted tail before it can become its own message. |
+| `stream_thoughts` | `true` / `false` | Toggle the real-time thought stream. |
+| `stream_chunk_interval` | seconds | Reserved; currently unused. |
+
+Because the Telegram poller is a separate process, live `telegram` config changes only take effect after the poller restarts. Other sections (`task`, `waker`, `timer`, `notifications`) take effect immediately on the running harness.
 
 Invalid values are rejected with an error reply. Changes are persisted to `runtime-overrides.yaml` in the project root so they survive a harness restart.
 

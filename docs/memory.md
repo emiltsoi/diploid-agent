@@ -97,16 +97,22 @@ harness:
   memory:
     backend: file
     n_turns_summarization: 10      # null to disable
-    max_chat_memory_chars: 8192
+    max_chat_memory_chars: 16384
     max_persona_memory_chars: 16384
     max_reply_quote_chars: 2048    # caps quoted reply-to text from Telegram
     short_term_strategy: smart     # raw | smart
     short_term_turns: 10           # max raw turns to load
     min_short_term_turns: 2        # always keep this many raw turns
-    max_short_term_chars: 4096     # cap the short-term block
+    max_short_term_chars: 6144     # cap the short-term block
     include_short_term: true
     short_term_summary_cache_days: 7  # stale .cache/*.md entries are removed after this many days
 ```
+
+The active `config/harness.yaml` (and `config/harness.yaml.example`) use
+`max_chat_memory_chars: 16384` and `max_short_term_chars: 6144` to give long
+conversations more room. The `MemoryConfig` defaults are lower (`8192` and
+`4096`). You can tune them live with `/config memory max_chat_memory_chars=...`
+or by editing `config/harness.yaml` and restarting.
 
 ### Summarization
 
@@ -167,11 +173,11 @@ Configuration:
 harness:
   memory:
     backend: hindsight
-    max_chat_memory_chars: 8192
+    max_chat_memory_chars: 16384
     short_term_strategy: smart
     short_term_turns: 10
     min_short_term_turns: 2
-    max_short_term_chars: 4096
+    max_short_term_chars: 6144
     include_short_term: true
     hindsight:
       base_url: http://localhost:8888

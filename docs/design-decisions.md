@@ -131,3 +131,18 @@ no longer injected there; only skills whose triggers match the user message
 `.devin/skills/` and loaded by the ACP process.  When the active skill set
 changes mid-conversation the harness starts a fresh ACP session so the new
 skills are discovered.
+
+## Why Telegram replies can split into intermediate messages
+
+Telegram shows edited placeholder text in the same message. When a reply
+contains a statement like "I’ll check..." followed by a tool-call pause and then
+"Done, love.", the user sees both sentences mashed together in one message that
+was rewritten in place. That is confusing and hides the real pause.
+
+The `intermediate_messages` feature watches the streamed text. When it pauses
+for a configurable idle time on a sentence or paragraph boundary, the worker
+commits the current placeholder as a real message and starts a fresh one below
+it. The final reply is then sliced to avoid duplicating the committed text.
+
+This keeps the chat transcript natural, makes tool-call gaps visible, and does
+not require the ACP engine to expose tool calls to the transport layer.

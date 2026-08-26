@@ -76,7 +76,7 @@ Coordinates transcript, retention, summarization, and recall.
 
 Resolves configured MCP servers into the ACP `session/new` payload.
 
-- Stores MCP server definitions from `config/example.yaml` under `harness.mcp.servers`.
+- Stores MCP server definitions from `config/harness.yaml` under `harness.mcp.servers`.
 - Computes per-chat enabled set from the active `SessionRecord` or `harness.mcp.default_enabled`.
 - Provides `mcp_list`, `mcp_enable`, `mcp_disable` used by Telegram and HTTP commands.
 
@@ -109,11 +109,16 @@ by the composer.
 - `telegram_poll.py` is a long-polling Telegram client that calls the ingress
   endpoints and sends replies back. Each active chat gets a `TurnWorker` thread
   that starts a turn, polls `GET /turn/{chat_id}`, and edits the reply
-  placeholder in place. New messages while a turn is running cancel the active
-  turn and start the next one (steering).
+  placeholder in place.
+- If `intermediate_messages` is enabled, the worker commits the currently
+  streamed text as a real message when it pauses after a complete sentence, then
+  starts a fresh placeholder below it. This keeps tool-call gaps from mashing
+  the pre-tool and post-tool text into one message.
+- New messages while a turn is running cancel the active turn and start the next
+  one (steering).
 - `/stream_thoughts on|off` toggles an optional second placeholder that edits
   with `agent_thought_chunk` text.
-- `systemd/example-run.sh` starts both as a pair under one systemd unit.
+- `systemd/diploid-agent-run.sh` starts both as a pair under one systemd unit.
 
 ## Session lifecycle
 
@@ -176,12 +181,12 @@ for details on `/new`, `/resume`, `/branch`, `/sessions`, and auto-recovery.
 
 || Path | Purpose | Tracked? |
 |---|---|---|---|
-|| `config/example.yaml` | Main config | No (copy from `.example`) |
+|| `config/harness.yaml` | Main config | No (copy from `.example`) |
 || `config/secrets.env` | Telegram token / API keys | No (gitignored) |
-|| `config/example.yaml.example` | Generic config template | Yes |
-|| `systemd/example.service` | Local systemd unit | No (copy from `.example`) |
-|| `systemd/example.service.example` | Generic unit template | Yes |
-|| `systemd/example-run.sh` | Supervisor that runs ingress + poller | Yes |
+|| `config/harness.yaml.example` | Generic config template | Yes |
+|| `systemd/diploid-agent.service` | Local systemd unit | No (copy from `.example`) |
+|| `systemd/diploid-agent.service.example` | Generic unit template | Yes |
+|| `systemd/diploid-agent-run.sh` | Supervisor that runs ingress + poller | Yes |
 || `sessions/<chat_id>/` | Per-chat working directory | No (runtime) |
 || `sessions/<chat_id>/.devin/skills/` | Synced skills for the ACP process | No (runtime) |
 || `sessions/<chat_id>/chat_transcript.jsonl` | Durable turn log | No (runtime) |
