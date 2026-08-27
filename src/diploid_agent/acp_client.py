@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -124,6 +125,7 @@ class AcpClient:
         model: str = "swe-1-7",
         permission_mode: str = "dangerous",
         timeout: float = 900.0,
+        startup_timeout: float = 30.0,
         watchdog_interval: float = 10.0,
         watchdog_timeout: float = 120.0,
         agent_bin: str | Path = "~/.local/bin/devin",
@@ -167,6 +169,7 @@ class AcpClient:
         self._initialized = False
         self._transport_healthy = False
         self._control_timeout = 120.0
+        self._startup_timeout = startup_timeout
         self._model_options: list[str] | None = None
         self._devin_home: Path | None = None
 
@@ -181,8 +184,15 @@ class AcpClient:
         sanitized home directory that contains the user's `devin` permissions
         but an empty default MCP config, so `devin` only loads the MCP servers
         the harness explicitly sends after `session/new`.
+
+        We also drop a stdio-to-UDS proxy for `lean-ctx` into the isolated HOME
+        so any session that explicitly requests `lean-ctx` can share the single
+        `lean-ctx serve --daemon` instance instead of spawning a new child.
         """
         if self._devin_home is not None and self._devin_home.exists():
+            # Re-sanitize the MCP config on every (re)start in case the previous
+            # `devin` child wrote to it.
+            self._write_mcp_configs()
             return
 
         self._devin_home = Path(tempfile.mkdtemp(prefix="acp-home-"))
@@ -202,9 +212,81 @@ class AcpClient:
                 json.dumps({"version": 1, "permissions": {"allow": ["*"]}})
             )
 
+        proxy_src = Path(__file__).with_name("lean_ctx_stdio_proxy.py")
+        if proxy_src.exists():
+            try:
+                proxy_dst = self._devin_home / "lean_ctx_stdio_proxy.py"
+                proxy_dst.write_text(proxy_src.read_text())
+                proxy_dst.chmod(0o755)
+            except OSError:
+                logger.warning("Failed to copy lean-ctx proxy to ACP home")
+
+        self._write_mcp_configs()
+
+    def _write_mcp_configs(self) -> None:
+        """Write empty default MCP configs into the isolated HOME."""
+        if self._devin_home is None:
+            return
         empty_mcp = json.dumps({"mcpServers": {}})
-        (config_dir / "mcp_config.json").write_text(empty_mcp)
-        (codeium_dir / "mcp_config.json").write_text(empty_mcp)
+        try:
+            (self._devin_home / ".config" / "devin" / "mcp_config.json").write_text(empty_mcp)
+            (self._devin_home / ".codeium" / "windsurf" / "mcp_config.json").write_text(empty_mcp)
+        except OSError:
+            logger.warning("Failed to write sanitized mcp_config.json")
+
+    def _normalize_mcp_servers(
+        self,
+        mcp_servers: list[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]]:
+        """Rewrite stdio `lean-ctx` entries to use the shared UDS daemon proxy.
+
+        Spawning a fresh `lean-ctx` stdio child per `devin acp` session can
+        saturate the daemon. If a caller explicitly asks for `lean-ctx`, route
+        it through `lean_ctx_stdio_proxy.py` which forwards to the persistent
+        `lean-ctx serve --daemon` socket.
+        """
+        if not mcp_servers:
+            return []
+
+        default_socket = "~/.local/share/lean-ctx/daemon.sock"
+        proxy_path = str(self._devin_home / "lean_ctx_stdio_proxy.py") if self._devin_home else None
+        out: list[dict[str, Any]] = []
+
+        for server in list(mcp_servers):
+            name = str(server.get("name", ""))
+            command = str(server.get("command", ""))
+            if name == "lean-ctx" or Path(command).name == "lean-ctx":
+                # The ACP `mcpServers` schema uses a list of `KEY=value` strings
+                # for environment variables, but extra env entries can break the
+                # untagged `McpServer` deserialization. Pass the socket path as an
+                # argument to the proxy instead.
+                socket_path = default_socket
+                for entry in server.get("env", []):
+                    if isinstance(entry, str) and entry.startswith("LEAN_CTX_SOCKET="):
+                        socket_path = entry.split("=", 1)[1]
+                        break
+
+                if not Path(socket_path).exists():
+                    logger.warning(
+                        "lean-ctx daemon not found at %s; skipping lean-ctx MCP server",
+                        socket_path,
+                    )
+                    continue
+
+                new_server = dict(server)
+                new_server["command"] = sys.executable
+                new_server["args"] = [proxy_path, socket_path] if proxy_path else [socket_path]
+                # Drop any LEAN_CTX_SOCKET env entries; the socket is in args.
+                new_server["env"] = [
+                    e
+                    for e in server.get("env", [])
+                    if not (isinstance(e, str) and e.startswith("LEAN_CTX_SOCKET="))
+                ]
+                out.append(new_server)
+            else:
+                out.append(server)
+
+        return out
 
     def _cleanup_devin_home(self) -> None:
         """Remove the isolated HOME created for the ACP child."""
@@ -387,11 +469,24 @@ class AcpClient:
         # Do not hold _lock while waiting for the transport to start; the
         # background _send coroutine needs to acquire it to record request time,
         # and holding it here would block the event loop.
-        try:
-            self._run(self._start_transport(), timeout=120.0)
-        except Exception:
-            self.close()
-            raise
+        last_exc: Exception | None = None
+        attempts = 2
+        for attempt in range(1, attempts + 1):
+            try:
+                self._run(self._start_transport(), timeout=self._startup_timeout)
+                break
+            except TimeoutError as exc:
+                last_exc = exc
+                logger.warning("ACP transport startup timed out (attempt %d/%d)", attempt, attempts)
+                self.close()
+                if attempt < attempts:
+                    with self._lock:
+                        self._loop = asyncio.new_event_loop()
+                        self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
+                        self._thread.start()
+                        self._prepare_devin_home()
+                else:
+                    raise last_exc
 
         with self._lock:
             self._initialized = True
@@ -487,6 +582,7 @@ class AcpClient:
                     "version": "0.1.0",
                 },
             },
+            timeout=self._startup_timeout,
         )
         logger.info(
             "ACP transport ready: %s v%s",
@@ -709,9 +805,10 @@ class AcpClient:
         if cwd is not None:
             cwd.mkdir(parents=True, exist_ok=True)
 
+        normalized_mcp_servers = self._normalize_mcp_servers(mcp_servers)
         session = await self._call(
             "session/new",
-            {"cwd": use_cwd, "mcpServers": mcp_servers or []},
+            {"cwd": use_cwd, "mcpServers": normalized_mcp_servers},
         )
         session_id = session["sessionId"]
 

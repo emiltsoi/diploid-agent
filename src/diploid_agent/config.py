@@ -33,6 +33,7 @@ class EngineConfig(BaseModel):
     permission_mode: str = "dangerous"
     timeout: float = 900.0
     soft_timeout: float | None = 600.0  # seconds before auto-cancel + partial reply; None disables
+    acp_startup_timeout: float = 30.0  # seconds to wait for `devin acp` initialize handshake
     acp_watchdog_interval: float = 10.0  # seconds between ACP transport watchdog checks
     acp_watchdog_timeout: float = 120.0  # seconds without ACP prompt output before the watchdog kills the child
     continuation_triggers: list[str] = Field(

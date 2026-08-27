@@ -2,6 +2,7 @@
 
 import asyncio
 import concurrent.futures
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -349,3 +350,35 @@ def test_watchdog_kills_stuck_control_call() -> None:
     assert inflight.done()
     assert isinstance(inflight.exception(), TimeoutError)
     assert client._proc.returncode == -9
+
+
+def test_normalize_mcp_servers_rewrites_lean_ctx(tmp_path: Path) -> None:
+    """lean-ctx entries are routed through the shared daemon proxy."""
+    client = AcpClient(agent_bin="/bin/true", api_key="test-key")
+    client._devin_home = tmp_path
+    proxy = tmp_path / "lean_ctx_stdio_proxy.py"
+    proxy.write_text("# stub")
+
+    socket = tmp_path / "daemon.sock"
+    socket.write_text("")
+
+    out = client._normalize_mcp_servers(
+        [
+            {
+                "name": "lean-ctx",
+                "command": "~/.local/bin/lean-ctx",
+                "args": [],
+                "env": ["OTHER=value", f"LEAN_CTX_SOCKET={socket}"],
+            },
+            {"name": "diploid-memory", "command": "python", "args": ["-m", "memory"], "env": []},
+        ]
+    )
+
+    assert len(out) == 2
+    assert out[0]["name"] == "lean-ctx"
+    assert out[0]["command"] == sys.executable
+    assert out[0]["args"] == [str(proxy), str(socket)]
+    assert out[0]["env"] == ["OTHER=value"]
+
+    assert out[1]["name"] == "diploid-memory"
+    assert out[1]["command"] == "python"
