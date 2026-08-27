@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import shutil
+import tempfile
 import threading
 import time
 import tomllib
@@ -165,10 +166,55 @@ class AcpClient:
         self._lock = threading.RLock()
         self._initialized = False
         self._transport_healthy = False
-        self._control_timeout = 30.0
+        self._control_timeout = 120.0
         self._model_options: list[str] | None = None
+        self._devin_home: Path | None = None
 
         atexit.register(self.close)
+
+    def _prepare_devin_home(self) -> None:
+        """Create an isolated HOME for the ACP child process.
+
+        Devin's bundled MCP config (e.g. `~/.codeium/windsurf/mcp_config.json`)
+        can include `lean-ctx`, whose stdio daemon can deadlock or saturate and
+        block `devin acp` startup indefinitely. We launch the child with a
+        sanitized home directory that contains the user's `devin` permissions
+        but an empty default MCP config, so `devin` only loads the MCP servers
+        the harness explicitly sends after `session/new`.
+        """
+        if self._devin_home is not None and self._devin_home.exists():
+            return
+
+        self._devin_home = Path(tempfile.mkdtemp(prefix="acp-home-"))
+        config_dir = self._devin_home / ".config" / "devin"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        codeium_dir = self._devin_home / ".codeium" / "windsurf"
+        codeium_dir.mkdir(parents=True, exist_ok=True)
+
+        user_config = Path.home() / ".config" / "devin" / "config.json"
+        if user_config.exists():
+            try:
+                (config_dir / "config.json").write_text(user_config.read_text())
+            except OSError:
+                logger.warning("Failed to copy devin config to ACP home")
+        else:
+            (config_dir / "config.json").write_text(
+                json.dumps({"version": 1, "permissions": {"allow": ["*"]}})
+            )
+
+        empty_mcp = json.dumps({"mcpServers": {}})
+        (config_dir / "mcp_config.json").write_text(empty_mcp)
+        (codeium_dir / "mcp_config.json").write_text(empty_mcp)
+
+    def _cleanup_devin_home(self) -> None:
+        """Remove the isolated HOME created for the ACP child."""
+        home = self._devin_home
+        self._devin_home = None
+        if home is not None and home.exists():
+            try:
+                shutil.rmtree(home)
+            except OSError:
+                logger.warning("Failed to remove ACP home %s", home)
 
     # ---------------------------------------------------------------- public
 
@@ -314,6 +360,8 @@ class AcpClient:
             self._thread = None
             self._proc = None
             self._reader_task = None
+            self._stderr_task = None
+            self._cleanup_devin_home()
 
     def restart_transport(self) -> None:
         """Kill the ACP subprocess and start a fresh one."""
@@ -334,7 +382,18 @@ class AcpClient:
             self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
             self._thread.start()
 
-            self._run(self._start_transport(), timeout=30.0)
+            self._prepare_devin_home()
+
+        # Do not hold _lock while waiting for the transport to start; the
+        # background _send coroutine needs to acquire it to record request time,
+        # and holding it here would block the event loop.
+        try:
+            self._run(self._start_transport(), timeout=120.0)
+        except Exception:
+            self.close()
+            raise
+
+        with self._lock:
             self._initialized = True
             self._transport_healthy = True
 
@@ -378,22 +437,38 @@ class AcpClient:
         env = os.environ.copy()
         env["WINDSURF_API_KEY"] = self._api_key
         env["ACP_API_KEY"] = self._api_key
+
         # A standalone `devin acp` must not believe it is inside the
         # Windsurf IDE, or it will wait for the IDE to authenticate.
         env.pop("ACP_BACKEND", None)
         env.pop("WINDSURF_IDE_TYPE", None)
         env.pop("WINDSURF_EXT_HOST_PID", None)
 
+        # Use an isolated HOME to avoid loading user/channel default MCP
+        # configs that can block `devin acp` startup (e.g. `lean-ctx`).
+        if self._devin_home is not None:
+            env["HOME"] = str(self._devin_home)
+            env["XDG_CONFIG_HOME"] = str(self._devin_home / ".config")
+            env["XDG_DATA_HOME"] = os.environ.get(
+                "XDG_DATA_HOME",
+                str(Path.home() / ".local" / "share"),
+            )
+            env["XDG_CACHE_HOME"] = os.environ.get(
+                "XDG_CACHE_HOME",
+                str(Path.home() / ".cache"),
+            )
+
         self._proc = await asyncio.create_subprocess_exec(
             str(self.agent_bin),
             *self.start_args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
             env=env,
         )
 
         self._reader_task = asyncio.create_task(self._reader())
+        self._stderr_task = asyncio.create_task(self._stderr_drain())
 
         self._watchdog_running = True
         self._watchdog_thread = threading.Thread(target=self._watchdog, daemon=True)
@@ -431,6 +506,7 @@ class AcpClient:
                 break
             if not line:
                 break
+            logger.debug("ACP RECV: %s", line.decode().strip()[:200])
 
             with self._lock:
                 self._last_stdout_at = time.monotonic()
@@ -457,6 +533,18 @@ class AcpClient:
             future = self._pending.pop(msg["id"], None)
             if future is not None and not future.done():
                 future.set_result(msg)
+
+    async def _stderr_drain(self) -> None:
+        """Discard stderr so the ACP process never blocks on a full pipe."""
+        if self._proc is None or self._proc.stderr is None:
+            return
+        while True:
+            try:
+                data = await self._proc.stderr.read(8192)
+            except (OSError, ValueError, RuntimeError):
+                break
+            if not data:
+                break
 
     def _route_update(self, msg: dict[str, Any]) -> None:
         """Route a `session/update` notification to its in-flight prompt."""
@@ -550,6 +638,7 @@ class AcpClient:
         if self._proc is None or self._proc.stdin is None:
             raise RuntimeError("ACP process not running")
         data = (json.dumps(msg, ensure_ascii=False) + "\n").encode()
+        logger.debug("ACP SEND: %s", data.decode().strip()[:200])
         self._proc.stdin.write(data)
         try:
             await asyncio.wait_for(
