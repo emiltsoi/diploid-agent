@@ -69,6 +69,8 @@ class AcpEngine(AgentEngine):
             model=config.model,
             permission_mode=config.permission_mode,
             timeout=config.timeout,
+            watchdog_interval=config.acp_watchdog_interval,
+            watchdog_timeout=config.acp_watchdog_timeout,
             agent_bin=config.bin,
             start_args=start_args,
             api_key=api_key,

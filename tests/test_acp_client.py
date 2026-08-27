@@ -1,6 +1,8 @@
 """Tests for AcpClient helpers and construction."""
 
 import asyncio
+import concurrent.futures
+import time
 from pathlib import Path
 from typing import Any
 
@@ -231,9 +233,13 @@ class FakeProcess:
     stdin = FakeStream()
     stdout = FakeStream()
     returncode: int | None = None
+    pid = 12345
 
     def terminate(self) -> None:
         pass
+
+    def kill(self) -> None:
+        self.returncode = -9
 
     async def wait(self) -> int:
         return 0
@@ -291,3 +297,55 @@ def test_restart_transport_starts_new_subprocess(monkeypatch) -> None:
     client.restart_transport()
     assert client._initialized
     assert starts[0] == 2
+
+
+def test_watchdog_kills_stuck_process() -> None:
+    """If a prompt produces no stdout and exceeds the deadline, the watchdog kills devin."""
+    client = AcpClient(agent_bin="/bin/true", api_key="test-key", watchdog_timeout=0.01)
+    client._control_timeout = 0.05
+    client._loop = asyncio.new_event_loop()
+    client._proc = FakeProcess()  # type: ignore[assignment]
+    client._watchdog_running = True
+
+    inflight: concurrent.futures.Future[Any] = concurrent.futures.Future()
+    client._inflight_future = inflight
+    client._inflight_deadline = time.monotonic() - 0.1
+
+    loop = asyncio.new_event_loop()
+    prompt = _Prompt(
+        session_id="s-1",
+        prompt_id=1,
+        text="hi",
+        future=loop.create_future(),
+        cancel_done=loop.create_future(),
+    )
+    client._active_prompts["s-1"] = prompt
+
+    client._check_watchdog()
+
+    assert inflight.done()
+    assert isinstance(inflight.exception(), TimeoutError)
+    assert client._proc.returncode == -9
+    assert client._transport_healthy is False
+    assert client._initialized is False
+
+
+def test_watchdog_kills_stuck_control_call() -> None:
+    """If a control call produces no stdout for the control timeout, the watchdog kills devin."""
+    client = AcpClient(agent_bin="/bin/true", api_key="test-key", watchdog_timeout=10.0)
+    client._control_timeout = 0.01
+    client._loop = asyncio.new_event_loop()
+    client._proc = FakeProcess()  # type: ignore[assignment]
+    client._watchdog_running = True
+
+    inflight: concurrent.futures.Future[Any] = concurrent.futures.Future()
+    client._inflight_future = inflight
+    client._inflight_deadline = time.monotonic() + 60.0
+    client._last_request_at = time.monotonic() - 0.1
+    client._pending[1] = client._loop.create_future()
+
+    client._check_watchdog()
+
+    assert inflight.done()
+    assert isinstance(inflight.exception(), TimeoutError)
+    assert client._proc.returncode == -9
