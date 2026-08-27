@@ -9,6 +9,7 @@ __pycache__/
 
 # User-specific configuration and runtime state.
 config/secrets.env
+config/secrets-*.env
 config/*.token
 config/*.yaml
 systemd/*.service

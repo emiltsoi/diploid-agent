@@ -352,10 +352,12 @@ class Config(BaseModel):
             secrets_path = config_path.parent / "secrets.env"
         secrets_data = _load_dotenv(secrets_path)
 
-        # TELEGRAM_BOT_TOKEN can live in secrets.env or the environment.
-        # It is merged into harness.telegram.token.
-        telegram_token = secrets_data.pop("TELEGRAM_BOT_TOKEN", None) or os.environ.get(
-            "TELEGRAM_BOT_TOKEN"
+        # TELEGRAM_BOT_TOKEN can live in the environment, the config, or secrets.env.
+        # Precedence: environment > config > secrets.env.
+        telegram_token = (
+            os.environ.get("TELEGRAM_BOT_TOKEN")
+            or data.get("harness", {}).get("telegram", {}).get("token")
+            or secrets_data.pop("TELEGRAM_BOT_TOKEN", None)
         )
         if telegram_token:
             data.setdefault("harness", {})["telegram"] = {

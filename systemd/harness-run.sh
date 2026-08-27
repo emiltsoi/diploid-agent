@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
-# diploid-agent-run.sh — run BOTH harness processes under one systemd unit.
+# harness-run.sh — run a harness ingress + telegram poller pair for any persona.
 #
-# Starts the Telegram poller and the FastAPI ingress. If either process
-# exits, the script kills the other and exits, so systemd can restart the
-# whole pair (Restart=on-failure in diploid-agent.service).
+# Usage: harness-run.sh <harness-yaml> <listen-port>
 set -euo pipefail
 
-# Resolve to the project root (this script lives in systemd/).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_DIR"
@@ -16,22 +13,20 @@ export PYTHONUNBUFFERED=1
 # credentials file / WINDSURF_API_KEY instead of waiting for an IDE host.
 unset ACP_BACKEND WINDSURF_IDE_TYPE WINDSURF_EXT_HOST_PID
 
-# Load environment (secrets) if the unit did not already source them.
-if [ -f "config/secrets.env" ]; then
-    set -a
-    # shellcheck source=/dev/null
-    . config/secrets.env
-    set +a
-fi
+# Do not source secrets here. The systemd unit loads them via EnvironmentFile,
+# and a manual run can source them before invoking this script.
+CONFIG="${1:-config/harness.yaml}"
+PORT="${2:-4003}"
 
 # Start the Telegram poller in the background.
 .venv/bin/python -m diploid_agent.telegram_poll \
-  --config config/harness.yaml &
+  --config "$CONFIG" \
+  --harness-url "http://127.0.0.1:$PORT" &
 POLLER_PID=$!
 
 # Start the FastAPI ingress in the background.
 .venv/bin/python -m diploid_agent.telegram_ingress \
-  --config config/harness.yaml &
+  --config "$CONFIG" &
 INGRESS_PID=$!
 
 # If the script is stopped, stop both children.
@@ -44,7 +39,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # Wait for either child to exit. As soon as one dies, the script exits with
-# that child's exit code so systemd restarts the pair on failure.
+# that child's exit code so systemd can restart the pair on failure.
 set +e
 wait -n
 EXIT_CODE=$?
