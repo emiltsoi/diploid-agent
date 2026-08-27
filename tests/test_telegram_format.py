@@ -104,3 +104,11 @@ def test_format_inline_code_with_backtick() -> None:
     out = format_markdown_v2("`` `code` ``")
     # Should be a single Telegram code span containing a literal `code`.
     assert out == "`\\`code\\``"
+
+
+def test_format_inline_code_boxed() -> None:
+    """Inline code can be wrapped in a fenced code block for copyable boxes."""
+    out = format_markdown_v2("Use `print(x)`", code_style="box")
+    assert "```" in out
+    assert "print(x)" in out
+    assert out == "Use \n```\nprint(x)\n```\n"

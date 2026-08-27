@@ -214,7 +214,7 @@ def _replace_citations(text: str) -> str:
 # ─── Markdown → Telegram MarkdownV2 ──────────────────────────────────────────
 
 
-def format_markdown_v2(content: str) -> str:
+def format_markdown_v2(content: str, code_style: str = "inline") -> str:
     """Convert standard markdown to Telegram MarkdownV2 format."""
     if not content:
         return content
@@ -260,6 +260,8 @@ def format_markdown_v2(content: str) -> str:
             inner = inner[1:-1]
         # Telegram inline code: single backticks, escape \ and ` inside.
         escaped = inner.replace("\\", "\\\\").replace("`", "\\`")
+        if code_style == "box":
+            return _ph(f"\n```\n{escaped}\n```\n")
         return _ph(f"`{escaped}`")
 
     text = re.sub(
