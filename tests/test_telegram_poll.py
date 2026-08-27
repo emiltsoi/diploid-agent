@@ -1330,3 +1330,169 @@ def test_send_text_uses_markdown_v2_when_configured(tmp_path: Path, monkeypatch:
     assert sent == [42]
     assert calls[0].get("parse_mode") == "MarkdownV2"
     assert calls[0].get("text") == "*bold*"
+
+
+def test_send_message_forwards_reply_markup(tmp_path: Path) -> None:
+    """_send_message should forward a reply_markup JSON payload."""
+    poller = TelegramPoller(
+        token="dummy",
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(url: str, *, data: Any = None, **kwargs: Any) -> httpx.Response:
+        calls.append(data or {})
+        return _fake_response(200, {"ok": True, "result": {"message_id": 42}})
+
+    poller.client.post = fake_post  # type: ignore[method-assign]
+    markup = {"keyboard": [[{"text": "A"}]], "resize_keyboard": True}
+    msg_id = poller._send_message(123, "Pick one", reply_markup=markup)
+
+    assert msg_id == 42
+    assert calls[0].get("reply_markup") == json.dumps(markup)
+
+
+def test_send_text_extracts_ask_block_and_sends_keyboard(tmp_path: Path) -> None:
+    """A reply with a ```ask block should be sent as a keyboard question."""
+    poller = TelegramPoller(
+        token="dummy",
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(url: str, *, data: Any = None, **kwargs: Any) -> httpx.Response:
+        calls.append(data or {})
+        return _fake_response(200, {"ok": True, "result": {"message_id": 42}})
+
+    poller.client.post = fake_post  # type: ignore[method-assign]
+
+    text = (
+        "Which file should I edit?\n\n"
+        "```ask\n"
+        '{"question": "Which file should I edit?", "options": ["a.py", "b.py"]}\n'
+        "```"
+    )
+    sent = poller._send_text(123, text)
+
+    assert sent == [42]
+    assert "Which file should I edit?" in calls[0].get("text", "")
+    assert "```ask" not in calls[0].get("text", "")
+    assert "a.py" not in calls[0].get("text", "")
+    reply_markup = json.loads(calls[0].get("reply_markup", "{}"))
+    assert reply_markup["keyboard"] == [[{"text": "a.py"}], [{"text": "b.py"}]]
+
+
+def test_save_and_load_pending_question(tmp_path: Path) -> None:
+    """Pending questions can be saved, loaded, and removed."""
+    from diploid_agent.transport.interactive import AskBlock
+
+    poller = TelegramPoller(
+        token="dummy",
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    ask = AskBlock(question="Which file?", options=["a.py", "b.py"])
+    poller._save_pending_question(123, ask, 42)
+
+    loaded = poller._load_pending_question(123)
+    assert loaded is not None
+    assert loaded["question"] == "Which file?"
+    assert loaded["options"] == ["a.py", "b.py"]
+    assert loaded["message_id"] == 42
+
+    poller._remove_pending_question(123)
+    assert poller._load_pending_question(123) is None
+
+
+def test_maybe_answer_pending_question(tmp_path: Path) -> None:
+    """A button-press answer is rewritten into a contextual message."""
+    from diploid_agent.transport.interactive import AskBlock
+
+    poller = TelegramPoller(
+        token="dummy",
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    poller._save_pending_question(
+        123,
+        AskBlock(question="Which file?", options=["a.py", "b.py"]),
+        42,
+    )
+
+    chat_input = ChatInput(chat_id=123, message_id=2, text="a.py")
+    answered = poller._maybe_answer_pending_question(chat_input)
+    assert "Which file?" in answered.text
+    assert "a.py" in answered.text
+    assert answered.reply_to == "Which file?"
+    assert answered.reply_to_is_bot is True
+    assert answered.reply_to_message_id == 42
+
+    # A non-option should clear the pending question and not rewrite.
+    poller._save_pending_question(
+        123,
+        AskBlock(question="Which file?", options=["a.py", "b.py"]),
+        42,
+    )
+    chat_input = ChatInput(chat_id=123, message_id=3, text="something else")
+    unchanged = poller._maybe_answer_pending_question(chat_input)
+    assert unchanged.text == "something else"
+    assert poller._load_pending_question(123) is None
+
+
+def test_stream_turn_strips_ask_block(tmp_path: Path, monkeypatch: Any) -> None:
+    """The streaming placeholder text does not contain the ```ask fence."""
+    poller = TelegramPoller(
+        token="dummy",
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    poller._stream_thoughts[123] = False
+
+    edited: list[str] = []
+
+    def fake_edit(chat_id: int, message_id: int, text: str, *, parse_mode: Any = None) -> None:
+        edited.append(text)
+
+    def fake_delete(chat_id: int, message_id: int) -> bool:
+        return True
+
+    poller._edit_message_text = fake_edit  # type: ignore[method-assign]
+    poller._delete_message = fake_delete  # type: ignore[method-assign]
+
+    chat_input = ChatInput(chat_id=123, message_id=1, text="hi")
+    worker = TurnWorker(poller, chat_input)
+
+    status_calls = 0
+
+    def fake_turn_status(wait: float = 0.0) -> dict[str, Any]:
+        nonlocal status_calls
+        status_calls += 1
+        if status_calls == 1:
+            return {
+                "status": "running",
+                "message_text": (
+                    'Which file?\n\n```ask\n{"question": "Which file?", "options": ["a.py"]}\n```'
+                ),
+            }
+        return {"status": "idle"}
+
+    worker._harness_turn_status = fake_turn_status  # type: ignore[method-assign]
+
+    class FakeFuture:
+        def __init__(self) -> None:
+            self._checks = 0
+            self._result: dict[str, Any] = {"reply": "", "notice": None}
+
+        def done(self) -> bool:
+            self._checks += 1
+            return self._checks > 1
+
+        def result(self) -> dict[str, Any]:
+            return self._result
+
+        def cancel(self) -> None:
+            pass
+
+    worker._stream_turn(FakeFuture(), 1, None)
+
+    assert edited
+    assert "```ask" not in edited[0]
+    assert "a.py" not in edited[0]
+    assert "Which file?" in edited[0]

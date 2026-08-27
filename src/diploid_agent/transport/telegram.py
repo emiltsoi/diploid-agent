@@ -39,6 +39,11 @@ from diploid_agent.transport.base import (
     RuntimeAPI,
     Transport,
 )
+from diploid_agent.transport.interactive import (
+    AskBlock,
+    build_reply_keyboard,
+    extract_ask_block,
+)
 from diploid_agent.transport.telegram_format import (
     _prefix_within_utf16_limit,
     _strip_mdv2,
@@ -317,18 +322,22 @@ class TurnWorker(threading.Thread):
             running = status.get("status") == "running"
             if running:
                 text = status.get("message_text", "")
+                display_text, _ = extract_ask_block(text or "")
+            else:
+                text = ""
+                display_text = ""
             edited = False
 
             # Start a reply placeholder the moment text starts arriving, even
             # when thought streaming is still active.
-            if message_id is None and text:
+            if message_id is None and display_text:
                 message_id = self._send_placeholder(_REPLY_PLACEHOLDER)
                 if message_id is not None:
                     self.poller._save_placeholder_state(self.chat_id, message_id, thought_id)
                 last_text_sent = _REPLY_PLACEHOLDER
 
-            if message_id is not None and text:
-                visible = text[:4096]
+            if message_id is not None and display_text:
+                visible = display_text[:4096]
                 # If the visible text changed, the model is still writing.
                 if visible != last_text_sent:
                     self.poller._edit_message_text(self.chat_id, message_id, visible)
@@ -751,6 +760,7 @@ class TelegramPoller:
         *,
         reply_to_message_id: int | None = None,
         parse_mode: str | None = None,
+        reply_markup: dict[str, Any] | None = None,
     ) -> int | None:
         """Send a Telegram message and return its message_id."""
         text = text[:4096]
@@ -760,6 +770,8 @@ class TelegramPoller:
                 params["parse_mode"] = parse_mode
             if reply_to_message_id is not None:
                 params["reply_to_message_id"] = reply_to_message_id
+            if reply_markup is not None:
+                params["reply_markup"] = json.dumps(reply_markup)
             data = self._api("sendMessage", **params)
             logger.info("Reply sent to chat %s", chat_id)
             return data.get("result", {}).get("message_id")
@@ -784,7 +796,10 @@ class TelegramPoller:
                 plain = _strip_mdv2(text)
                 try:
                     return self._send_message(
-                        chat_id, plain, reply_to_message_id=reply_to_message_id
+                        chat_id,
+                        plain,
+                        reply_to_message_id=reply_to_message_id,
+                        reply_markup=reply_markup,
                     )
                 except Exception:
                     logger.exception("Failed to send plain-text fallback to chat %s", chat_id)
@@ -944,6 +959,75 @@ class TelegramPoller:
         except Exception:
             logger.exception("Failed to remove placeholder state for chat %s", chat_id)
 
+    def _pending_question_path(self, chat_id: int) -> Path:
+        """Path where the active question for a chat is tracked."""
+        return self.state_dir / f"{chat_id}.ask.json"
+
+    def _save_pending_question(
+        self, chat_id: int, ask_block: AskBlock, message_id: int | None
+    ) -> None:
+        """Persist a pending question so we can map the next button press back to it."""
+        try:
+            self.state_dir.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "chat_id": chat_id,
+                "question": ask_block.question,
+                "options": ask_block.options,
+                "message_id": message_id,
+            }
+            self._pending_question_path(chat_id).write_text(json.dumps(payload))
+        except Exception:
+            logger.exception("Failed to save pending question for chat %s", chat_id)
+
+    def _load_pending_question(self, chat_id: int) -> dict[str, Any] | None:
+        """Load the pending question for a chat, or None."""
+        path = self._pending_question_path(chat_id)
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text())
+            options = data.get("options") or []
+            if not options:
+                return None
+            return {
+                "question": data.get("question", ""),
+                "options": [str(o) for o in options],
+                "message_id": data.get("message_id"),
+            }
+        except (OSError, json.JSONDecodeError):
+            return None
+
+    def _remove_pending_question(self, chat_id: int) -> None:
+        """Remove the pending question for a chat."""
+        try:
+            self._pending_question_path(chat_id).unlink(missing_ok=True)
+        except Exception:
+            logger.exception("Failed to remove pending question for chat %s", chat_id)
+
+    def _maybe_answer_pending_question(self, chat_input: ChatInput) -> ChatInput:
+        """If the user is answering a pending question, rewrite the message."""
+        pending = self._load_pending_question(chat_input.chat_id)
+        if pending is None:
+            return chat_input
+
+        if chat_input.text not in pending["options"]:
+            self._remove_pending_question(chat_input.chat_id)
+            return chat_input
+
+        self._remove_pending_question(chat_input.chat_id)
+        answer = (
+            f'The user answered the question "{pending["question"]}" '
+            f"by selecting: {chat_input.text}"
+        )
+        return ChatInput(
+            chat_id=chat_input.chat_id,
+            message_id=chat_input.message_id,
+            text=answer,
+            reply_to=pending["question"],
+            reply_to_is_bot=True,
+            reply_to_message_id=pending["message_id"],
+        )
+
     def _cleanup_orphaned_placeholders(self) -> None:
         """Delete any placeholder messages left over from a previous process."""
         if not self.state_dir.exists():
@@ -973,6 +1057,10 @@ class TelegramPoller:
             finally:
                 with contextlib.suppress(OSError):
                     path.unlink()
+
+        for path in self.state_dir.glob("*.ask.json"):
+            with contextlib.suppress(OSError):
+                path.unlink()
 
     @staticmethod
     def _split_telegram_text(text: str, reserve: int = 16) -> list[str]:
@@ -1096,39 +1184,45 @@ class TelegramPoller:
         if not text:
             return []
 
+        ask_block: AskBlock | None = None
+        display_text = text
+
+        if text:
+            display_text, ask_block = extract_ask_block(text)
+
+        if ask_block is not None and first_message_id is not None:
+            self._delete_message(chat_id, first_message_id)
+            first_message_id = None
+
         config = self._live_telegram_config
         if config.message_format == "markdown_v2":
             parse_mode = "MarkdownV2"
-            formatted = format_markdown_v2(text, code_style=config.code_style)
+            formatted = format_markdown_v2(display_text, code_style=config.code_style)
             len_fn: Any = utf16_len
             reserve = 16
             marker_prefix = " \\("
             marker_suffix = "\\)"
         else:
             parse_mode = None
-            formatted = text
+            formatted = display_text
             len_fn = len
             reserve = 16
             marker_prefix = " ("
             marker_suffix = ")"
 
         logger.info(
-            "_send_text chat=%s message_format=%s parse_mode=%s first_message_id=%s",
+            "_send_text chat=%s message_format=%s parse_mode=%s first_message_id=%s has_ask=%s",
             chat_id,
             config.message_format,
             parse_mode,
             first_message_id,
+            ask_block is not None,
         )
 
         chunks = split_telegram_text(formatted, max_length=4096, len_fn=len_fn, reserve=reserve)
         total = len(chunks)
         sent: list[int] = []
 
-        # If a streaming placeholder exists and we want it rendered with
-        # MarkdownV2, delete it and send the formatted reply as a new message.
-        # Telegram's editMessageText does not reliably re-apply a new parse_mode
-        # to a message that was sent without one, so editing would leave raw
-        # Markdown characters in the chat.
         if first_message_id is not None and parse_mode is not None:
             self._delete_message(chat_id, first_message_id)
             first_message_id = None
@@ -1146,33 +1240,35 @@ class TelegramPoller:
             else:
                 content = chunk
 
+            reply_markup: dict[str, Any] | None = None
+            if ask_block is not None and i == 1 and total == 1:
+                reply_markup = build_reply_keyboard(ask_block.options)
+
             if i == 1 and first_message_id is not None:
                 if self._edit_message_text(
                     chat_id, first_message_id, content, parse_mode=parse_mode
                 ):
                     sent.append(first_message_id)
                 else:
-                    # Edit failed (rate limit, deleted message, etc.). Remove the
-                    # stale placeholder and send the chunk as a fresh message so the
-                    # user still receives the reply.
                     self._delete_message(chat_id, first_message_id)
                     msg_id = self._send_message(
                         chat_id,
                         content,
                         reply_to_message_id=reply_to_message_id,
                         parse_mode=parse_mode,
+                        reply_markup=reply_markup,
                     )
                     if msg_id is None:
                         logger.error("Failed to send first chunk of reply to chat %s", chat_id)
                         break
                     sent.append(msg_id)
             else:
-                # Any new message in a split reply should keep threading to the user.
                 msg_id = self._send_message(
                     chat_id,
                     content,
                     reply_to_message_id=reply_to_message_id,
                     parse_mode=parse_mode,
+                    reply_markup=reply_markup,
                 )
                 if msg_id is None:
                     logger.error(
@@ -1183,6 +1279,16 @@ class TelegramPoller:
                     )
                     break
                 sent.append(msg_id)
+
+            if i == 1 and ask_block is not None:
+                self._save_pending_question(chat_id, ask_block, msg_id if sent else None)
+
+            if i == 1 and first_message_id is None and ask_block is not None and total > 1:
+                logger.warning(
+                    "Question in chat %s was split into %d chunks; dropping keyboard",
+                    chat_id,
+                    total,
+                )
 
         return sent
 
@@ -1831,6 +1937,8 @@ class TelegramPoller:
         chat_input = self._parse_update(update)
         if chat_input is None:
             return
+
+        chat_input = self._maybe_answer_pending_question(chat_input)
 
         chat_id = chat_input.chat_id
         text = chat_input.text

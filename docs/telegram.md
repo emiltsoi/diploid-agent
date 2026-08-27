@@ -71,6 +71,30 @@ You can change the format live with:
 /config telegram message_format=markdown_v2
 ```
 
+## Asking the user to choose
+
+When the assistant needs the user to pick from a list of options, it can include a fenced `ask` block in its reply:
+
+````
+Which file should I edit?
+
+```ask
+{"question": "Which file should I edit?", "options": ["a.py", "b.py", "c.py"]}
+```
+````
+
+The poller strips the block, sends the question as a Telegram message, and attaches a one-time reply keyboard with the options. When you tap a button, the poller rewrites your choice as an explicit answer and sends it to the harness.
+
+For a simple approval dialog:
+
+````
+Should I continue?
+
+```ask
+{"question": "Should I continue?", "options": ["Approve", "Decline", "Cancel"]}
+```
+````
+
 ## Replying to messages
 
 If you reply to any earlier message in the Telegram chat, the poller extracts
