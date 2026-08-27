@@ -82,6 +82,7 @@ class _NotifyStream:
         notify: bool,
         stream_thoughts: bool,
         min_edit_interval: float,
+        wake_event: WakeEvent | None = None,
     ) -> None:
         self.turn_controller = turn_controller
         self.chat_id = chat_id
@@ -89,24 +90,33 @@ class _NotifyStream:
         self.notifier = turn_controller.runtime.notifier
         self.stream_thoughts = stream_thoughts
         self.min_edit_interval = min_edit_interval
-        self._reply_id: int | None = None
-        self._thought_id: int | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self._last_text = ""
-        self._last_thought = ""
         self._last_edit = 0.0
         self._lock = threading.Lock()
+
+        payload = wake_event.payload if wake_event and isinstance(wake_event.payload, dict) else {}
+        self._reply_id: int | None = payload.get("message_id")
+        self._thought_id: int | None = payload.get("thought_id")
+        self._last_text: str = payload.get("message_text") or ""
+        self._last_thought: str = payload.get("thought_text") or ""
 
     def start(self) -> None:
         if not self.notify:
             return
         if not hasattr(self.notifier, "send_placeholder"):
             return
-        self._reply_id = self.notifier.send_placeholder(self.chat_id, "...")
+
+        if self._reply_id is None:
+            self._reply_id = self.notifier.send_placeholder(self.chat_id, "...")
         if self._reply_id is None:
             return
-        if self.stream_thoughts and hasattr(self.notifier, "send_placeholder"):
+
+        if (
+            self.stream_thoughts
+            and self._thought_id is None
+            and hasattr(self.notifier, "send_placeholder")
+        ):
             self._thought_id = self.notifier.send_placeholder(self.chat_id, "Thinking...")
         if hasattr(self.notifier, "begin_typing"):
             self.notifier.begin_typing(self.chat_id)
@@ -170,6 +180,11 @@ class _NotifyStream:
         if hasattr(self.notifier, "end_typing"):
             self.notifier.end_typing(self.chat_id)
 
+        # If another continuation is already scheduled, keep the placeholder
+        # alive so the next _NotifyStream can reuse it.
+        if chat_result.continuation:
+            return [self._reply_id] if self._reply_id is not None else []
+
         sent: list[Any] = []
         with self._lock:
             if chat_result.reply:
@@ -204,6 +219,23 @@ class TurnController:
 
     def __init__(self, runtime: AgentRuntime) -> None:
         self.runtime = runtime
+
+    def _has_pending_continuation(self, chat_id: str, wake_event: WakeEvent | None = None) -> bool:
+        """Return True if another auto-continue wake is pending for this chat."""
+        exclude_id = wake_event.id if wake_event else None
+        for event in self.runtime.wake_queue.pending(chat_id=chat_id):
+            if event.id == exclude_id:
+                continue
+            if event.reason == "auto_continue" and not event.silent:
+                return True
+        return False
+
+    def _seed_active_turn(self, active: ActiveTurn, wake_event: WakeEvent | None) -> None:
+        """Pre-populate the active turn with content from a previous partial turn."""
+        if not wake_event or not isinstance(wake_event.payload, dict):
+            return
+        active.message_text = wake_event.payload.get("message_text") or ""
+        active.thought_text = wake_event.payload.get("thought_text") or ""
 
     def process(
         self,
@@ -300,6 +332,7 @@ class TurnController:
                 cwd.mkdir(parents=True, exist_ok=True)
                 self.runtime.skills.sync_to_chat(chat_id, cwd, active_skill_names)
                 active = ActiveTurn(chat_id, None, user_message, time.time())
+                self._seed_active_turn(active, wake_event)
                 self.runtime._active_turns[chat_id] = active
                 is_new = True
                 old_record: SessionRecord | None = record
@@ -316,6 +349,7 @@ class TurnController:
                 prompt = pctx.prompt
                 use_model = pctx.model or use_model
                 active = ActiveTurn(chat_id, record.session_id, user_message, time.time())
+                self._seed_active_turn(active, wake_event)
                 self.runtime._active_turns[chat_id] = active
                 is_new = False
                 session_number = record.session_number
@@ -330,6 +364,7 @@ class TurnController:
             notify,
             telegram_config.stream_thoughts,
             telegram_config.min_edit_message_interval,
+            wake_event=wake_event,
         )
         notifier_stream.start()
 
@@ -704,6 +739,7 @@ class TurnController:
                     turn_number=record.turn_number,
                     metrics=record.last_turn_metrics,
                 )
+                chat_result.continuation = self._has_pending_continuation(chat_id, wake_event)
         except Exception as exc:
             self.runtime._plugins.on_turn_error(
                 chat_id,

@@ -77,6 +77,7 @@ class ChatResult:
 
     reply: str
     notice: str | None = None
+    continuation: bool = False
     dispatch_id: str | None = None
     session_id: str | None = None
     session_number: int | None = None

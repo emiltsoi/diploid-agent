@@ -61,6 +61,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
     notice: str | None = None
+    continuation: bool = False
     dispatch_id: str | None = None
     session_id: str | None = None
     session_number: int | None = None
@@ -282,6 +283,7 @@ def _to_response(result: Any) -> ChatResponse:
     return ChatResponse(
         reply=result.reply,
         notice=result.notice,
+        continuation=result.continuation,
         dispatch_id=result.dispatch_id,
         session_id=result.session_id,
         session_number=result.session_number,

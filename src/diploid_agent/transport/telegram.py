@@ -202,6 +202,7 @@ class TurnWorker(threading.Thread):
                     "turn_number": getattr(result, "turn_number", None),
                     "session_id": getattr(result, "session_id", None),
                     "dispatch_id": getattr(result, "dispatch_id", None),
+                    "continuation": getattr(result, "continuation", False),
                 }
             except Exception:
                 logger.exception("Runtime process failed")
@@ -404,64 +405,67 @@ class TurnWorker(threading.Thread):
                 "notice": None,
             }
 
-        # Finalise the thought block (when enabled). The placeholder has already
-        # been live-edited with the latest visible text, so we only touch it if
-        # the final thought is empty (delete) or short enough to fit in one
-        # message without splitting. Long thoughts stay as they are, which avoids
-        # flooding Telegram with multi-part edits and hitting rate limits.
-        if thought_id is not None:
-            # Once the future completes the harness may have already popped the
-            # active turn, so a fresh /turn call can return idle with no
-            # thought_text. Use the last captured thought as the fallback.
-            final_status = self._harness_turn_status()
-            thought = final_status.get("thought_text") or last_thought
-            if not thought:
-                self.poller._delete_message(self.chat_id, thought_id)
+        continuation = result.get("continuation", False)
+
+        if not continuation:
+            # Finalise the thought block (when enabled). The placeholder has already
+            # been live-edited with the latest visible text, so we only touch it if
+            # the final thought is empty (delete) or short enough to fit in one
+            # message without splitting. Long thoughts stay as they are, which avoids
+            # flooding Telegram with multi-part edits and hitting rate limits.
+            if thought_id is not None:
+                # Once the future completes the harness may have already popped the
+                # active turn, so a fresh /turn call can return idle with no
+                # thought_text. Use the last captured thought as the fallback.
+                final_status = self._harness_turn_status()
+                thought = final_status.get("thought_text") or last_thought
+                if not thought:
+                    self.poller._delete_message(self.chat_id, thought_id)
+                else:
+                    visible = _format_thought(thought)
+                    if visible and visible != last_thought_sent:
+                        self.poller._edit_message_text(self.chat_id, thought_id, visible)
+                thought_id = None
+
+            # The final placeholder is only created after thinking completes, so it
+            # is always below the thought block.
+            if message_id is None:
+                message_id = self._send_placeholder("...")
+                if message_id is not None:
+                    self.poller._save_placeholder_state(self.chat_id, message_id, thought_id)
+
+            # Replace the placeholder with the final reply. If we already committed
+            # an earlier chunk as its own message, send only the uncommitted suffix
+            # so the user does not see the same text twice.
+            reply = result.get("reply", "")
+            if committed_text and reply.startswith(committed_text):
+                reply = reply[len(committed_text) :].lstrip("\n")
+            if not reply:
+                # If the turn produced no final text, do not leave the placeholder
+                # hanging. Delete it and send the notice (if any) as a fresh message.
+                if message_id is not None:
+                    self.poller._delete_message(self.chat_id, message_id)
+                sent = []
+            elif message_id is not None:
+                sent = self.poller._send_text(
+                    self.chat_id,
+                    reply,
+                    first_message_id=message_id,
+                    reply_to_message_id=self.chat_input.message_id,
+                )
             else:
-                visible = _format_thought(thought)
-                if visible and visible != last_thought_sent:
-                    self.poller._edit_message_text(self.chat_id, thought_id, visible)
-            thought_id = None
+                sent = self.poller._send_text(
+                    self.chat_id,
+                    reply,
+                    reply_to_message_id=self.chat_input.message_id,
+                )
 
-        # The final placeholder is only created after thinking completes, so it
-        # is always below the thought block.
-        if message_id is None:
-            message_id = self._send_placeholder("...")
-            if message_id is not None:
-                self.poller._save_placeholder_state(self.chat_id, message_id, thought_id)
-
-        # Replace the placeholder with the final reply. If we already committed
-        # an earlier chunk as its own message, send only the uncommitted suffix
-        # so the user does not see the same text twice.
-        reply = result.get("reply", "")
-        if committed_text and reply.startswith(committed_text):
-            reply = reply[len(committed_text) :].lstrip("\n")
-        if not reply:
-            # If the turn produced no final text, do not leave the placeholder
-            # hanging. Delete it and send the notice (if any) as a fresh message.
-            if message_id is not None:
-                self.poller._delete_message(self.chat_id, message_id)
-            sent = []
-        elif message_id is not None:
-            sent = self.poller._send_text(
-                self.chat_id,
-                reply,
-                first_message_id=message_id,
-                reply_to_message_id=self.chat_input.message_id,
-            )
-        else:
-            sent = self.poller._send_text(
-                self.chat_id,
-                reply,
-                reply_to_message_id=self.chat_input.message_id,
-            )
-
-        session_number = result.get("session_number")
-        turn_number = result.get("turn_number")
-        if sent and session_number is not None and turn_number is not None:
-            self.poller._register_message_ids(
-                self.chat_id, sent, session_number, turn_number, reply, kind="reply"
-            )
+            session_number = result.get("session_number")
+            turn_number = result.get("turn_number")
+            if sent and session_number is not None and turn_number is not None:
+                self.poller._register_message_ids(
+                    self.chat_id, sent, session_number, turn_number, reply, kind="reply"
+                )
 
         notice = result.get("notice")
         if notice:
@@ -489,6 +493,7 @@ class TurnWorker(threading.Thread):
 
         self.poller._save_placeholder_state(self.chat_id, message_id, thought_id)
 
+        result: dict[str, Any] = {}
         try:
             with ThreadPoolExecutor(max_workers=1) as pool:
                 chat_future = pool.submit(self._harness_chat, chat_input)
@@ -501,7 +506,8 @@ class TurnWorker(threading.Thread):
                         chat_future.cancel()
                     raise
         finally:
-            self.poller._remove_placeholder_state(self.chat_id)
+            if not result.get("continuation"):
+                self.poller._remove_placeholder_state(self.chat_id)
 
         return result
 
