@@ -2,7 +2,6 @@
 
 import asyncio
 import concurrent.futures
-import sys
 import time
 from pathlib import Path
 from typing import Any
