@@ -395,25 +395,49 @@ class AcpClient:
             self._initialized = False
             self._transport_healthy = False
             try:
-                self._run(self._close_transport(), timeout=10.0)
-            except (RuntimeError, TimeoutError) as exc:
-                logger.warning("ACP close transport failed: %s", exc)
-                if self._proc is not None and self._proc.returncode is None:
+                if self._thread is not None and self._thread.is_alive():
+                    # Schedule _close_transport on the background loop and stop
+                    # the loop only after the coroutine has actually completed.
+                    # Stopping the loop from the main thread immediately after
+                    # scheduling the close task can leave the coroutine unawaited
+                    # and generate a RuntimeWarning.
+                    future: concurrent.futures.Future[Any] = asyncio.run_coroutine_threadsafe(
+                        self._close_transport(), self._loop
+                    )
+                    future.add_done_callback(lambda _: self._loop.stop())
                     try:
-                        self._proc.kill()
-                    except Exception:
-                        logger.exception("Failed to kill ACP process during close")
-            if self._loop is not None:
-                self._loop.call_soon_threadsafe(self._loop.stop)
-            self._stop_watchdog()
-            if self._thread and self._thread.is_alive():
-                self._thread.join(timeout=5.0)
-            self._loop = None
-            self._thread = None
-            self._proc = None
-            self._reader_task = None
-            self._stderr_task = None
-            self._cleanup_devin_home()
+                        future.result(timeout=10.0)
+                    except (RuntimeError, TimeoutError) as exc:
+                        logger.warning("ACP close transport failed: %s", exc)
+                        if self._proc is not None and self._proc.returncode is None:
+                            try:
+                                self._proc.kill()
+                            except Exception:
+                                logger.exception("Failed to kill ACP process during close")
+                        if self._loop is not None:
+                            try:
+                                self._loop.call_soon_threadsafe(self._loop.stop)
+                            except RuntimeError:
+                                pass
+                else:
+                    # The background loop is not running; kill the process
+                    # directly and do not schedule a coroutine that can never
+                    # be awaited.
+                    if self._proc is not None and self._proc.returncode is None:
+                        try:
+                            self._proc.kill()
+                        except Exception:
+                            logger.exception("Failed to kill ACP process during close")
+            finally:
+                self._stop_watchdog()
+                if self._thread and self._thread.is_alive():
+                    self._thread.join(timeout=10.0)
+                self._loop = None
+                self._thread = None
+                self._proc = None
+                self._reader_task = None
+                self._stderr_task = None
+                self._cleanup_devin_home()
 
     def restart_transport(self) -> None:
         """Kill the ACP subprocess and start a fresh one."""
