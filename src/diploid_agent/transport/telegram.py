@@ -288,6 +288,7 @@ class TurnWorker(threading.Thread):
         text = ""
         committed_text = ""
         committed_display = ""
+        committed_message_id = None
         last_growth_at = turn_start_at = time.monotonic()
         last_edit_at = turn_start_at
         config = self.poller._live_telegram_config
@@ -361,6 +362,7 @@ class TurnWorker(threading.Thread):
                         # below it.
                         committed_text = text
                         committed_display = visible
+                        committed_message_id = message_id
                         last_text_sent = _REPLY_PLACEHOLDER
                         last_growth_at = now
                         message_id = self._send_placeholder(_REPLY_PLACEHOLDER)
@@ -484,13 +486,16 @@ class TurnWorker(threading.Thread):
                     self.chat_id, sent, session_number, turn_number, reply, kind="reply"
                 )
 
-        notice = result.get("notice")
-        if notice:
-            self.poller._send_text(
-                self.chat_id,
-                f"System: {notice}",
-                reply_to_message_id=self.chat_input.message_id,
-            )
+            notice = result.get("notice")
+            if notice:
+                self.poller._send_text(
+                    self.chat_id,
+                    f"System: {notice}",
+                    reply_to_message_id=self.chat_input.message_id,
+                )
+        else:
+            if committed_message_id is not None and committed_message_id != message_id:
+                self.poller._delete_message(self.chat_id, committed_message_id)
 
         return result
 

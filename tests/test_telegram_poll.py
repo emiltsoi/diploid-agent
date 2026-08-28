@@ -839,6 +839,78 @@ def test_stream_turn_empty_reply_deletes_placeholder(tmp_path: Path) -> None:
     assert sent == [("System: nothing here", chat_input.message_id)]
 
 
+def test_stream_turn_continuation_deletes_committed_message(tmp_path: Path) -> None:
+    """If an intermediate message is committed and the turn continues, delete the
+    committed message so the continuation does not leave a duplicate."""
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+        stream_chunk_interval=0.0,
+        intermediate_idle=0.0,
+        intermediate_min_chars=1,
+    )
+    chat_input = ChatInput(chat_id=12345, message_id=1, text="hello")
+    worker = TurnWorker(poller, chat_input)
+
+    class FakeFuture:
+        calls = 0
+
+        def done(self) -> bool:
+            self.calls += 1
+            return self.calls > 2
+
+        def result(self) -> dict[str, Any]:
+            return {"continuation": True, "reply": "first part then more."}
+
+        def cancel(self) -> None:
+            pass
+
+    next_id = iter([100, 101])
+    sent: list[tuple[str, Any]] = []
+    deleted: list[int] = []
+    statuses: list[dict[str, Any]] = [
+        {"status": "running", "message_text": "first part.", "thought_text": ""},
+        {"status": "running", "message_text": "first part.", "thought_text": ""},
+    ]
+
+    def fake_turn_status(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return statuses.pop(0)
+
+    def fake_send_message(chat_id: int, text: str, **kwargs: Any) -> int:
+        sent.append(("send_message", chat_id, text))
+        return next(next_id)
+
+    def fake_send_text(
+        chat_id: int,
+        text: str,
+        *,
+        first_message_id: int | None = None,
+        reply_to_message_id: int | None = None,
+    ) -> list[int]:
+        sent.append(("send_text", chat_id, text, first_message_id))
+        return [first_message_id or 100]
+
+    def fake_delete_message(chat_id: int, message_id: int) -> None:
+        deleted.append(message_id)
+
+    worker._harness_turn_status = fake_turn_status
+    poller._send_message = fake_send_message
+    poller._send_text = fake_send_text
+    poller._delete_message = fake_delete_message
+    poller._edit_message_text = lambda *args, **kwargs: None
+    poller._save_placeholder_state = lambda *args, **kwargs: None
+
+    worker._stream_turn(FakeFuture(), None, None)
+
+    # The first placeholder (100) is committed, then a second placeholder (101)
+    # is created. On continuation the committed one is deleted, not the current
+    # placeholder.
+    assert 100 in deleted
+    assert 101 not in deleted
+    assert not any(c[0] == "send_text" for c in sent)
+
+
 def _fake_response(status_code: int, body: dict[str, Any]) -> httpx.Response:
     request = httpx.Request("POST", "https://api.telegram.org/bottest/test")
     return httpx.Response(status_code, json=body, request=request)
