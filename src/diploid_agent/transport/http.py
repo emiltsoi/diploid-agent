@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import uvicorn
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import PlainTextResponse
@@ -348,6 +348,21 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
     @app.get("/health")
     def health() -> dict[str, Any]:
         return runtime.health()
+
+    @app.post("/ingress/{protocol}")
+    async def ingress_route(protocol: str, request: Request) -> Response:
+        """Generic pluggable ingress route."""
+        return await runtime.handle_ingress(protocol, request)
+
+    @app.post("/mesh/receive")
+    async def mesh_receive(request: Request) -> Response:
+        """Hermes-compatible mesh receive endpoint."""
+        return await runtime.handle_ingress("mesh", request)
+
+    @app.post("/plugins/openclaw-mesh/webhook")
+    async def openclaw_mesh_webhook(request: Request) -> Response:
+        """OpenClaw-compatible mesh receive alias."""
+        return await runtime.handle_ingress("mesh", request)
 
     @app.get("/prometheus")
     def prometheus() -> PlainTextResponse:

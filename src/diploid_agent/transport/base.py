@@ -184,6 +184,14 @@ class RuntimeAPI(abc.ABC):
     def update_notifications_config(self, notifications_config: NotificationsConfig) -> str:
         """Update the live notifications configuration."""
 
+    def register_ingress_handler(self, protocol: str, handler: Any) -> None:
+        """Register a protocol-specific inbound HTTP handler."""
+        raise NotImplementedError
+
+    def handle_ingress(self, protocol: str, request: Any) -> Any:
+        """Dispatch an inbound HTTP request to the registered handler."""
+        raise NotImplementedError
+
 
 class Transport(abc.ABC):
     """A channel for receiving user messages and sending replies."""

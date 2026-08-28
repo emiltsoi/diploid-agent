@@ -286,6 +286,44 @@ class RoutingConfig(BaseModel):
     budget: ConversationBudget = Field(default_factory=ConversationBudget)
 
 
+class MeshConfig(BaseModel):
+    """Mesh peer configuration."""
+
+    enabled: bool = False
+    agent_name: str | None = None
+    private_key_path: Path | None = None
+    vault_path: Path | None = None
+    registry_url: str | None = None
+    registry_pin: str | None = None
+    allow_insecure_registry: bool = False
+    route: str = "receive"
+    sign_timestamp: bool = True
+    allow_loopback: bool = False
+    chat_mapping: Literal["per_sender", "single"] = "per_sender"
+    fallback_chat_id: str = "mesh:inbox"
+    chat_map: dict[str, str] = Field(default_factory=dict)
+    ingress_module: str = "diploid_mesh.ingress"
+    mcp_enabled: bool = True
+    replay_window_ttl: float = 300.0
+    replay_window_size: int = 10000
+    rate_limit_per_minute: int = 0
+    outbox_enabled: bool = False
+    outbox_dir: Path | None = None
+    delivery_retries: int = 3
+    delivery_backoff: float = 1.0
+    delivery_timeout: float = 10.0
+
+    @field_validator("private_key_path", "vault_path", "outbox_dir")
+    @classmethod
+    def _expand_path(cls, v: Path | None) -> Path | None:
+        return v.expanduser() if v is not None else None
+
+    @field_validator("registry_url")
+    @classmethod
+    def _strip_registry_url(cls, v: str | None) -> str | None:
+        return v.rstrip("/") if v else None
+
+
 class HarnessConfig(BaseModel):
     sessions_root: Path = Path("sessions")
     session_store_path: Path = Path("sessions.jsonl")
@@ -309,6 +347,7 @@ class HarnessConfig(BaseModel):
     waker: WakerConfig = Field(default_factory=WakerConfig)
     timer: TimerConfig = Field(default_factory=TimerConfig)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
+    mesh: MeshConfig = Field(default_factory=MeshConfig)
 
     @model_validator(mode="after")
     def _set_store_paths(self) -> HarnessConfig:

@@ -230,6 +230,9 @@ class AgentRuntime(RuntimeAPI):
         self._plugin_mcp_server_names: set[str] = set()
         self._register_plugin_mcp_servers()
 
+        # Ingress handlers for pluggable transport protocols (e.g. mesh).
+        self._ingress_handlers: dict[str, Any] = {}
+
         self.mcp = McpManager(config)
         self.skills = SkillManager(
             personas_root=Path(self.config.persona.profile_root).parent,
@@ -1022,6 +1025,7 @@ class AgentRuntime(RuntimeAPI):
         if self.config.harness.timer.enabled:
             self.timer_service.start()
         self.instance_manager.start_heartbeat()
+        self._load_mesh_ingress()
 
     def shutdown(self) -> None:
         """Notify all plugins and stop background workers."""
@@ -2045,6 +2049,40 @@ class AgentRuntime(RuntimeAPI):
     def list_models(self) -> list[str]:
         """Return the list of models the ACP server accepts."""
         return self.engine.list_models()
+
+    def register_ingress_handler(self, protocol: str, handler: Any) -> None:
+        """Register a protocol-specific inbound HTTP handler."""
+        self._ingress_handlers[protocol] = handler
+
+    async def handle_ingress(self, protocol: str, request: Any) -> Any:
+        """Dispatch an inbound HTTP request to the registered handler."""
+        from fastapi import HTTPException, Request, status
+
+        if not isinstance(request, Request):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Invalid ingress request object",
+            )
+        handler = self._ingress_handlers.get(protocol)
+        if handler is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Unknown ingress protocol: {protocol}",
+            )
+        return await handler.handle(request)
+
+    def _load_mesh_ingress(self) -> None:
+        """Load the configured mesh ingress handler if mesh is enabled."""
+        from diploid_agent.transport.ingress import load_ingress_handler
+
+        mesh = self.config.harness.mesh
+        if not mesh.enabled:
+            return
+        try:
+            handler = load_ingress_handler(mesh.ingress_module, runtime=self)
+            self.register_ingress_handler("mesh", handler)
+        except Exception:
+            logger.exception("Failed to load mesh ingress handler: %s", mesh.ingress_module)
 
     def process(
         self,
