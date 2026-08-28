@@ -325,6 +325,7 @@ class TurnWorker(threading.Thread):
             if running:
                 text = status.get("message_text", "")
                 display_text, _ = extract_ask_block(text or "")
+                display_text = display_text.strip()
                 visible = display_text[:4096]
             else:
                 text = ""
@@ -445,6 +446,7 @@ class TurnWorker(threading.Thread):
             # so the user does not see the same text twice.
             reply = result.get("reply", "")
             display_reply, _ = extract_ask_block(reply)
+            display_reply = display_reply.strip()
             if committed_text and reply.startswith(committed_text):
                 # The raw final reply still contains the already-committed text;
                 # strip the raw prefix so the suffix (which may include a trailing
@@ -455,7 +457,7 @@ class TurnWorker(threading.Thread):
                 # transformed (e.g. the ask block was stripped). Send only the
                 # visible suffix so the committed message is not duplicated.
                 reply = display_reply[len(committed_display) :].lstrip("\n")
-            if not reply:
+            if not reply or not reply.strip():
                 # If the turn produced no final text, do not leave the placeholder
                 # hanging. Delete it and send the notice (if any) as a fresh message.
                 if message_id is not None:

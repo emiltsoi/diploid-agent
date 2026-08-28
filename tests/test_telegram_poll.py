@@ -1433,6 +1433,89 @@ def test_stream_turn_no_duplicate_when_final_reply_stripped_of_ask_block(
     assert delete_history == [101]
 
 
+def test_stream_turn_no_duplicate_when_stream_text_has_trailing_whitespace(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """If the streamed text has a trailing space at commit but the final
+    reply does not, the final placeholder must be deleted instead of
+    re-sending the same visible text."""
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+        intermediate_messages=True,
+        intermediate_idle=0.0,
+        intermediate_min_chars=1,
+    )
+    chat_input = ChatInput(chat_id=12345, message_id=1, text="hello")
+    worker = TurnWorker(poller, chat_input)
+
+    # Streaming includes a trailing space; final reply is the same but trimmed.
+    statuses = [
+        {"status": "running", "message_text": "I’ll check. ", "thought_text": ""},
+        {"status": "running", "message_text": "I’ll check. ", "thought_text": ""},
+    ]
+    status_iter = iter(statuses)
+
+    class FakeFuture:
+        ticks = 0
+
+        def done(self) -> bool:
+            self.ticks += 1
+            return self.ticks > len(statuses)
+
+        def result(self) -> dict[str, Any]:
+            return {"reply": "I’ll check.", "notice": None}
+
+        def cancel(self) -> None:
+            pass
+
+    sent_messages: list[tuple[int, str, dict[str, Any], int]] = []
+    send_text_calls: list[tuple[int, str, int | None]] = []
+    delete_history: list[int] = []
+
+    tick = [0.0]
+
+    def fake_monotonic() -> float:
+        tick[0] += 0.1
+        return tick[0]
+
+    def fake_send_message(chat_id: int, text: str, **kwargs: Any) -> int:
+        sent_messages.append((chat_id, text, kwargs, 101))
+        return 101
+
+    def fake_send_text(
+        chat_id: int,
+        text: str,
+        *,
+        first_message_id: int | None = None,
+        reply_to_message_id: int | None = None,
+    ) -> list[int]:
+        send_text_calls.append((chat_id, text, first_message_id))
+        return [first_message_id or 100]
+
+    def fake_delete_message(chat_id: int, message_id: int) -> None:
+        delete_history.append(message_id)
+
+    monkeypatch.setattr("diploid_agent.transport.telegram.time.monotonic", fake_monotonic)
+    worker._harness_turn_status = lambda *args, **kwargs: next(status_iter)  # type: ignore[method-assign]
+    poller._send_message = fake_send_message  # type: ignore[method-assign]
+    poller._send_text = fake_send_text  # type: ignore[method-assign]
+    poller._edit_message_text = lambda *args, **kwargs: None  # type: ignore[method-assign]
+    poller._delete_message = fake_delete_message  # type: ignore[method-assign]
+
+    worker._stream_turn(FakeFuture(), 42, None)
+
+    # The streaming text was committed as message 42 and a new placeholder (101)
+    # started below it.
+    assert any(item[1] == "..." for item in sent_messages)
+
+    # The final reply matches the committed visible text, so the final
+    # placeholder is deleted and no second message is sent.
+    assert not send_text_calls
+    assert delete_history == [101]
+
+
 def test_send_message_forwards_parse_mode(tmp_path: Path) -> None:
     """_send_message should pass parse_mode to the Telegram API."""
     poller = TelegramPoller(
