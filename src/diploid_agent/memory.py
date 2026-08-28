@@ -121,6 +121,16 @@ def _trim_to_section(text: str, limit: int) -> str:
     return candidate
 
 
+def _trim_to_last_section(text: str, limit: int) -> str:
+    """Return the last `limit` characters, rounded to a leading section break."""
+    if len(text) <= limit:
+        return text
+    for m in reversed(list(re.finditer(r"\n## ", text))):
+        if len(text) - m.start() <= limit:
+            return text[m.start():].lstrip("\n")
+    return text[-limit:].lstrip("\n")
+
+
 class FileMemoryBackend(MemoryBackend):
     """Local-file memory: transcript JSONL + MEMORY.md summaries.
 
@@ -696,6 +706,19 @@ class MemoryManager:
         limit = self.memory_config.max_chat_memory_chars
         return {"path": path, "limit": limit, "total": total, "exceeded": total > limit}
 
+    def chat_memory_block(self, max_chars: int | None = None) -> str | None:
+        """Return the most recent on-disk chat memory, capped to `max_chars`."""
+        fb = self._file_backend
+        if not fb:
+            return None
+        text = fb._load_memory_text()
+        if not text:
+            return None
+        cap = max_chars or self.memory_config.max_chat_memory_chars
+        if len(text) <= cap:
+            return text
+        return _trim_to_last_section(text, cap)
+
     @property
     def chat_memory_path(self) -> Path | None:
         """Path to the local chat memory file, if any."""
@@ -887,6 +910,7 @@ class MemoryManager:
         """
         short = self._short_term_context(model)
         cap = self.memory_config.max_chat_memory_chars
+        max_recall_chars = self.memory_config.max_recall_chars or cap
 
         query = user_message or "relevant context"
         tags: list[str] = [f"chat:{self.chat_id}"]
@@ -900,7 +924,9 @@ class MemoryManager:
         # first so the most recent conversation is always visible.
         original_recall_len = len(recall_text)
         short_len = len(short) + (2 if short and recall_text else 0)
-        recall_cap = max(0, cap - short_len)
+        # The long-term recall is capped both by the overall chat-memory budget
+        # and by the explicit recall character cap.
+        recall_cap = min(max_recall_chars, max(0, cap - short_len))
         truncated = False
         if recall_text and original_recall_len > recall_cap:
             recall_text = _trim_to_section(recall_text, recall_cap)

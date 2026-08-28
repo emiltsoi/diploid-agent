@@ -104,7 +104,7 @@ harness:
           - "{sessions_root}"
         env: []
     - name: persistent_memory
-      enabled: false  # enable once you trust the auto-promotion and recall
+      enabled: true  # auto-recalls on memory-seeking questions and auto-promotes ```memory blocks
       module: diploid_agent.plugins.persistent_memory
       prompt_slot: persistent_memory
       first_prompt_only: false
@@ -116,7 +116,7 @@ harness:
         auto_promote: true
         auto_summarize_on_sleep: false
         check_short_term: true
-        recall_max_tokens: 1500
+        recall_max_tokens: 500
     - name: curriculum
       enabled: false  # example plugin; not needed for this persona
       module: diploid_agent.plugins.curriculum
@@ -206,8 +206,9 @@ harness:
     webhook_url: null          # set to receive HTTP push on continuation
   memory:
     backend: file                  # file | hindsight
-    n_turns_summarization: null    # set to 10 to auto-summarize every 10 turns
+    n_turns_summarization: 100     # auto-summarize every N turns
     max_chat_memory_chars: 16384
+    max_recall_chars: 8192         # extra client-side cap on recall results
     max_persona_memory_chars: 16384
     max_reply_quote_chars: 2048    # max chars of a Telegram reply-to quote to inject
     max_bot_reply_quote_chars: 240  # max chars to quote when replying to a bot message
@@ -222,7 +223,7 @@ harness:
       bank: example                 # defaults to persona name if unset
       api_key: null
       timeout: 120.0
-      max_recall_tokens: 1500
+      max_recall_tokens: 500
       recall_min_scores:
         semantic: 0.25
         reranker: 0.5

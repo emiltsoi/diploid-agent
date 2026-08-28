@@ -13,9 +13,11 @@ from diploid_agent.config import (
     McpConfig,
     McpServerConfig,
     PersonaConfig,
+    PluginConfig,
     Secrets,
 )
 from diploid_agent.harness import ConversationHarness
+from diploid_agent.models import ChatResult
 
 
 def _make_config(tmp_path: Path, fixture_root: Path) -> Config:
@@ -204,9 +206,11 @@ def test_auto_recovery_on_stale_session(monkeypatch, tmp_path: Path) -> None:
     harness = ConversationHarness(config)
 
     create_count = [0]
+    prompts: list[str] = []
 
     def fake_create_session(prompt, *, cwd=None, model=None, **kwargs):
         create_count[0] += 1
+        prompts.append(prompt)
         return AcpPromptResult(reply="Ready.", session_id=f"session-{create_count[0]}")
 
     def fake_send_message(session_id, prompt, *, cwd=None, model=None, **kwargs):
@@ -223,6 +227,96 @@ def test_auto_recovery_on_stale_session(monkeypatch, tmp_path: Path) -> None:
     assert result2.session_number == 1
     assert result2.session_id == "session-2"
     assert create_count[0] == 2
+    assert len(prompts) == 2
+    assert "rehydrated" in prompts[1].lower()
+
+
+def test_rehydration_injects_rehydration_notice_in_prompt(monkeypatch, tmp_path: Path) -> None:
+    """A stale-session rehydration injects a rehydration notice into the prompt."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root)
+    harness = ConversationHarness(config)
+
+    create_count = [0]
+    prompts: list[str] = []
+
+    def fake_create_session(prompt, *, cwd=None, model=None, **kwargs):
+        create_count[0] += 1
+        prompts.append(prompt)
+        return AcpPromptResult(reply="Ready.", session_id=f"session-{create_count[0]}")
+
+    def fake_send_message(session_id, prompt, *, cwd=None, model=None, **kwargs):
+        raise RuntimeError("ACP session/prompt failed: Session not found")
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+    monkeypatch.setattr(harness.client, "send_message", fake_send_message)
+
+    harness.process("chat-rehydrate", "hello")
+    harness.process("chat-rehydrate", "follow-up")
+
+    assert len(prompts) == 2
+    assert "rehydrated" in prompts[1].lower()
+
+
+def test_persistent_memory_recalls_on_memory_seeking_question(monkeypatch, tmp_path: Path) -> None:
+    """The persistent_memory plugin injects a recall result for memory-seeking turns."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = Config(
+        diploid=DiploidConfig(bin="/bin/echo", model="swe-1-7"),
+        persona=PersonaConfig(
+            name="test-pilot",
+            profile_root=fixture_root,
+            fleet_root=tmp_path / "fleet",
+        ),
+        harness=HarnessConfig(
+            sessions_root=tmp_path / "sessions",
+            session_store_path=tmp_path / "sessions.jsonl",
+            memory={"backend": "file"},  # type: ignore[arg-type]
+            plugins=[
+                PluginConfig(
+                    name="persistent_memory",
+                    enabled=True,
+                    module="diploid_agent.plugins.persistent_memory",
+                    prompt_slot="persistent_memory",
+                    first_prompt_only=False,
+                    prompt_order=32,
+                    state_file="chat_persistent_memory.json",
+                    max_prompt_chars=1024,
+                    config={
+                        "auto_recall": True,
+                        "auto_promote": True,
+                        "auto_summarize_on_sleep": False,
+                        "check_short_term": True,
+                        "recall_max_tokens": 500,
+                    },
+                ),
+            ],
+        ),
+        secrets=Secrets(WINDSURF_API_KEY="test-key"),
+    )
+    harness = ConversationHarness(config)
+
+    prompts: list[str] = []
+
+    def fake_create_session(prompt, *, cwd=None, model=None, **kwargs):
+        prompts.append(prompt)
+        return AcpPromptResult(reply="Ready.", session_id="session-1")
+
+    def fake_recall(chat_id, query, tags=None, max_tokens=None):
+        return ChatResult(reply="- We agreed on Postgres.")
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+    monkeypatch.setattr(harness.runtime, "recall", fake_recall)
+
+    harness.process("chat-pm", "What did we decide about the database?")
+    assert len(prompts) == 1
+    assert "## Persistent memory" in prompts[0]
+    assert "Postgres" in prompts[0]
+
+    prompts.clear()
+    harness.process("chat-pm2", "hello")
+    assert len(prompts) == 1
+    assert "## Persistent memory" not in prompts[0]
 
 
 def test_model_switch_starts_new_session(monkeypatch, tmp_path: Path) -> None:

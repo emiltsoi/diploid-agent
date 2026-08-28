@@ -151,6 +151,19 @@ def test_continuation_anchor_for_cancelled_turn(tmp_path: Path) -> None:
     assert "interrupted" in anchor
 
 
+def test_build_first_rehydration_notice_is_in_prompt_not_user_notice(tmp_path: Path) -> None:
+    """A rehydrated first turn injects a system notice into the prompt only."""
+    builder = _make_builder(tmp_path)
+    pctx = builder.build_first(
+        "chat-1",
+        "hello",
+        record=None,
+        rehydrated=True,
+    )
+    assert "rehydrated" in pctx.prompt.lower()
+    assert "rehydrated" not in (pctx.notice or "").lower()
+
+
 def test_skill_context_is_compact_index_no_full_content(tmp_path: Path) -> None:
     """Only the skill index is injected; full SKILL.md content is not."""
     skills_root = tmp_path / "skills"

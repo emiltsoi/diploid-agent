@@ -525,6 +525,7 @@ class TurnController:
                     continuation_anchor=continuation_anchor,
                     wake_event=wake_event,
                     other_instance_running=other_instance_running,
+                    rehydrated=True,
                 )
                 prompt = pctx.prompt
                 rehydrate_notice = pctx.notice
@@ -583,6 +584,7 @@ class TurnController:
                     continuation_anchor=continuation_anchor,
                     wake_event=wake_event,
                     other_instance_running=other_instance_running,
+                    rehydrated=True,
                 )
                 prompt = pctx.prompt
                 rehydrate_notice = pctx.notice
@@ -1037,6 +1039,7 @@ class TurnController:
                     old_record,
                     model=use_model,
                     continuation_anchor=continuation_anchor,
+                    rehydrated=True,
                 )
                 prompt = pctx.prompt
                 rehydrate_notice = pctx.notice
@@ -1082,6 +1085,7 @@ class TurnController:
                     old_record,
                     model=use_model,
                     continuation_anchor=continuation_anchor,
+                    rehydrated=True,
                 )
                 prompt = pctx.prompt
                 rehydrate_notice = pctx.notice
@@ -1667,6 +1671,7 @@ class TurnController:
                 model=use_model,
                 skill_names=start_ctx.skill_names,
                 mcp_names=None,
+                rehydrated=True,
             )
             prompt = pctx.prompt
             notice = pctx.notice

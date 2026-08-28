@@ -143,6 +143,7 @@ class MemoryConfig(BaseModel):
     backend: str = "file"  # file | hindsight
     n_turns_summarization: int | None = None
     max_chat_memory_chars: int = 8192
+    max_recall_chars: int | None = None  # extra client-side cap on recall results
     max_persona_memory_chars: int = 16384
     max_reply_quote_chars: int = 2048
     max_bot_reply_quote_chars: int = 240

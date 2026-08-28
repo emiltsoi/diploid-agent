@@ -359,6 +359,7 @@ class ContextBuilder:
         mcp_names: list[str] | None = None,
         wake_event: WakeEvent | None = None,
         other_instance_running: bool = False,
+        rehydrated: bool = False,
     ) -> PromptContext:
         """Build a first-turn prompt and any memory truncation notice.
 
@@ -381,6 +382,7 @@ class ContextBuilder:
             model=model or self.config.engine.model,
             is_first=True,
             continuation_anchor=continuation_anchor,
+            rehydrated=rehydrated,
         )
         build_ctx = self.plugin_manager.before_build_prompt(chat_id, build_ctx)
         effective_model = build_ctx.model or self.config.engine.model
@@ -421,8 +423,16 @@ class ContextBuilder:
             "user": [formatted],
         }
 
-        if notice:
-            slots["system_notice"].append(f"## System notice\n\n{notice}")
+        rehydration_notice = ""
+        if build_ctx.rehydrated:
+            rehydration_notice = (
+                "This ACP session was rehydrated. Full persona memory and "
+                "long-term chat memory have been re-injected into the prompt."
+            )
+
+        if notice or rehydration_notice:
+            parts = [p for p in [rehydration_notice, notice] if p]
+            slots["system_notice"].append("## System notice\n\n" + "\n\n".join(parts))
         if persona.memory_text:
             slots["memory"].append(
                 f"## Current memory ({persona.memory_path.name})\n\n{persona.memory_text}"

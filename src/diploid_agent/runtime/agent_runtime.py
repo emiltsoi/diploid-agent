@@ -1744,7 +1744,7 @@ class AgentRuntime(RuntimeAPI):
                     "ACP session %s stale; rehydrating for %s", record.session_id, chat_id
                 )
                 pctx = self.context_builder.build_first(
-                    chat_id, user_message, record, model=use_model
+                    chat_id, user_message, record, model=use_model, rehydrated=True
                 )
                 result, session_id = self._start_new_session(chat_id, pctx.prompt, use_model)
                 record.session_id = session_id

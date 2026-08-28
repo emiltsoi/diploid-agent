@@ -58,6 +58,7 @@ class PromptBuildContext:
     model: str | None
     is_first: bool
     continuation_anchor: str | None = None
+    rehydrated: bool = False
 
 
 @dataclass
