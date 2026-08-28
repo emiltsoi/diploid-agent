@@ -16,7 +16,6 @@ import logging
 import os
 import shutil
 import signal
-import sys
 import tempfile
 import threading
 import time
@@ -185,15 +184,11 @@ class AcpClient:
         """Create an isolated HOME for the ACP child process.
 
         Devin's bundled MCP config (e.g. `~/.codeium/windsurf/mcp_config.json`)
-        can include `lean-ctx`, whose stdio daemon can deadlock or saturate and
-        block `devin acp` startup indefinitely. We launch the child with a
-        sanitized home directory that contains the user's `devin` permissions
-        but an empty default MCP config, so `devin` only loads the MCP servers
-        the harness explicitly sends after `session/new`.
-
-        We also drop a stdio-to-UDS proxy for `lean-ctx` into the isolated HOME
-        so any session that explicitly requests `lean-ctx` can share the single
-        `lean-ctx serve --daemon` instance instead of spawning a new child.
+        can include MCP servers that deadlock or saturate and block `devin acp`
+        startup indefinitely. We launch the child with a sanitized home directory
+        that contains the user's `devin` permissions but an empty default MCP
+        config, so `devin` only loads the MCP servers the harness explicitly
+        sends after `session/new`.
         """
         if self._devin_home is not None and self._devin_home.exists():
             # Re-sanitize the MCP config on every (re)start in case the previous
@@ -218,15 +213,6 @@ class AcpClient:
                 json.dumps({"version": 1, "permissions": {"allow": ["*"]}})
             )
 
-        proxy_src = Path(__file__).with_name("lean_ctx_stdio_proxy.py")
-        if proxy_src.exists():
-            try:
-                proxy_dst = self._devin_home / "lean_ctx_stdio_proxy.py"
-                proxy_dst.write_text(proxy_src.read_text())
-                proxy_dst.chmod(0o755)
-            except OSError:
-                logger.warning("Failed to copy lean-ctx proxy to ACP home")
-
         self._write_mcp_configs()
 
     def _write_mcp_configs(self) -> None:
@@ -244,53 +230,26 @@ class AcpClient:
         self,
         mcp_servers: list[dict[str, Any]] | None,
     ) -> list[dict[str, Any]]:
-        """Rewrite stdio `lean-ctx` entries to use the shared UDS daemon proxy.
+        """Return the requested MCP servers with any `lean-ctx` entries dropped.
 
-        Spawning a fresh `lean-ctx` stdio child per `devin acp` session can
-        saturate the daemon. If a caller explicitly asks for `lean-ctx`, route
-        it through `lean_ctx_stdio_proxy.py` which forwards to the persistent
-        `lean-ctx serve --daemon` socket.
+        `lean-ctx` has been removed from this setup because the shared daemon is
+        a single point of failure and can hang `devin acp` startup. If a caller
+        still passes it, strip it out and keep the other servers.
         """
         if not mcp_servers:
             return []
 
-        default_socket = "~/.local/share/lean-ctx/daemon.sock"
-        proxy_path = str(self._devin_home / "lean_ctx_stdio_proxy.py") if self._devin_home else None
         out: list[dict[str, Any]] = []
 
         for server in list(mcp_servers):
             name = str(server.get("name", ""))
             command = str(server.get("command", ""))
             if name == "lean-ctx" or Path(command).name == "lean-ctx":
-                # The ACP `mcpServers` schema uses a list of `KEY=value` strings
-                # for environment variables, but extra env entries can break the
-                # untagged `McpServer` deserialization. Pass the socket path as an
-                # argument to the proxy instead.
-                socket_path = default_socket
-                for entry in server.get("env", []):
-                    if isinstance(entry, str) and entry.startswith("LEAN_CTX_SOCKET="):
-                        socket_path = entry.split("=", 1)[1]
-                        break
-
-                if not Path(socket_path).exists():
-                    logger.warning(
-                        "lean-ctx daemon not found at %s; skipping lean-ctx MCP server",
-                        socket_path,
-                    )
-                    continue
-
-                new_server = dict(server)
-                new_server["command"] = sys.executable
-                new_server["args"] = [proxy_path, socket_path] if proxy_path else [socket_path]
-                # Drop any LEAN_CTX_SOCKET env entries; the socket is in args.
-                new_server["env"] = [
-                    e
-                    for e in server.get("env", [])
-                    if not (isinstance(e, str) and e.startswith("LEAN_CTX_SOCKET="))
-                ]
-                out.append(new_server)
-            else:
-                out.append(server)
+                logger.warning(
+                    "lean-ctx MCP server requested but is disabled in this setup; dropping"
+                )
+                continue
+            out.append(server)
 
         return out
 
