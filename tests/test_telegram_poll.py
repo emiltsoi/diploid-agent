@@ -1258,6 +1258,181 @@ def test_stream_turn_no_split_when_intermediate_messages_disabled(
     assert send_text_calls[0][2] == 42
 
 
+def test_stream_turn_no_duplicate_when_ask_block_added_after_commit(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """If the model commits an intermediate sentence and then appends an ask
+    block, the final reply must not duplicate the committed visible text."""
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+        intermediate_messages=True,
+        intermediate_idle=0.0,
+        intermediate_min_chars=1,
+    )
+    chat_input = ChatInput(chat_id=12345, message_id=1, text="hello")
+    worker = TurnWorker(poller, chat_input)
+
+    ask_block = '\n\n```ask\n{"question": "Shall I start?", "options": ["yes"]}\n```'
+    final_raw = f"I’ll check.{ask_block}"
+
+    statuses = [
+        {"status": "running", "message_text": "I’ll check.", "thought_text": ""},
+        {"status": "running", "message_text": "I’ll check.", "thought_text": ""},
+        {"status": "running", "message_text": final_raw, "thought_text": ""},
+    ]
+    status_iter = iter(statuses)
+
+    class FakeFuture:
+        ticks = 0
+
+        def done(self) -> bool:
+            self.ticks += 1
+            return self.ticks > len(statuses)
+
+        def result(self) -> dict[str, Any]:
+            return {"reply": final_raw, "notice": None}
+
+        def cancel(self) -> None:
+            pass
+
+    sent_messages: list[tuple[int, str, dict[str, Any], int]] = []
+    send_text_calls: list[tuple[int, str, int | None]] = []
+    edit_history: list[tuple[int, str]] = []
+
+    tick = [0.0]
+
+    def fake_monotonic() -> float:
+        tick[0] += 0.1
+        return tick[0]
+
+    def fake_send_message(chat_id: int, text: str, **kwargs: Any) -> int:
+        sent_messages.append((chat_id, text, kwargs, 101))
+        return 101
+
+    def fake_send_text(
+        chat_id: int,
+        text: str,
+        *,
+        first_message_id: int | None = None,
+        reply_to_message_id: int | None = None,
+    ) -> list[int]:
+        send_text_calls.append((chat_id, text, first_message_id))
+        return [first_message_id or 100]
+
+    def fake_edit_message_text(chat_id: int, message_id: int, text: str) -> None:
+        edit_history.append((message_id, text))
+
+    monkeypatch.setattr("diploid_agent.transport.telegram.time.monotonic", fake_monotonic)
+    worker._harness_turn_status = lambda *args, **kwargs: next(status_iter)  # type: ignore[method-assign]
+    poller._send_message = fake_send_message  # type: ignore[method-assign]
+    poller._send_text = fake_send_text  # type: ignore[method-assign]
+    poller._edit_message_text = fake_edit_message_text  # type: ignore[method-assign]
+
+    worker._stream_turn(FakeFuture(), 42, None)
+
+    # The first chunk was committed as message 42 and a new placeholder (101)
+    # started below it.
+    assert any(mid == 42 and "I’ll check." in txt for mid, txt in edit_history)
+    assert any(item[1] == "..." for item in sent_messages)
+
+    # No second commit happened: the ask block added no new *visible* content,
+    # so only one new placeholder was sent.
+    assert len([m for m in sent_messages if m[1] == "..."]) == 1
+
+    # The final reply is the ask block suffix, not the duplicated visible text.
+    assert len(send_text_calls) == 1
+    assert "I’ll check." not in send_text_calls[0][1]
+    assert send_text_calls[0][1].startswith("```ask")
+    assert send_text_calls[0][2] == 101
+
+
+def test_stream_turn_no_duplicate_when_final_reply_stripped_of_ask_block(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """If the committed text already included an ask block and the final
+    raw reply was stripped to the visible text, the placeholder is deleted
+    instead of re-sending the same visible content."""
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+        intermediate_messages=True,
+        intermediate_idle=0.0,
+        intermediate_min_chars=1,
+    )
+    chat_input = ChatInput(chat_id=12345, message_id=1, text="hello")
+    worker = TurnWorker(poller, chat_input)
+
+    ask_block = '\n\n```ask\n{"question": "Shall I start?", "options": ["yes"]}\n```'
+    raw_text = f"I’ll check.{ask_block}"
+
+    statuses = [
+        {"status": "running", "message_text": raw_text, "thought_text": ""},
+        {"status": "running", "message_text": raw_text, "thought_text": ""},
+    ]
+    status_iter = iter(statuses)
+
+    class FakeFuture:
+        ticks = 0
+
+        def done(self) -> bool:
+            self.ticks += 1
+            return self.ticks > len(statuses)
+
+        def result(self) -> dict[str, Any]:
+            # The runtime returned only the visible text (ask block stripped).
+            return {"reply": "I’ll check.", "notice": None}
+
+        def cancel(self) -> None:
+            pass
+
+    sent_messages: list[tuple[int, str, dict[str, Any], int]] = []
+    send_text_calls: list[tuple[int, str, int | None]] = []
+    delete_history: list[int] = []
+
+    tick = [0.0]
+
+    def fake_monotonic() -> float:
+        tick[0] += 0.1
+        return tick[0]
+
+    def fake_send_message(chat_id: int, text: str, **kwargs: Any) -> int:
+        sent_messages.append((chat_id, text, kwargs, 101))
+        return 101
+
+    def fake_send_text(
+        chat_id: int,
+        text: str,
+        *,
+        first_message_id: int | None = None,
+        reply_to_message_id: int | None = None,
+    ) -> list[int]:
+        send_text_calls.append((chat_id, text, first_message_id))
+        return [first_message_id or 100]
+
+    def fake_delete_message(chat_id: int, message_id: int) -> None:
+        delete_history.append(message_id)
+
+    monkeypatch.setattr("diploid_agent.transport.telegram.time.monotonic", fake_monotonic)
+    worker._harness_turn_status = lambda *args, **kwargs: next(status_iter)  # type: ignore[method-assign]
+    poller._send_message = fake_send_message  # type: ignore[method-assign]
+    poller._send_text = fake_send_text  # type: ignore[method-assign]
+    poller._edit_message_text = lambda *args, **kwargs: None  # type: ignore[method-assign]
+    poller._delete_message = fake_delete_message  # type: ignore[method-assign]
+
+    worker._stream_turn(FakeFuture(), 42, None)
+
+    # The commit created one new placeholder below message 42.
+    assert any(item[1] == "..." for item in sent_messages)
+
+    # The final visible text is exactly what was already committed, so no
+    # final sendMessage is issued; the dangling placeholder is deleted.
+    assert not send_text_calls
+    assert delete_history == [101]
+
+
 def test_send_message_forwards_parse_mode(tmp_path: Path) -> None:
     """_send_message should pass parse_mode to the Telegram API."""
     poller = TelegramPoller(

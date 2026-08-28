@@ -287,6 +287,7 @@ class TurnWorker(threading.Thread):
         last_thought_sent = ""
         text = ""
         committed_text = ""
+        committed_display = ""
         last_growth_at = turn_start_at = time.monotonic()
         last_edit_at = turn_start_at
         config = self.poller._live_telegram_config
@@ -294,8 +295,8 @@ class TurnWorker(threading.Thread):
         def _uncommitted_tail(full: str) -> str:
             if not full:
                 return ""
-            if committed_text and full.startswith(committed_text):
-                return full[len(committed_text) :]
+            if committed_display and full.startswith(committed_display):
+                return full[len(committed_display) :]
             # The model somehow backtracked; restart the commit baseline.
             return full
 
@@ -324,9 +325,11 @@ class TurnWorker(threading.Thread):
             if running:
                 text = status.get("message_text", "")
                 display_text, _ = extract_ask_block(text or "")
+                visible = display_text[:4096]
             else:
                 text = ""
                 display_text = ""
+                visible = ""
             edited = False
 
             # Start a reply placeholder the moment text starts arriving, even
@@ -338,7 +341,6 @@ class TurnWorker(threading.Thread):
                 last_text_sent = _REPLY_PLACEHOLDER
 
             if message_id is not None and display_text:
-                visible = display_text[:4096]
                 # If the visible text changed, the model is still writing.
                 if visible != last_text_sent:
                     self.poller._edit_message_text(self.chat_id, message_id, visible)
@@ -346,14 +348,18 @@ class TurnWorker(threading.Thread):
                     last_growth_at = now
                     edited = True
                 else:
-                    # No new text: check whether the tail we already showed
-                    # has been sitting idle long enough to be its own message.
-                    tail = _uncommitted_tail(text)
+                    # No new text: check whether the visible tail we already
+                    # showed has been sitting idle long enough to be its own
+                    # message. We use the displayed text (not the raw text with
+                    # hidden ask blocks) so a trailing ask block does not cause
+                    # a duplicate commit of the same visible content.
+                    tail = _uncommitted_tail(display_text)
                     if _should_commit(tail, now - last_growth_at):
                         # Freeze the current placeholder as a sent message and
                         # start a fresh one so the rest of the reply can stream
                         # below it.
                         committed_text = text
+                        committed_display = visible
                         last_text_sent = _REPLY_PLACEHOLDER
                         last_growth_at = now
                         message_id = self._send_placeholder(_REPLY_PLACEHOLDER)
@@ -379,7 +385,7 @@ class TurnWorker(threading.Thread):
                 # knows the harness is still alive.
                 elapsed = now - turn_start_at
                 if message_id is not None:
-                    base = text[:4096] if text else _REPLY_PLACEHOLDER
+                    base = display_text[:4096] if display_text else _REPLY_PLACEHOLDER
                     heartbeat = _build_heartbeat_text(base, elapsed)
                     if heartbeat != last_text_sent:
                         self.poller._edit_message_text(self.chat_id, message_id, heartbeat)
@@ -438,8 +444,17 @@ class TurnWorker(threading.Thread):
             # an earlier chunk as its own message, send only the uncommitted suffix
             # so the user does not see the same text twice.
             reply = result.get("reply", "")
+            display_reply, _ = extract_ask_block(reply)
             if committed_text and reply.startswith(committed_text):
+                # The raw final reply still contains the already-committed text;
+                # strip the raw prefix so the suffix (which may include a trailing
+                # ask block for the keyboard) is sent below the committed message.
                 reply = reply[len(committed_text) :].lstrip("\n")
+            elif committed_display and display_reply.startswith(committed_display):
+                # The visible prefix was already committed, but the raw reply was
+                # transformed (e.g. the ask block was stripped). Send only the
+                # visible suffix so the committed message is not duplicated.
+                reply = display_reply[len(committed_display) :].lstrip("\n")
             if not reply:
                 # If the turn produced no final text, do not leave the placeholder
                 # hanging. Delete it and send the notice (if any) as a fresh message.
