@@ -396,7 +396,7 @@ def test_watchdog_waits_for_prompt_soft_timeout() -> None:
     inflight: concurrent.futures.Future[Any] = concurrent.futures.Future()
     client._inflight_future = inflight
     client._inflight_deadline = now + 60.0
-    client._last_stdout_at = now
+    client._last_progress_at = now
 
     loop = asyncio.new_event_loop()
     prompt = _Prompt(
@@ -427,7 +427,40 @@ def test_watchdog_kills_after_prompt_soft_timeout() -> None:
     inflight: concurrent.futures.Future[Any] = concurrent.futures.Future()
     client._inflight_future = inflight
     client._inflight_deadline = now + 60.0
-    client._last_stdout_at = now - 45.0
+    client._last_progress_at = now - 45.0
+
+    loop = asyncio.new_event_loop()
+    prompt = _Prompt(
+        session_id="s-1",
+        prompt_id=1,
+        text="hi",
+        future=loop.create_future(),
+        cancel_done=loop.create_future(),
+        soft_timeout=10.0,
+        started_at=now - 45.0,
+    )
+    client._active_prompts["s-1"] = prompt
+
+    client._check_watchdog()
+
+    assert inflight.done()
+    assert isinstance(inflight.exception(), TimeoutError)
+    assert client._proc.returncode == -9
+
+
+def test_watchdog_kills_prompt_that_keeps_printing_past_soft_timeout() -> None:
+    """The watchdog kills a prompt that keeps printing but exceeds soft_timeout + grace."""
+    client = AcpClient(agent_bin="/bin/true", api_key="test-key", watchdog_timeout=10.0)
+    client._control_timeout = 0.05
+    client._loop = asyncio.new_event_loop()
+    client._proc = FakeProcess()  # type: ignore[assignment]
+    client._watchdog_running = True
+
+    now = time.monotonic()
+    inflight: concurrent.futures.Future[Any] = concurrent.futures.Future()
+    client._inflight_future = inflight
+    client._inflight_deadline = now + 60.0
+    client._last_progress_at = now - 0.1  # output is still recent
 
     loop = asyncio.new_event_loop()
     prompt = _Prompt(

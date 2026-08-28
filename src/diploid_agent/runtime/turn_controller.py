@@ -545,14 +545,20 @@ class TurnController:
                         chat_id,
                     )
                     self.runtime.engine.restart()
-                    result, session_id = self.runtime.call_engine_unlocked(
-                        self.runtime._start_new_session,
-                        chat_id,
-                        prompt,
-                        use_model,
-                        on_chunk=_on_chunk,
-                        on_update=_on_update,
-                    )
+                    try:
+                        result, session_id = self.runtime.call_engine_unlocked(
+                            self.runtime._start_new_session,
+                            chat_id,
+                            prompt,
+                            use_model,
+                            on_chunk=_on_chunk,
+                            on_update=_on_update,
+                        )
+                    except TimeoutError:
+                        self.runtime.engine.restart()
+                        raise RuntimeError(
+                            "ACP transport is unresponsive after multiple restarts"
+                        )
                 is_new = True
                 active.session_id = result.session_id
                 reply = result.reply

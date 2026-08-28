@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import shutil
+import signal
 import sys
 import tempfile
 import threading
@@ -161,6 +162,7 @@ class AcpClient:
         self._watchdog_interval = watchdog_interval
         self._watchdog_timeout = watchdog_timeout
         self._last_stdout_at: float = 0.0
+        self._last_progress_at: float = 0.0
         self._last_request_at: float = 0.0
         self._last_control_call_deadline: float = 0.0
         self._inflight_future: concurrent.futures.Future[Any] | None = None
@@ -575,6 +577,7 @@ class AcpClient:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            start_new_session=True,
         )
 
         self._reader_task = asyncio.create_task(self._reader())
@@ -644,6 +647,7 @@ class AcpClient:
             future = self._pending.pop(msg["id"], None)
             if future is not None and not future.done():
                 future.set_result(msg)
+                self._last_progress_at = time.monotonic()
 
     async def _stderr_drain(self) -> None:
         """Discard stderr so the ACP process never blocks on a full pipe."""
@@ -664,6 +668,9 @@ class AcpClient:
         update = params.get("update", {})
         if not session_id:
             return
+
+        with self._lock:
+            self._last_progress_at = time.monotonic()
 
         prompt = self._active_prompts.get(session_id)
         if prompt is None:
@@ -931,6 +938,7 @@ class AcpClient:
         self._active_prompts[session_id] = prompt
         with self._lock:
             self._last_stdout_at = time.monotonic()
+            self._last_progress_at = time.monotonic()
 
         # If a cancel arrived before we registered the prompt, honor it now.
         if session_id in self._pending_cancels:
@@ -1076,13 +1084,22 @@ class AcpClient:
         except Exception:
             logger.exception("Failed to send soft timeout cancel for %s", prompt.session_id)
 
+    def _kill_process_group(self, proc: asyncio.subprocess.Process) -> None:
+        """Kill the child and any spawned descendants."""
+        try:
+            proc.kill()
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            # Already gone or process group no longer valid.
+            pass
+
     async def _close_transport(self) -> None:
         if self._proc is not None and self._proc.returncode is None:
             self._proc.terminate()
             try:
                 await asyncio.wait_for(self._proc.wait(), timeout=5.0)
             except TimeoutError:
-                self._proc.kill()
+                self._kill_process_group(self._proc)
 
     def _stop_watchdog(self) -> None:
         """Signal the watchdog thread to stop and wait briefly."""
@@ -1116,7 +1133,7 @@ class AcpClient:
 
             now = time.monotonic()
             deadline = self._inflight_deadline
-            last_stdout = self._last_stdout_at
+            last_progress = self._last_progress_at
             last_request = self._last_request_at
             call_deadline = self._last_control_call_deadline
             has_prompt = bool(self._active_prompts)
@@ -1128,11 +1145,12 @@ class AcpClient:
             return
 
         if has_prompt:
-            # Only kill a prompt after it has exceeded its own soft/hard
-            # timeout plus a short grace, and has produced no output for at
-            # least the transport watchdog timeout. This keeps the watchdog
-            # from killing long, legitimately silent prompts before the soft
-            # timeout has had a chance to cancel them gracefully.
+            # Kill a prompt if it has exceeded its own soft/hard timeout plus a
+            # short grace, or if it has produced no output for at least the
+            # transport watchdog timeout. This prevents a child that ignores the
+            # soft timeout's cancel notification from running forever, while still
+            # giving long, legitimately silent prompts a chance to be cancelled
+            # gracefully.
             kill_at = float("inf")
             for prompt in self._active_prompts.values():
                 limit = (
@@ -1142,17 +1160,21 @@ class AcpClient:
                 )
                 prompt_kill_at = prompt.started_at + max(self._watchdog_timeout, limit + 30.0)
                 kill_at = min(kill_at, prompt_kill_at)
-            if now > kill_at and now - last_stdout > self._watchdog_timeout:
-                logger.warning(
-                    "ACP prompt produced no output for %ss; watchdog recovering",
-                    self._watchdog_timeout,
-                )
+            if now > kill_at or now - last_progress > self._watchdog_timeout:
+                if now > kill_at:
+                    logger.warning("ACP prompt exceeded its soft/hard timeout; watchdog recovering")
+                else:
+                    logger.warning(
+                        "ACP prompt produced no progress for %ss; watchdog recovering",
+                        self._watchdog_timeout,
+                    )
                 self._stall_recovery()
                 return
 
         # The `_pending` map also holds the future for an in-flight prompt, so
         # only use the request timing for non-prompt control calls. Prompts are
-        # allowed to run for up to `self.timeout` as long as they keep printing.
+        # allowed to run for up to `self.timeout` as long as they keep producing
+        # progress (chunks/updates).
         if has_pending and not has_prompt:
             if call_deadline and now > call_deadline:
                 logger.warning(
@@ -1207,7 +1229,7 @@ class AcpClient:
             if self._proc is not None and self._proc.returncode is None:
                 try:
                     logger.warning("Killing unresponsive ACP process %s", self._proc.pid)
-                    self._proc.kill()
+                    self._kill_process_group(self._proc)
                     if self.metrics is not None:
                         self.metrics.inc("acp_transport_killed_total")
                 except Exception:
