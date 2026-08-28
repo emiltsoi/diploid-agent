@@ -5,7 +5,11 @@ legacy ConversationHarness by delegating turn logic to TurnController while
 keeping the service container and non-turn API on AgentRuntime.
 """
 
+import threading
+import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from diploid_agent.config import (
     Config,
@@ -15,6 +19,7 @@ from diploid_agent.config import (
     PlanConfig,
     Secrets,
 )
+from diploid_agent.engine.base import AgentEngine, TurnRequest, TurnResult
 from diploid_agent.harness import ConversationHarness
 from diploid_agent.runtime import AgentRuntime, TurnController
 from diploid_agent.transport.base import RuntimeAPI
@@ -129,3 +134,66 @@ def test_conversation_harness_delegates_to_runtime(tmp_path: Path) -> None:
         "_telegram_message_registry_path",
     ):
         assert hasattr(harness, name)
+
+
+class _ChunkingEngine(AgentEngine):
+    """Fake engine that emits a chunk from a background thread.
+
+    If the TurnController holds the runtime RLock while the engine prompt
+    runs, the on_chunk callback will deadlock. This only completes when the
+    lock is correctly released during the engine call.
+    """
+
+    def prompt(
+        self,
+        request: TurnRequest,
+        *,
+        session_id: str | None = None,
+        on_chunk: Callable[[str], None] | None = None,
+        on_update: Callable[[dict[str, Any]], None] | None = None,
+    ) -> TurnResult:
+        def _emit() -> None:
+            time.sleep(0.05)
+            if on_chunk is not None:
+                on_chunk("chunk")
+
+        thread = threading.Thread(target=_emit)
+        thread.start()
+        thread.join()
+        return TurnResult(reply="ok", session_id="s-1")
+
+    def cancel(self, session_id: str) -> None:
+        pass
+
+    def list_models(self) -> list[str]:
+        return ["swe-1-7"]
+
+    def session_alive(self, session_id: str) -> bool:
+        return True
+
+    def close(self) -> None:
+        pass
+
+    def restart(self) -> None:
+        pass
+
+    def restart_transport(self) -> None:
+        pass
+
+    def is_stale_session_error(self, exc: BaseException) -> bool:
+        return False
+
+    def model_context_window(self, model: str) -> int | None:
+        return None
+
+
+def test_process_releases_runtime_lock_for_streaming_chunks(tmp_path: Path) -> None:
+    runtime = AgentRuntime(_make_config(tmp_path))
+    runtime.engine = _ChunkingEngine()
+
+    start = time.perf_counter()
+    result = runtime.process("chat-1", "hello")
+    elapsed = time.perf_counter() - start
+
+    assert result.reply == "ok"
+    assert elapsed < 1.0

@@ -1,6 +1,7 @@
 """Tests for configuration loading."""
 
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -72,7 +73,8 @@ def test_mcp_config_parses() -> None:
     assert config.harness.mcp.default_enabled == ["github"]
 
 
-def test_config_loads_acp_backend(tmp_path: Path) -> None:
+def test_config_loads_acp_backend(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     config_path = tmp_path / "config.yaml"
     secrets_path = tmp_path / "secrets.env"
     secrets_path.write_text("TELEGRAM_BOT_TOKEN=tok\n")

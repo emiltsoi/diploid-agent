@@ -59,6 +59,8 @@ class _Prompt:
     text: str
     future: asyncio.Future[dict[str, Any]]
     cancel_done: asyncio.Future[None]
+    soft_timeout: float | None = None
+    started_at: float = dataclasses.field(default_factory=time.monotonic)
     chunks: list[str] = dataclasses.field(default_factory=list)
     updates: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     on_chunk: Callable[[str], None] | None = None
@@ -126,6 +128,7 @@ class AcpClient:
         permission_mode: str = "dangerous",
         timeout: float = 900.0,
         startup_timeout: float = 30.0,
+        control_timeout: float = 120.0,
         watchdog_interval: float = 10.0,
         watchdog_timeout: float = 120.0,
         agent_bin: str | Path = "~/.local/bin/devin",
@@ -159,6 +162,7 @@ class AcpClient:
         self._watchdog_timeout = watchdog_timeout
         self._last_stdout_at: float = 0.0
         self._last_request_at: float = 0.0
+        self._last_control_call_deadline: float = 0.0
         self._inflight_future: concurrent.futures.Future[Any] | None = None
         self._inflight_deadline: float = 0.0
         self._next_id = 0
@@ -168,7 +172,7 @@ class AcpClient:
         self._lock = threading.RLock()
         self._initialized = False
         self._transport_healthy = False
-        self._control_timeout = 120.0
+        self._control_timeout = control_timeout
         self._startup_timeout = startup_timeout
         self._model_options: list[str] | None = None
         self._devin_home: Path | None = None
@@ -364,16 +368,19 @@ class AcpClient:
         return self._run(self._list_models(), timeout=60.0)
 
     def health(self) -> bool:
-        """Return True if the ACP transport is initialized and healthy."""
-        if not self._initialized or not self._transport_healthy:
-            return False
-        if self._model_options is not None:
-            return True
-        try:
-            self._run(self._list_models(), timeout=10.0)
-            return True
-        except Exception:  # noqa: BLE001
-            return False
+        """Return True if the ACP transport is initialized and healthy.
+
+        Avoid making a live ACP call here: the event loop may be busy with a
+        long prompt or a slow ``session/new``.  Those calls have their own
+        timeouts; a blocking health probe would only cause the harness
+        watchdog to misfire and restart a legitimately busy service.
+        """
+        return (
+            self._initialized
+            and self._transport_healthy
+            and self._proc is not None
+            and self._proc.returncode is None
+        )
 
     def session_alive(self, session_id: str) -> bool:
         """Probe whether an ACP session id is still valid."""
@@ -458,6 +465,10 @@ class AcpClient:
     def _ensure_started(self) -> None:
         with self._lock:
             if self._initialized:
+                if self._watchdog_thread is None or not self._watchdog_thread.is_alive():
+                    self._watchdog_running = True
+                    self._watchdog_thread = threading.Thread(target=self._watchdog, daemon=True)
+                    self._watchdog_thread.start()
                 return
 
             self._loop = asyncio.new_event_loop()
@@ -500,12 +511,14 @@ class AcpClient:
             timeout = self.timeout
 
         deadline = time.monotonic() + timeout
-        future: concurrent.futures.Future[Any] = asyncio.run_coroutine_threadsafe(
-            coro, self._loop
-        )
+        future: concurrent.futures.Future[Any] = asyncio.run_coroutine_threadsafe(coro, self._loop)
         with self._lock:
             self._inflight_future = future
             self._inflight_deadline = deadline
+            if self._watchdog_thread is not None and not self._watchdog_thread.is_alive():
+                self._watchdog_running = True
+                self._watchdog_thread = threading.Thread(target=self._watchdog, daemon=True)
+                self._watchdog_thread.start()
         try:
             result = future.result(timeout=timeout + 5.0)
             self._transport_healthy = True
@@ -720,12 +733,22 @@ class AcpClient:
         }
         future = self._loop.create_future()
         self._pending[msg_id] = future
+        call_timeout = timeout or self._control_timeout
+        with self._lock:
+            self._last_request_at = time.monotonic()
+            self._last_control_call_deadline = time.monotonic() + call_timeout
         try:
             await self._send(msg, timeout=timeout)
-            resp = await asyncio.wait_for(future, timeout=timeout or self._control_timeout)
+            with self._lock:
+                # _send succeeded; reset the per-call deadline for the response wait.
+                self._last_control_call_deadline = time.monotonic() + call_timeout
+            resp = await asyncio.wait_for(future, timeout=call_timeout)
         except TimeoutError:
             self._pending.pop(msg_id, None)
             raise
+        finally:
+            with self._lock:
+                self._last_control_call_deadline = 0.0
         if "error" in resp:
             raise RuntimeError(f"ACP {method} failed: {resp['error']}")
         return resp.get("result")
@@ -806,9 +829,12 @@ class AcpClient:
             cwd.mkdir(parents=True, exist_ok=True)
 
         normalized_mcp_servers = self._normalize_mcp_servers(mcp_servers)
+        # session/new can be slow when MCP servers are starting, so give it more
+        # headroom than a typical control call.
         session = await self._call(
             "session/new",
             {"cwd": use_cwd, "mcpServers": normalized_mcp_servers},
+            timeout=max(240.0, self._control_timeout),
         )
         session_id = session["sessionId"]
 
@@ -895,11 +921,14 @@ class AcpClient:
             text=text,
             future=self._loop.create_future(),
             cancel_done=self._loop.create_future(),
+            soft_timeout=soft_timeout,
             on_chunk=on_chunk,
             on_update=on_update,
         )
         self._pending[prompt_id] = prompt.future
         self._active_prompts[session_id] = prompt
+        with self._lock:
+            self._last_stdout_at = time.monotonic()
 
         # If a cancel arrived before we registered the prompt, honor it now.
         if session_id in self._pending_cancels:
@@ -1070,7 +1099,10 @@ class AcpClient:
                     break
                 interval = self._watchdog_interval
             time.sleep(interval)
-            self._check_watchdog()
+            try:
+                self._check_watchdog()
+            except Exception:
+                logger.exception("ACP watchdog check failed")
 
     def _check_watchdog(self) -> None:
         """Detect unresponsive ACP transport and trigger recovery."""
@@ -1084,28 +1116,56 @@ class AcpClient:
             deadline = self._inflight_deadline
             last_stdout = self._last_stdout_at
             last_request = self._last_request_at
+            call_deadline = self._last_control_call_deadline
             has_prompt = bool(self._active_prompts)
             has_pending = bool(self._pending)
-            timeout = self._watchdog_timeout
 
         if now > deadline:
             logger.warning("ACP call exceeded its deadline; watchdog recovering")
             self._stall_recovery()
             return
 
-        if has_prompt and now - last_stdout > timeout:
-            logger.warning(
-                "ACP prompt produced no output for %ss; watchdog recovering", timeout
-            )
-            self._stall_recovery()
-            return
+        if has_prompt:
+            # Only kill a prompt after it has exceeded its own soft/hard
+            # timeout plus a short grace, and has produced no output for at
+            # least the transport watchdog timeout. This keeps the watchdog
+            # from killing long, legitimately silent prompts before the soft
+            # timeout has had a chance to cancel them gracefully.
+            kill_at = float("inf")
+            for prompt in self._active_prompts.values():
+                limit = (
+                    prompt.soft_timeout
+                    if prompt.soft_timeout is not None and prompt.soft_timeout > 0
+                    else self.timeout
+                )
+                prompt_kill_at = prompt.started_at + max(self._watchdog_timeout, limit + 30.0)
+                kill_at = min(kill_at, prompt_kill_at)
+            if now > kill_at and now - last_stdout > self._watchdog_timeout:
+                logger.warning(
+                    "ACP prompt produced no output for %ss; watchdog recovering",
+                    self._watchdog_timeout,
+                )
+                self._stall_recovery()
+                return
 
-        if has_pending and now - last_request > self._control_timeout:
-            logger.warning(
-                "ACP control call produced no response for %ss; watchdog recovering",
-                self._control_timeout,
-            )
-            self._stall_recovery()
+        # The `_pending` map also holds the future for an in-flight prompt, so
+        # only use the request timing for non-prompt control calls. Prompts are
+        # allowed to run for up to `self.timeout` as long as they keep printing.
+        if has_pending and not has_prompt:
+            if call_deadline and now > call_deadline:
+                logger.warning(
+                    "ACP control call produced no response for %.1fs; watchdog recovering",
+                    now - last_request,
+                )
+                self._stall_recovery()
+                return
+            if not call_deadline and now - last_request > self._control_timeout:
+                logger.warning(
+                    "ACP control call produced no response for %ss; watchdog recovering",
+                    self._control_timeout,
+                )
+                self._stall_recovery()
+                return
 
     def _stall_recovery(self) -> None:
         """Kill the ACP child and unblock the in-flight caller."""
@@ -1117,9 +1177,7 @@ class AcpClient:
             inflight = self._inflight_future
             if inflight is not None and not inflight.done():
                 try:
-                    inflight.set_exception(
-                        TimeoutError("ACP transport watchdog detected a stall")
-                    )
+                    inflight.set_exception(TimeoutError("ACP transport watchdog detected a stall"))
                 except Exception:
                     logger.exception("Failed to interrupt in-flight ACP future")
 
@@ -1133,9 +1191,7 @@ class AcpClient:
             def _cancel_all() -> None:
                 for prompt in list(self._active_prompts.values()):
                     if self._loop is not None:
-                        self._loop.create_task(
-                            self._send_cancel_notification(prompt.session_id)
-                        )
+                        self._loop.create_task(self._send_cancel_notification(prompt.session_id))
 
             if self._loop is not None:
                 try:

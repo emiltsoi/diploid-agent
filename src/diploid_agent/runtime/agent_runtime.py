@@ -282,11 +282,14 @@ class AgentRuntime(RuntimeAPI):
 
     def _call_unlocked(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         """Release the RLock while running a long call, then reacquire."""
-        self._lock.release()
+        do_release = self._lock._is_owned()
+        if do_release:
+            self._lock.release()
         try:
             return fn(*args, **kwargs)
         finally:
-            self._lock.acquire()
+            if do_release:
+                self._lock.acquire()
 
     def call_engine_unlocked(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         """Public wrapper that releases the runtime RLock around a call.

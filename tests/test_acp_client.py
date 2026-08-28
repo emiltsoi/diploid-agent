@@ -191,7 +191,7 @@ def test_create_session_passes_mcp_servers(monkeypatch, tmp_path: Path) -> None:
     client._loop = asyncio.new_event_loop()
     calls: list[tuple[str, Any]] = []
 
-    async def fake_call(method: str, params: Any) -> Any:
+    async def fake_call(method: str, params: Any, timeout: float | None = None) -> Any:
         calls.append((method, params))
         if method == "session/new":
             return {"sessionId": "s-1", "configOptions": []}
@@ -382,3 +382,109 @@ def test_normalize_mcp_servers_rewrites_lean_ctx(tmp_path: Path) -> None:
 
     assert out[1]["name"] == "diploid-memory"
     assert out[1]["command"] == "python"
+
+
+def test_watchdog_waits_for_prompt_soft_timeout() -> None:
+    """The prompt inactivity watchdog does not fire before soft_timeout."""
+    client = AcpClient(agent_bin="/bin/true", api_key="test-key", watchdog_timeout=0.01)
+    client._control_timeout = 0.05
+    client._loop = asyncio.new_event_loop()
+    client._proc = FakeProcess()  # type: ignore[assignment]
+    client._watchdog_running = True
+
+    now = time.monotonic()
+    inflight: concurrent.futures.Future[Any] = concurrent.futures.Future()
+    client._inflight_future = inflight
+    client._inflight_deadline = now + 60.0
+    client._last_stdout_at = now
+
+    loop = asyncio.new_event_loop()
+    prompt = _Prompt(
+        session_id="s-1",
+        prompt_id=1,
+        text="hi",
+        future=loop.create_future(),
+        cancel_done=loop.create_future(),
+        soft_timeout=10.0,
+        started_at=now,
+    )
+    client._active_prompts["s-1"] = prompt
+
+    client._check_watchdog()
+
+    assert not inflight.done()
+
+
+def test_watchdog_kills_after_prompt_soft_timeout() -> None:
+    """The prompt inactivity watchdog fires after the soft timeout + grace."""
+    client = AcpClient(agent_bin="/bin/true", api_key="test-key", watchdog_timeout=0.01)
+    client._control_timeout = 0.05
+    client._loop = asyncio.new_event_loop()
+    client._proc = FakeProcess()  # type: ignore[assignment]
+    client._watchdog_running = True
+
+    now = time.monotonic()
+    inflight: concurrent.futures.Future[Any] = concurrent.futures.Future()
+    client._inflight_future = inflight
+    client._inflight_deadline = now + 60.0
+    client._last_stdout_at = now - 45.0
+
+    loop = asyncio.new_event_loop()
+    prompt = _Prompt(
+        session_id="s-1",
+        prompt_id=1,
+        text="hi",
+        future=loop.create_future(),
+        cancel_done=loop.create_future(),
+        soft_timeout=10.0,
+        started_at=now - 45.0,
+    )
+    client._active_prompts["s-1"] = prompt
+
+    client._check_watchdog()
+
+    assert inflight.done()
+    assert isinstance(inflight.exception(), TimeoutError)
+    assert client._proc.returncode == -9
+
+
+def test_watchdog_respects_per_call_control_timeout() -> None:
+    """The control-call watchdog waits for the call's own deadline, not the global default."""
+    client = AcpClient(agent_bin="/bin/true", api_key="test-key", control_timeout=0.01)
+    client._watchdog_running = True
+    client._loop = asyncio.new_event_loop()
+    client._proc = FakeProcess()  # type: ignore[assignment]
+
+    now = time.monotonic()
+    inflight: concurrent.futures.Future[Any] = concurrent.futures.Future()
+    client._inflight_future = inflight
+    client._inflight_deadline = now + 60.0
+    client._last_request_at = now - 25.0
+    client._last_control_call_deadline = now + 60.0
+    client._pending[1] = client._loop.create_future()
+
+    client._check_watchdog()
+
+    assert not inflight.done()
+
+
+def test_watchdog_kills_per_call_control_timeout() -> None:
+    """The control-call watchdog fires when the per-call deadline is exceeded."""
+    client = AcpClient(agent_bin="/bin/true", api_key="test-key", control_timeout=120.0)
+    client._watchdog_running = True
+    client._loop = asyncio.new_event_loop()
+    client._proc = FakeProcess()  # type: ignore[assignment]
+
+    now = time.monotonic()
+    inflight: concurrent.futures.Future[Any] = concurrent.futures.Future()
+    client._inflight_future = inflight
+    client._inflight_deadline = now + 60.0
+    client._last_request_at = now - 25.0
+    client._last_control_call_deadline = now - 1.0
+    client._pending[1] = client._loop.create_future()
+
+    client._check_watchdog()
+
+    assert inflight.done()
+    assert isinstance(inflight.exception(), TimeoutError)
+    assert client._proc.returncode == -9

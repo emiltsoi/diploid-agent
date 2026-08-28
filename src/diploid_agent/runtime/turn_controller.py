@@ -460,7 +460,8 @@ class TurnController:
                 else:
                     is_short_circuit = False
                     if is_new:
-                        result = self.runtime.engine.prompt(
+                        result = self.runtime.call_engine_unlocked(
+                            self.runtime.engine.prompt,
                             call_ctx.request,
                             on_chunk=call_ctx.on_chunk,
                             on_update=call_ctx.on_update,
@@ -468,7 +469,8 @@ class TurnController:
                         active.session_id = result.session_id
                         session_id = result.session_id
                     else:
-                        result = self.runtime.engine.prompt(
+                        result = self.runtime.call_engine_unlocked(
+                            self.runtime.engine.prompt,
                             call_ctx.request,
                             session_id=call_ctx.session_id or old_record.session_id,
                             on_chunk=call_ctx.on_chunk,
@@ -529,7 +531,8 @@ class TurnController:
                 memory_flags = pctx.memory_flags
                 use_model = pctx.model or use_model
                 try:
-                    result, session_id = self.runtime._start_new_session(
+                    result, session_id = self.runtime.call_engine_unlocked(
+                        self.runtime._start_new_session,
                         chat_id,
                         prompt,
                         use_model,
@@ -542,7 +545,8 @@ class TurnController:
                         chat_id,
                     )
                     self.runtime.engine.restart()
-                    result, session_id = self.runtime._start_new_session(
+                    result, session_id = self.runtime.call_engine_unlocked(
+                        self.runtime._start_new_session,
                         chat_id,
                         prompt,
                         use_model,
@@ -579,7 +583,8 @@ class TurnController:
                 memory_flags = pctx.memory_flags
                 use_model = pctx.model or use_model
                 try:
-                    result, session_id = self.runtime._start_new_session(
+                    result, session_id = self.runtime.call_engine_unlocked(
+                        self.runtime._start_new_session,
                         chat_id,
                         prompt,
                         use_model,
@@ -592,7 +597,8 @@ class TurnController:
                         chat_id,
                     )
                     self.runtime.engine.restart()
-                    result, session_id = self.runtime._start_new_session(
+                    result, session_id = self.runtime.call_engine_unlocked(
+                        self.runtime._start_new_session,
                         chat_id,
                         prompt,
                         use_model,
@@ -971,7 +977,8 @@ class TurnController:
                     is_short_circuit = True
                 else:
                     is_short_circuit = False
-                    turn_result = self.runtime.engine.prompt(
+                    turn_result = self.runtime.call_engine_unlocked(
+                        self.runtime.engine.prompt,
                         call_ctx.request,
                         session_id=call_ctx.session_id or old_record.session_id,
                         on_chunk=call_ctx.on_chunk,
@@ -1030,7 +1037,8 @@ class TurnController:
                 memory_flags = pctx.memory_flags
                 use_model = pctx.model or use_model
                 try:
-                    turn_result, session_id = self.runtime._start_new_session(
+                    turn_result, session_id = self.runtime.call_engine_unlocked(
+                        self.runtime._start_new_session,
                         chat_id,
                         prompt,
                         use_model,
@@ -1043,7 +1051,8 @@ class TurnController:
                         chat_id,
                     )
                     self.runtime.engine.restart()
-                    turn_result, session_id = self.runtime._start_new_session(
+                    turn_result, session_id = self.runtime.call_engine_unlocked(
+                        self.runtime._start_new_session,
                         chat_id,
                         prompt,
                         use_model,
@@ -1073,7 +1082,8 @@ class TurnController:
                 memory_flags = pctx.memory_flags
                 use_model = pctx.model or use_model
                 try:
-                    turn_result, session_id = self.runtime._start_new_session(
+                    turn_result, session_id = self.runtime.call_engine_unlocked(
+                        self.runtime._start_new_session,
                         chat_id,
                         prompt,
                         use_model,
@@ -1086,7 +1096,8 @@ class TurnController:
                         chat_id,
                     )
                     self.runtime.engine.restart()
-                    turn_result, session_id = self.runtime._start_new_session(
+                    turn_result, session_id = self.runtime.call_engine_unlocked(
+                        self.runtime._start_new_session,
                         chat_id,
                         prompt,
                         use_model,

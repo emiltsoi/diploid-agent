@@ -11,6 +11,10 @@ from diploid_agent.runtime.instance import InstanceManager
 mp.set_start_method("spawn", force=True)
 
 
+def _do_nothing() -> None:
+    pass
+
+
 def _acquire_and_hold(
     sessions_root: Path,
     chat_id: str,
@@ -148,3 +152,16 @@ def test_different_thread_in_same_process_cannot_reenter(tmp_path: Path) -> None
         im.release("chat-1")
     else:
         im.release("chat-1")
+
+
+def test_pid_alive_treats_zombie_as_dead() -> None:
+    child = mp.Process(target=_do_nothing)
+    child.start()
+    child.terminate()
+    # Give the OS a moment to deliver the signal.
+    time.sleep(0.1)
+
+    im = InstanceManager(Path("/tmp"), "i-1")
+    # The child PID may still exist as a zombie before join() reaps it.
+    assert im._pid_alive(child.pid) is False
+    child.join(timeout=5)

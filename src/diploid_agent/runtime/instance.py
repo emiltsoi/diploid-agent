@@ -81,9 +81,19 @@ class InstanceManager:
     def _pid_alive(self, pid: int) -> bool:
         try:
             os.kill(pid, 0)
-            return True
         except (OSError, ProcessLookupError):
             return False
+        try:
+            status_path = Path(f"/proc/{pid}/status")
+            if not status_path.exists():
+                # /proc may not exist in some environments; fall back to kill only.
+                return True
+            for line in status_path.read_text().splitlines():
+                if line.startswith("State:"):
+                    return line.split()[1] != "Z"
+        except (OSError, ValueError, IndexError):
+            pass
+        return True
 
     def is_held(self, chat_id: str) -> bool:
         data = self._read_lock(chat_id)

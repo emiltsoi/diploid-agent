@@ -70,6 +70,7 @@ class AcpEngine(AgentEngine):
             permission_mode=config.permission_mode,
             timeout=config.timeout,
             startup_timeout=config.acp_startup_timeout,
+            control_timeout=config.acp_control_timeout,
             watchdog_interval=config.acp_watchdog_interval,
             watchdog_timeout=config.acp_watchdog_timeout,
             agent_bin=config.bin,

@@ -35,7 +35,12 @@ class EngineConfig(BaseModel):
     soft_timeout: float | None = 600.0  # seconds before auto-cancel + partial reply; None disables
     acp_startup_timeout: float = 30.0  # seconds to wait for `devin acp` initialize handshake
     acp_watchdog_interval: float = 10.0  # seconds between ACP transport watchdog checks
-    acp_watchdog_timeout: float = 120.0  # seconds without ACP prompt output before the watchdog kills the child
+    acp_watchdog_timeout: float = (
+        120.0  # seconds without ACP prompt output before the watchdog kills the child
+    )
+    acp_control_timeout: float = (
+        120.0  # seconds without a control-call response before the transport is reset
+    )
     continuation_triggers: list[str] = Field(
         default_factory=lambda: ["continue", "go on", "proceed", "resume"]
     )
