@@ -375,12 +375,14 @@ class AcpClient:
         timeouts; a blocking health probe would only cause the harness
         watchdog to misfire and restart a legitimately busy service.
         """
-        return (
-            self._initialized
-            and self._transport_healthy
-            and self._proc is not None
-            and self._proc.returncode is None
-        )
+        with self._lock:
+            if not self._initialized or self._proc is None or self._proc.returncode is not None:
+                return False
+            if self._inflight_future is not None and not self._inflight_future.done():
+                now = time.monotonic()
+                if now <= self._inflight_deadline:
+                    return True
+            return self._transport_healthy
 
     def session_alive(self, session_id: str) -> bool:
         """Probe whether an ACP session id is still valid."""

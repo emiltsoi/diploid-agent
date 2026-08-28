@@ -488,3 +488,45 @@ def test_watchdog_kills_per_call_control_timeout() -> None:
     assert inflight.done()
     assert isinstance(inflight.exception(), TimeoutError)
     assert client._proc.returncode == -9
+
+
+def test_health_reports_busy_despite_failed_last_call() -> None:
+    """A prompt or control call in progress should look healthy to the harness watchdog.
+
+    After a transient failure such as a stale session, ``_transport_healthy`` may
+    be False while the next call is in flight. The health probe must not return
+    False for a busy service, or the external harness watchdog will restart a
+    legitimately running turn.
+    """
+    client = AcpClient(agent_bin="/bin/true", api_key="test-key")
+    client._loop = asyncio.new_event_loop()
+    client._proc = FakeProcess()  # type: ignore[assignment]
+    client._initialized = True
+    client._transport_healthy = False
+
+    inflight: concurrent.futures.Future[Any] = concurrent.futures.Future()
+    client._inflight_future = inflight
+    client._inflight_deadline = time.monotonic() + 60.0
+
+    assert client.health() is True
+
+    # Once the call finishes and the transport is still marked unhealthy,
+    # health should reflect the actual transport state.
+    client._inflight_future = None
+    client._inflight_deadline = 0.0
+    assert client.health() is False
+
+
+def test_health_returns_false_when_deadline_exceeded() -> None:
+    """A long call that has exceeded its hard deadline is not healthy."""
+    client = AcpClient(agent_bin="/bin/true", api_key="test-key")
+    client._loop = asyncio.new_event_loop()
+    client._proc = FakeProcess()  # type: ignore[assignment]
+    client._initialized = True
+    client._transport_healthy = False
+
+    inflight: concurrent.futures.Future[Any] = concurrent.futures.Future()
+    client._inflight_future = inflight
+    client._inflight_deadline = time.monotonic() - 1.0
+
+    assert client.health() is False
