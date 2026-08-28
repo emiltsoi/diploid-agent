@@ -27,6 +27,11 @@ def build_reply_keyboard(options: list[str]) -> dict[str, Any]:
     }
 
 
+def build_keyboard_remove() -> dict[str, Any]:
+    """Return a ReplyKeyboardRemove markup."""
+    return {"remove_keyboard": True}
+
+
 def extract_ask_block(text: str) -> tuple[str, AskBlock | None]:
     """Extract a ```ask fenced JSON block from the text.
 

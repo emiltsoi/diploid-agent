@@ -1,6 +1,7 @@
 """Tests for interactive question helpers."""
 
 from diploid_agent.transport.interactive import (
+    build_keyboard_remove,
     build_reply_keyboard,
     extract_ask_block,
 )
@@ -48,3 +49,8 @@ def test_build_reply_keyboard() -> None:
     assert markup["resize_keyboard"] is True
     assert markup["one_time_keyboard"] is True
     assert markup["keyboard"] == [[{"text": "A"}], [{"text": "B"}]]
+
+
+def test_build_keyboard_remove() -> None:
+    markup = build_keyboard_remove()
+    assert markup == {"remove_keyboard": True}
