@@ -80,6 +80,18 @@ class AgentEngine(abc.ABC):
         """Return True if the exception indicates a stale session."""
         return False
 
+    def is_transport_error(self, exc: BaseException) -> bool:
+        """Return True if the exception indicates a transport-level failure."""
+        return False
+
+    def is_fatal_acp_error(self, exc: BaseException) -> bool:
+        """Return True if the exception indicates an unrecoverable ACP error."""
+        return False
+
+    def is_acp_error(self, exc: BaseException) -> bool:
+        """Return True if the exception is an ACP-specific error."""
+        return False
+
     def health(self) -> bool:
         """Return True if the engine is healthy enough to accept prompts."""
         return True

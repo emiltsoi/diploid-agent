@@ -69,6 +69,100 @@ class _Prompt:
     timed_out: bool = False
 
 
+class AcpError(RuntimeError):
+    """Base class for ACP JSON-RPC errors returned by the child process."""
+
+    def __init__(self, method: str, error: dict[str, Any]) -> None:
+        self.method = method
+        self.code = error.get("code")
+        self.message = error.get("message", "")
+        self.data = error.get("data") or {}
+        self.error = error
+        super().__init__(f"ACP {method} failed: {error}")
+
+
+class AcpTransportError(AcpError):
+    """The ACP transport itself did not respond or the child process died."""
+
+    def __init__(self, method: str, error: dict[str, Any] | None = None, msg: str = "") -> None:
+        if error is None:
+            error = {"message": msg}
+        super().__init__(method, error)
+
+
+class AcpSessionStaleError(AcpError):
+    """The ACP session id is no longer valid on an otherwise healthy transport."""
+
+
+class AcpModelError(AcpError):
+    """The requested model is not available to the ACP child."""
+
+
+class AcpMcpError(AcpError):
+    """The MCP server configuration was rejected by the ACP child."""
+
+
+def _acp_error_from_response(method: str, error: dict[str, Any]) -> AcpError:
+    """Return the appropriate typed exception for a JSON-RPC error response.
+
+    Classifier rules (from observed `devin acp` 3000.6.7 payloads):
+
+    - ``-32602`` / ``Invalid params`` with an ``mcpServers`` / ``McpServer``
+      mention in the data or message -> ``AcpMcpError``.
+    - ``-32002`` / ``Resource not found``
+      - ``data.uri`` / message starts with ``Model not found`` or mentions
+        ``model`` -> ``AcpModelError``.
+      - ``data.uri`` / message contains ``Session not found`` or a session id
+        and does *not* look like a model error -> ``AcpSessionStaleError``.
+    - Other ACP protocol or transport failures -> ``AcpError``.
+    """
+    code = error.get("code")
+    message = (error.get("message") or "").lower()
+    data = error.get("data") or {}
+    data_str = json.dumps(data, default=str).lower()
+    combined = f"{message} {data_str}"
+
+    if code == -32602:
+        if "mcp" in combined or "mcpservers" in combined:
+            return AcpMcpError(method, error)
+        return AcpError(method, error)
+
+    if code == -32002:
+        # The `data.uri` field is sometimes the human-readable detail string.
+        data_uri = str(data.get("uri", "")).lower()
+        detail = data_uri or message
+
+        # `devin acp 3000.6.7` reports a stale/non-existent session as
+        # "Model not found: <model>. Available models: " with an *empty* model
+        # list. A genuine "model not found" has a non-empty available-models list.
+        available_models_str = ""
+        if "available models:" in detail:
+            available_models_str = detail.split("available models:", 1)[1].strip(" \"\'[]").strip()
+
+        looks_like_model_error = (
+            detail.startswith("model not found")
+            or ("model" in detail and "not found" in detail)
+        )
+        if looks_like_model_error:
+            if available_models_str == "":
+                return AcpSessionStaleError(method, error)
+            return AcpModelError(method, error)
+
+        if detail.startswith("session not found") or (
+            "session" in detail and "not found" in detail
+        ):
+            return AcpSessionStaleError(method, error)
+
+        # Generic resource not found that does not name a session is probably a
+        # model or other configuration error, not a stale session.
+        if "model" in detail and available_models_str != "":
+            return AcpModelError(method, error)
+        if "session" in detail or (method and method.startswith("session/")):
+            return AcpSessionStaleError(method, error)
+
+    return AcpError(method, error)
+
+
 def _load_windsurf_api_key() -> str | None:
     """Return the Windsurf API key from env or the Devin CLI credentials file."""
     if os.environ.get("WINDSURF_API_KEY"):
@@ -131,6 +225,8 @@ class AcpClient:
         control_timeout: float = 120.0,
         watchdog_interval: float = 10.0,
         watchdog_timeout: float = 120.0,
+        max_restarts: int = 3,
+        restart_backoff_window: float = 300.0,
         agent_bin: str | Path = "~/.local/bin/devin",
         start_args: list[str] | None = None,
         api_key: str | None = None,
@@ -144,11 +240,15 @@ class AcpClient:
         self.metrics = metrics
 
         self._api_key = (
-            api_key or os.environ.get("WINDSURF_API_KEY") or os.environ.get("ACP_API_KEY")
+            api_key
+            or _load_windsurf_api_key()
+            or os.environ.get("WINDSURF_API_KEY")
+            or os.environ.get("ACP_API_KEY")
         )
         if not self._api_key:
             raise RuntimeError(
-                "No api_key provided and no WINDSURF_API_KEY or ACP_API_KEY in environment."
+                "No api_key provided and no Devin credentials or "
+                "WINDSURF_API_KEY/ACP_API_KEY in environment."
             )
 
         # Background loop state.
@@ -178,6 +278,12 @@ class AcpClient:
         self._model_options: list[str] | None = None
         self._devin_home: Path | None = None
         self._mcp_servers: list[dict[str, Any]] = []
+
+        # Restart backoff: avoid an infinite kill/restart loop when the ACP child
+        # cannot be made healthy.
+        self._max_restarts = max(0, max_restarts)
+        self._restart_backoff_window = max(1.0, restart_backoff_window)
+        self._restart_history: list[float] = []
 
         atexit.register(self.close)
 
@@ -471,7 +577,14 @@ class AcpClient:
                     future: concurrent.futures.Future[Any] = asyncio.run_coroutine_threadsafe(
                         self._close_transport(), self._loop
                     )
-                    future.add_done_callback(lambda _: self._loop.stop())
+                    def _stop_loop_soon(_: Any) -> None:
+                        if self._loop is not None and self._loop.is_running():
+                            try:
+                                self._loop.call_soon_threadsafe(self._loop.stop)
+                            except RuntimeError:
+                                pass
+
+                    future.add_done_callback(_stop_loop_soon)
                     try:
                         future.result(timeout=10.0)
                     except (RuntimeError, TimeoutError) as exc:
@@ -506,9 +619,32 @@ class AcpClient:
                 self._stderr_task = None
                 self._cleanup_devin_home()
 
+    def _check_restart_backoff(self) -> None:
+        """Raise AcpTransportError if we have restarted too many times recently."""
+        now = time.monotonic()
+        cutoff = now - self._restart_backoff_window
+        self._restart_history = [t for t in self._restart_history if t > cutoff]
+        if self._max_restarts and len(self._restart_history) >= self._max_restarts:
+            raise AcpTransportError(
+                "acp.restart",
+                msg=(
+                    f"ACP transport has been restarted {len(self._restart_history)} times "
+                    f"in the last {self._restart_backoff_window}s; giving up"
+                ),
+            )
+
+    def _record_restart_attempt(self) -> None:
+        """Record that we are about to (re)start the ACP transport."""
+        now = time.monotonic()
+        cutoff = now - self._restart_backoff_window
+        self._restart_history = [t for t in self._restart_history if t > cutoff]
+        self._restart_history.append(now)
+
     def restart_transport(self) -> None:
         """Kill the ACP subprocess and start a fresh one."""
         logger.warning("Restarting ACP transport")
+        self._check_restart_backoff()
+        self._record_restart_attempt()
         if self.metrics is not None:
             self.metrics.inc("acp_restarts_total")
         self.close()
@@ -566,7 +702,7 @@ class AcpClient:
                 try:
                     self._run(self._start_transport(), timeout=self._startup_timeout)
                     break
-                except TimeoutError as exc:
+                except AcpTransportError as exc:
                     last_exc = exc
                     logger.warning(
                         "ACP transport startup timed out (attempt %d/%d)", attempt, attempts
@@ -609,16 +745,27 @@ class AcpClient:
             result = future.result(timeout=timeout + 5.0)
             self._transport_healthy = True
             return result
-        except TimeoutError:
+        except TimeoutError as exc:
             self._transport_healthy = False
             if self.metrics is not None:
                 self.metrics.inc("acp_transport_errors_total", reason="timeout")
+            raise AcpTransportError(
+                getattr(coro, "__name__", "acp.run"),
+                msg=f"ACP call timed out after {timeout}s",
+            ) from exc
+        except AcpError as exc:
+            if isinstance(exc, AcpTransportError):
+                self._transport_healthy = False
             raise
         except RuntimeError as exc:
+            # Anything that is still a plain RuntimeError at this point is
+            # unexpected; treat it as a transport failure so the caller can
+            # restart cleanly instead of crashing the service child.
             self._transport_healthy = False
-            if self._is_stale_session_error(exc):
-                raise
-            raise TimeoutError(f"ACP transport failed: {exc}") from exc
+            raise AcpTransportError(
+                getattr(coro, "__name__", "acp.run"),
+                msg=str(exc),
+            ) from exc
         except Exception:
             self._transport_healthy = False
             raise
@@ -841,12 +988,12 @@ class AcpClient:
             with self._lock:
                 self._last_control_call_deadline = 0.0
         if "error" in resp:
-            raise RuntimeError(f"ACP {method} failed: {resp['error']}")
+            raise _acp_error_from_response(method, resp["error"])
         return resp.get("result")
 
     async def _send(self, msg: dict[str, Any], timeout: float | None = None) -> None:
         if self._proc is None or self._proc.stdin is None:
-            raise RuntimeError("ACP process not running")
+            raise AcpTransportError("acp.send", msg="ACP process not running")
         data = (json.dumps(msg, ensure_ascii=False) + "\n").encode()
         logger.debug("ACP SEND: %s", data.decode().strip()[:200])
         self._proc.stdin.write(data)
@@ -865,9 +1012,17 @@ class AcpClient:
             raise
 
     @staticmethod
-    def _is_stale_session_error(exc: RuntimeError) -> bool:
+    def _is_stale_session_error(exc: BaseException) -> bool:
         """Return True if an ACP error indicates the session id is no longer valid."""
+        if isinstance(exc, AcpSessionStaleError):
+            return True
+        if isinstance(exc, (AcpModelError, AcpMcpError, AcpTransportError)):
+            return False
         msg = str(exc).lower()
+        # Model or MCP schema failures are not stale-session signals; treating them
+        # as such leads to futile rehydration loops.
+        if "model" in msg or "mcp" in msg:
+            return False
         return "session" in msg and (
             "not found" in msg
             or "invalid" in msg
@@ -897,9 +1052,10 @@ class AcpClient:
                     "configId": "mode",
                     "value": self.acp_mode,
                 },
+                timeout=10.0,
             )
             return True
-        except RuntimeError as exc:
+        except (AcpError, RuntimeError) as exc:
             if self._is_stale_session_error(exc):
                 return False
             raise
@@ -919,13 +1075,21 @@ class AcpClient:
         if cwd is not None:
             cwd.mkdir(parents=True, exist_ok=True)
 
-        normalized_mcp_servers = self._normalize_mcp_servers(mcp_servers)
-        # session/new can be slow when MCP servers are starting, so give it more
-        # headroom than a typical control call.
+        # `devin acp` 3000.6.7+ loads MCP servers from the isolated
+        # `mcp_config.json` written by `_prepare_devin_home`.  `session/new`
+        # no longer accepts inline server definitions in its `mcpServers`
+        # parameter; passing them produces "data did not match any variant of
+        # untagged enum McpServer".  Pass an empty list and rely on the config
+        # file so the active server list is still honored.
+        # Cap session/new so a hung child restart (e.g. slow MCP server init)
+        # does not hold the harness lock for multiple minutes. The watchdog
+        # stall threshold is also bounded by _watchdog_timeout, so align the
+        # call timeout with that ceiling (at least 60s to allow normal init).
+        session_new_timeout = max(60.0, min(self._control_timeout, self._watchdog_timeout))
         session = await self._call(
             "session/new",
-            {"cwd": use_cwd, "mcpServers": normalized_mcp_servers},
-            timeout=max(240.0, self._control_timeout),
+            {"cwd": use_cwd, "mcpServers": []},
+            timeout=session_new_timeout,
         )
         session_id = session["sessionId"]
 
@@ -1103,7 +1267,7 @@ class AcpClient:
                 )
 
             if "error" in raw:
-                raise RuntimeError(f"session/prompt failed: {raw['error']}")
+                raise _acp_error_from_response("session/prompt", raw["error"])
             result = raw.get("result", {})
             stop_reason = result.get("stopReason")
             stopped_early = stop_reason in ("cancelled", "timeout")
@@ -1119,7 +1283,14 @@ class AcpClient:
                     "ACP session %s returned an empty prompt response; treating as stale",
                     session_id,
                 )
-                raise RuntimeError(f"Session {session_id} returned an empty reply (stale session)")
+                raise AcpSessionStaleError(
+                    "session/prompt",
+                    {
+                        "code": -32002,
+                        "message": "Resource not found",
+                        "data": {"uri": f"Session {session_id} returned an empty reply"},
+                    },
+                )
 
             # Mark as partial if the server stopped early (cancelled/timeout),
             # the client explicitly cancelled, or the soft/hard timeout fired.
@@ -1213,12 +1384,23 @@ class AcpClient:
             if self._inflight_future is None or self._inflight_future.done():
                 return
 
+            # If the child process has already exited, the transport is dead and
+            # recovery should start immediately.
+            if self._proc is not None and self._proc.returncode is not None:
+                logger.warning(
+                    "ACP process %s exited with code %s; watchdog recovering",
+                    self._proc.pid,
+                    self._proc.returncode,
+                )
+                self._stall_recovery()
+                return
+
             now = time.monotonic()
             deadline = self._inflight_deadline
-            last_progress = self._last_progress_at
             last_request = self._last_request_at
             call_deadline = self._last_control_call_deadline
-            has_prompt = bool(self._active_prompts)
+            active_prompts = dict(self._active_prompts)
+            has_prompt = bool(active_prompts)
             has_pending = bool(self._pending)
 
         if now > deadline:
@@ -1227,14 +1409,11 @@ class AcpClient:
             return
 
         if has_prompt:
-            # Kill a prompt if it has exceeded its own soft/hard timeout plus a
-            # short grace, or if it has produced no output for at least the
-            # transport watchdog timeout. This prevents a child that ignores the
-            # soft timeout's cancel notification from running forever, while still
-            # giving long, legitimately silent prompts a chance to be cancelled
-            # gracefully.
+            # Kill a prompt only if it has exceeded its own soft/hard timeout plus
+            # a short grace. Long, legitimately silent prompts are allowed to run
+            # up to that deadline; the watchdog is not a "no output" timer.
             kill_at = float("inf")
-            for prompt in self._active_prompts.values():
+            for prompt in active_prompts.values():
                 limit = (
                     prompt.soft_timeout
                     if prompt.soft_timeout is not None and prompt.soft_timeout > 0
@@ -1242,14 +1421,20 @@ class AcpClient:
                 )
                 prompt_kill_at = prompt.started_at + max(self._watchdog_timeout, limit + 30.0)
                 kill_at = min(kill_at, prompt_kill_at)
-            if now > kill_at or now - last_progress > self._watchdog_timeout:
-                if now > kill_at:
-                    logger.warning("ACP prompt exceeded its soft/hard timeout; watchdog recovering")
-                else:
-                    logger.warning(
-                        "ACP prompt produced no progress for %ss; watchdog recovering",
-                        self._watchdog_timeout,
-                    )
+            if now > kill_at:
+                logger.warning("ACP prompt exceeded its soft/hard timeout; watchdog recovering")
+                self._stall_recovery()
+                return
+
+            # Transport-death fallback: if the child has produced no stdout at all
+            # for an extended period while a prompt is in flight, the reader is
+            # likely dead even though the prompt's own timeout has not been reached.
+            dead_timeout = self._control_timeout + 30.0
+            if now - self._last_stdout_at > dead_timeout:
+                logger.warning(
+                    "No ACP stdout for %.1fs; watchdog recovering",
+                    now - self._last_stdout_at,
+                )
                 self._stall_recovery()
                 return
 
@@ -1265,10 +1450,10 @@ class AcpClient:
                 )
                 self._stall_recovery()
                 return
-            if not call_deadline and now - last_request > self._control_timeout:
+            if not call_deadline and now - last_request > self._watchdog_timeout:
                 logger.warning(
                     "ACP control call produced no response for %ss; watchdog recovering",
-                    self._control_timeout,
+                    self._watchdog_timeout,
                 )
                 self._stall_recovery()
                 return

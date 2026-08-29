@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from diploid_agent.acp_client import AcpPromptResult
+from diploid_agent.acp_client import AcpModelError, AcpPromptResult, AcpSessionStaleError
 from diploid_agent.config import (
     Config,
     DiploidConfig,
@@ -1216,6 +1216,91 @@ def test_harness_continue_turn_rehydrates_stale_session(monkeypatch, tmp_path: P
 
     assert result.reply == "Rehydrated."
     assert ("create",) in call_log
+
+
+def test_rehydrate_reuses_transport(monkeypatch, tmp_path: Path) -> None:
+    """A stale follow-up creates a new session without restarting the transport."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root)
+    harness = ConversationHarness(config)
+
+    create_count = [0]
+    send_count = [0]
+
+    def fake_create_session(prompt, *, cwd=None, model=None, **kwargs):
+        create_count[0] += 1
+        return AcpPromptResult(
+            reply=f"Ready {create_count[0]}.",
+            session_id=f"session-{create_count[0]}",
+        )
+
+    def fake_send_message(session_id, prompt, *, cwd=None, model=None, **kwargs):
+        send_count[0] += 1
+        if session_id == "session-1":
+            raise AcpSessionStaleError(
+                "session/prompt",
+                {"code": -32002, "message": "Session not found"},
+            )
+        return AcpPromptResult(reply=f"Follow-up {session_id}.", session_id=session_id)
+
+    restart_calls = [0]
+
+    def fake_restart():
+        restart_calls[0] += 1
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+    monkeypatch.setattr(harness.client, "send_message", fake_send_message)
+    monkeypatch.setattr(harness.client, "restart", fake_restart)
+
+    result1 = harness.process("chat-1", "hello")
+    assert result1.reply == "Ready 1."
+    assert result1.session_id == "session-1"
+
+    result2 = harness.process("chat-1", "follow-up")
+    assert result2.reply == "Ready 2."
+    assert result2.session_id == "session-2"
+    assert restart_calls[0] == 0
+
+
+def test_turn_controller_rehydration_survives_model_error(monkeypatch, tmp_path: Path) -> None:
+    """A model error during rehydration returns a ChatResult and records the stop reason."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root)
+    harness = ConversationHarness(config)
+
+    create_count = [0]
+
+    def fake_create_session(prompt, *, cwd=None, model=None, **kwargs):
+        create_count[0] += 1
+        if create_count[0] == 2:
+            raise AcpModelError(
+                "session/new",
+                {
+                    "code": -32002,
+                    "message": "Resource not found",
+                    "data": {"uri": "Model not found: unknown. Available models: 'swe-1-7'"},
+                },
+            )
+        return AcpPromptResult(reply="Ready.", session_id="session-1")
+
+    def fake_send_message(session_id, prompt, *, cwd=None, model=None, **kwargs):
+        raise AcpSessionStaleError(
+            "session/prompt",
+            {"code": -32002, "message": "Session not found"},
+        )
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+    monkeypatch.setattr(harness.client, "send_message", fake_send_message)
+
+    result1 = harness.process("chat-1", "hello")
+    assert result1.session_id == "session-1"
+
+    result2 = harness.process("chat-1", "follow-up")
+    assert isinstance(result2, ChatResult)
+    assert "Could not continue" in result2.reply
+    record = harness.runtime._active_record("chat-1")
+    assert record is not None
+    assert record.last_stop_reason == "error"
 
 
 def test_first_prompt_includes_chat_memory_block(monkeypatch, tmp_path: Path) -> None:

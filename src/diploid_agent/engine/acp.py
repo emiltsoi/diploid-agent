@@ -11,7 +11,15 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from diploid_agent.acp_client import AcpClient, AcpPromptResult
+from diploid_agent.acp_client import (
+    AcpClient,
+    AcpError,
+    AcpMcpError,
+    AcpModelError,
+    AcpPromptResult,
+    AcpSessionStaleError,
+    AcpTransportError,
+)
 from diploid_agent.config import EngineConfig
 from diploid_agent.engine.base import AgentEngine, TurnRequest, TurnResult
 
@@ -73,6 +81,8 @@ class AcpEngine(AgentEngine):
             control_timeout=config.acp_control_timeout,
             watchdog_interval=config.acp_watchdog_interval,
             watchdog_timeout=config.acp_watchdog_timeout,
+            max_restarts=config.acp_max_restarts,
+            restart_backoff_window=config.acp_restart_backoff_window,
             agent_bin=config.bin,
             start_args=start_args,
             api_key=api_key,
@@ -197,9 +207,20 @@ class AcpEngine(AgentEngine):
         self._client.close()
 
     def is_stale_session_error(self, exc: BaseException) -> bool:
+        if isinstance(exc, AcpSessionStaleError):
+            return True
         if not isinstance(exc, RuntimeError):
             return False
         return bool(self._client._is_stale_session_error(exc))  # type: ignore[attr-defined]
+
+    def is_transport_error(self, exc: BaseException) -> bool:
+        return isinstance(exc, (TimeoutError, AcpTransportError))
+
+    def is_fatal_acp_error(self, exc: BaseException) -> bool:
+        return isinstance(exc, (AcpModelError, AcpMcpError))
+
+    def is_acp_error(self, exc: BaseException) -> bool:
+        return isinstance(exc, AcpError)
 
     def model_context_window(self, model: str) -> int | None:
         """Return the context-window size for ``model`` in tokens.

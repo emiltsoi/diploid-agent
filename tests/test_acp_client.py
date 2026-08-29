@@ -10,7 +10,12 @@ import pytest
 
 from diploid_agent.acp_client import (
     AcpClient,
+    AcpMcpError,
+    AcpModelError,
     AcpPromptResult,
+    AcpSessionStaleError,
+    AcpTransportError,
+    _acp_error_from_response,
     _load_windsurf_api_key,
     _normalize_model,
     _Prompt,
@@ -185,7 +190,7 @@ def test_route_update_passes_thought_updates_to_on_update() -> None:
     assert updates[0]["sessionUpdate"] == "agent_thought_chunk"
 
 
-def test_create_session_passes_mcp_servers(monkeypatch, tmp_path: Path) -> None:
+def test_create_session_uses_empty_mcp_servers(monkeypatch, tmp_path: Path) -> None:
     client = AcpClient(agent_bin="/bin/true", api_key="test-key")
     client._loop = asyncio.new_event_loop()
     calls: list[tuple[str, Any]] = []
@@ -212,9 +217,75 @@ def test_create_session_passes_mcp_servers(monkeypatch, tmp_path: Path) -> None:
     assert result.reply == "ok"
     new_session_calls = [c for c in calls if c[0] == "session/new"]
     assert len(new_session_calls) == 1
-    assert new_session_calls[0][1]["mcpServers"] == [
-        {"name": "github", "command": "npx", "args": ["-y"], "env": {}}
-    ]
+    # `session/new` must not receive inline server definitions; the active list
+    # is communicated to `devin acp` via `mcp_config.json` instead.
+    assert new_session_calls[0][1]["mcpServers"] == []
+
+
+def test_acp_error_classifier_detects_model_error() -> None:
+    """A genuine 'Model not found' with a non-empty available list is AcpModelError."""
+    error = {
+        "code": -32002,
+        "message": "Resource not found",
+        "data": {"uri": "Model not found: unknown. Available models: 'swe-1-7, swe-1-6'"},
+    }
+    exc = _acp_error_from_response("session/set_config_option", error)
+    assert isinstance(exc, AcpModelError)
+
+
+def test_acp_error_classifier_treats_model_not_found_with_empty_list_as_stale() -> None:
+    """`devin acp 3000.6.7` misreports a stale session as Model not found with an empty list."""
+    error = {
+        "code": -32002,
+        "message": "Resource not found",
+        "data": {"uri": "Model not found: swe-1-7. Available models: "},
+    }
+    exc = _acp_error_from_response("session/set_config_option", error)
+    assert isinstance(exc, AcpSessionStaleError)
+    assert not isinstance(exc, AcpModelError)
+
+
+def test_acp_error_classifier_detects_stale_session() -> None:
+    """A 'Session not found' -32002 error is classified as AcpSessionStaleError."""
+    error = {
+        "code": -32002,
+        "message": "Resource not found",
+        "data": {"uri": "Session not found: foo-bar"},
+    }
+    exc = _acp_error_from_response("session/set_config_option", error)
+    assert isinstance(exc, AcpSessionStaleError)
+    assert not isinstance(exc, AcpModelError)
+
+
+def test_acp_error_classifier_detects_mcp_error() -> None:
+    """An invalid mcpServers -32602 error is classified as AcpMcpError."""
+    error = {
+        "code": -32602,
+        "message": "Invalid params",
+        "data": {
+            "error": "data did not match any variant of untagged enum McpServer",
+            "json": {"mcpServers": []},
+            "phase": "deserialization",
+        },
+    }
+    exc = _acp_error_from_response("session/new", error)
+    assert isinstance(exc, AcpMcpError)
+
+
+def test_is_stale_session_error_with_typed_exceptions() -> None:
+    """The stale-session guard recognises typed exceptions and rejects model/MCP."""
+    assert AcpClient._is_stale_session_error(
+        AcpSessionStaleError("session/set_config_option", {"code": -32002, "message": "x"})
+    )
+    assert not AcpClient._is_stale_session_error(
+        AcpModelError("session/set_config_option", {"code": -32002, "message": "x"})
+    )
+    assert not AcpClient._is_stale_session_error(
+        AcpMcpError("session/new", {"code": -32602, "message": "x"})
+    )
+    assert not AcpClient._is_stale_session_error(
+        AcpTransportError("acp.send", msg="ACP process not running")
+    )
 
 
 class FakeStream:
@@ -331,9 +402,9 @@ def test_watchdog_kills_stuck_process() -> None:
 
 
 def test_watchdog_kills_stuck_control_call() -> None:
-    """If a control call produces no stdout for the control timeout, the watchdog kills devin."""
-    client = AcpClient(agent_bin="/bin/true", api_key="test-key", watchdog_timeout=10.0)
-    client._control_timeout = 0.01
+    """If a control call produces no stdout for the watchdog timeout, the watchdog kills devin."""
+    client = AcpClient(agent_bin="/bin/true", api_key="test-key", watchdog_timeout=0.01)
+    client._control_timeout = 0.05
     client._loop = asyncio.new_event_loop()
     client._proc = FakeProcess()  # type: ignore[assignment]
     client._watchdog_running = True
@@ -386,6 +457,7 @@ def test_watchdog_waits_for_prompt_soft_timeout() -> None:
     client._inflight_future = inflight
     client._inflight_deadline = now + 60.0
     client._last_progress_at = now
+    client._last_stdout_at = now
 
     loop = asyncio.new_event_loop()
     prompt = _Prompt(
@@ -552,3 +624,111 @@ def test_health_returns_false_when_deadline_exceeded() -> None:
     client._inflight_deadline = time.monotonic() - 1.0
 
     assert client.health() is False
+
+
+class ExitedFakeProcess(FakeProcess):
+    """Fake process that has already exited."""
+
+    returncode = 1
+
+
+def test_watchdog_fires_when_child_process_exits() -> None:
+    """The watchdog triggers recovery immediately when the child has exited."""
+    client = AcpClient(agent_bin="/bin/true", api_key="test-key")
+    client._control_timeout = 0.05
+    client._loop = asyncio.new_event_loop()
+    client._proc = ExitedFakeProcess()  # type: ignore[assignment]
+    client._watchdog_running = True
+
+    inflight: concurrent.futures.Future[Any] = concurrent.futures.Future()
+    client._inflight_future = inflight
+    client._inflight_deadline = time.monotonic() + 60.0
+
+    client._check_watchdog()
+
+    assert inflight.done()
+    assert isinstance(inflight.exception(), TimeoutError)
+
+
+def test_watchdog_does_not_fire_for_long_silent_prompt() -> None:
+    """A prompt that has not exceeded soft_timeout + grace is not killed even
+    if it produces no progress updates."""
+    client = AcpClient(agent_bin="/bin/true", api_key="test-key", watchdog_timeout=0.01)
+    client._control_timeout = 0.05
+    client._loop = asyncio.new_event_loop()
+    client._proc = FakeProcess()  # type: ignore[assignment]
+    client._watchdog_running = True
+
+    now = time.monotonic()
+    inflight: concurrent.futures.Future[Any] = concurrent.futures.Future()
+    client._inflight_future = inflight
+    client._inflight_deadline = now + 60.0
+    client._last_progress_at = now - 115.0
+    client._last_stdout_at = now
+
+    loop = asyncio.new_event_loop()
+    prompt = _Prompt(
+        session_id="s-1",
+        prompt_id=1,
+        text="hi",
+        future=loop.create_future(),
+        cancel_done=loop.create_future(),
+        soft_timeout=120.0,
+        started_at=now - 115.0,
+    )
+    client._active_prompts["s-1"] = prompt
+
+    client._check_watchdog()
+
+    # 115s < 120s + 30s grace, so the watchdog should not fire.
+    assert not inflight.done()
+
+
+def test_watchdog_fires_when_no_stdout_for_dead_timeout() -> None:
+    """A prompt that produces no stdout for control_timeout + 30s is treated as a dead transport."""
+    client = AcpClient(agent_bin="/bin/true", api_key="test-key", watchdog_timeout=0.01)
+    client._control_timeout = 0.05
+    client._loop = asyncio.new_event_loop()
+    client._proc = FakeProcess()  # type: ignore[assignment]
+    client._watchdog_running = True
+
+    now = time.monotonic()
+    inflight: concurrent.futures.Future[Any] = concurrent.futures.Future()
+    client._inflight_future = inflight
+    client._inflight_deadline = now + 600.0
+    client._last_stdout_at = now - 40.0
+
+    loop = asyncio.new_event_loop()
+    prompt = _Prompt(
+        session_id="s-1",
+        prompt_id=1,
+        text="hi",
+        future=loop.create_future(),
+        cancel_done=loop.create_future(),
+        soft_timeout=600.0,
+        started_at=now - 40.0,
+    )
+    client._active_prompts["s-1"] = prompt
+
+    client._check_watchdog()
+
+    # With a long soft_timeout the kill_at deadline is far away, but the
+    # transport-dead fallback should fire after control_timeout + 30s.
+    assert inflight.done()
+    assert isinstance(inflight.exception(), TimeoutError)
+
+
+def test_restart_transport_backoff() -> None:
+    """restart_transport refuses to cycle more than max_restarts in the backoff window."""
+    client = AcpClient(
+        agent_bin="/bin/true",
+        api_key="test-key",
+        max_restarts=2,
+        restart_backoff_window=60.0,
+    )
+
+    # Seed the restart history with two recent restarts.
+    client._restart_history = [time.monotonic(), time.monotonic() - 1.0]
+
+    with pytest.raises(AcpTransportError):
+        client.restart_transport()

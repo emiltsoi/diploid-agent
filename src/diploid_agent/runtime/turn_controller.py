@@ -19,6 +19,7 @@ from diploid_agent.plugins.contexts import (
     DispatchCreateContext,
     EngineCallContext,
     EngineResultContext,
+    PromptContext,
     RecordTurnContext,
     SessionActiveContext,
     SessionArchiveContext,
@@ -236,6 +237,110 @@ class TurnController:
             return
         active.message_text = wake_event.payload.get("message_text") or ""
         active.thought_text = wake_event.payload.get("thought_text") or ""
+
+    def _rehydrate(
+        self,
+        chat_id: str,
+        user_message: str,
+        old_record: SessionRecord | None,
+        use_model: str,
+        *,
+        reply_to: str | None = None,
+        reply_to_is_bot: bool | None = None,
+        reply_to_message_id: int | None = None,
+        continuation_anchor: str | None = None,
+        wake_event: WakeEvent | None = None,
+        other_instance_running: bool = False,
+        on_chunk: Callable[[str], None],
+        on_update: Callable[[dict[str, Any]], None],
+        restart_first: bool = False,
+        log_prefix: str = "Rehydrating",
+    ) -> tuple[TurnResult, str, PromptContext] | ChatResult:
+        """Build a fresh prompt and start a new ACP session, with retry/back-off."""
+        pctx = self.runtime.context_builder.build_first(
+            chat_id,
+            user_message,
+            old_record,
+            model=use_model,
+            reply_to=reply_to,
+            reply_to_is_bot=reply_to_is_bot,
+            reply_to_message_id=reply_to_message_id,
+            continuation_anchor=continuation_anchor,
+            wake_event=wake_event,
+            other_instance_running=other_instance_running,
+            rehydrated=True,
+        )
+        model = pctx.model or use_model
+
+        if restart_first:
+            logger.warning("%s; restarting ACP transport for %s", log_prefix, chat_id)
+            try:
+                self.runtime.engine.restart()
+            except Exception:
+                logger.exception("Failed to restart ACP transport for %s", chat_id)
+                return ChatResult(
+                    reply="Could not restart the ACP transport.",
+                    notice="The agent is unavailable after a transport restart failure.",
+                )
+
+        for attempt in range(2):
+            try:
+                result, session_id = self.runtime.call_engine_unlocked(
+                    self.runtime._start_new_session,
+                    chat_id,
+                    pctx.prompt,
+                    model,
+                    on_chunk=on_chunk,
+                    on_update=on_update,
+                )
+                return result, session_id, pctx
+            except (RuntimeError, TimeoutError) as exc:
+                if self.runtime.engine.is_fatal_acp_error(exc) or (
+                    not isinstance(exc, TimeoutError)
+                    and self.runtime.engine.is_acp_error(exc)
+                    and not self.runtime.engine.is_stale_session_error(exc)
+                    and not self.runtime.engine.is_transport_error(exc)
+                ):
+                    logger.exception(
+                        "Unrecoverable ACP error during %s for %s", log_prefix, chat_id
+                    )
+                    if old_record is not None:
+                        old_record.last_stop_reason = "error"
+                    return ChatResult(
+                        reply=f"Could not continue: {exc}",
+                        notice="An ACP configuration error prevented the turn from completing.",
+                    )
+
+                logger.warning(
+                    "%s: ACP call failed for %s (attempt %d): %s",
+                    log_prefix,
+                    chat_id,
+                    attempt + 1,
+                    exc,
+                )
+
+                if attempt == 0:
+                    try:
+                        self.runtime.engine.restart()
+                    except Exception:
+                        logger.exception("Failed to restart ACP transport for %s", chat_id)
+                        if old_record is not None:
+                            old_record.last_stop_reason = "error"
+                        return ChatResult(
+                            reply="Could not restart the ACP transport.",
+                            notice="The agent is unavailable after a transport restart failure.",
+                        )
+                    continue
+
+                logger.error(
+                    "%s: ACP transport still unresponsive for %s after retry", log_prefix, chat_id
+                )
+                if old_record is not None:
+                    old_record.last_stop_reason = "error"
+                return ChatResult(
+                    reply="The ACP transport is not responding after multiple attempts.",
+                    notice="Please check the agent configuration and try again.",
+                )
 
     def process(
         self,
@@ -501,65 +606,51 @@ class TurnController:
                     session_id = result.session_id or session_id
                 reply = result.reply
             except (RuntimeError, TimeoutError) as exc:
-                if isinstance(exc, TimeoutError):
-                    logger.warning("ACP transport timed out for %s; restarting", chat_id)
-                    try:
-                        self.runtime.engine.restart()
-                    except Exception:
-                        logger.exception("Failed to restart ACP transport")
-                        raise
+                if isinstance(exc, TimeoutError) or self.runtime.engine.is_transport_error(exc):
+                    log_prefix = "ACP transport unresponsive"
+                    restart_first = True
                 elif self.runtime.engine.is_stale_session_error(exc):
                     stale_id = old_record.session_id if old_record else "unknown"
                     logger.warning("ACP session %s stale; rehydrating for %s", stale_id, chat_id)
+                    log_prefix = "ACP session stale"
+                    restart_first = False
+                elif self.runtime.engine.is_acp_error(exc):
+                    logger.exception("Unrecoverable ACP error for %s", chat_id)
+                    if record is not None:
+                        record.last_stop_reason = "error"
+                    return ChatResult(
+                        reply=f"Could not continue: {exc}",
+                        notice="An ACP error prevented the turn from completing.",
+                    )
                 else:
-                    raise
+                    logger.exception("Unexpected RuntimeError during ACP call for %s", chat_id)
+                    return ChatResult(
+                        reply=f"Unexpected error: {exc}",
+                        notice="The turn stopped due to an unexpected error.",
+                    )
 
-                pctx = self.runtime.context_builder.build_first(
+                ret = self._rehydrate(
                     chat_id,
                     user_message,
                     old_record,
-                    model=use_model,
+                    use_model,
                     reply_to=reply_to,
                     reply_to_is_bot=reply_to_is_bot,
                     reply_to_message_id=reply_to_message_id,
                     continuation_anchor=continuation_anchor,
                     wake_event=wake_event,
                     other_instance_running=other_instance_running,
-                    rehydrated=True,
+                    on_chunk=_on_chunk,
+                    on_update=_on_update,
+                    restart_first=restart_first,
+                    log_prefix=log_prefix,
                 )
-                prompt = pctx.prompt
+                if isinstance(ret, ChatResult):
+                    return ret
+                result, session_id, pctx = ret
                 rehydrate_notice = pctx.notice
                 memory_flags = pctx.memory_flags
                 use_model = pctx.model or use_model
-                try:
-                    result, session_id = self.runtime.call_engine_unlocked(
-                        self.runtime._start_new_session,
-                        chat_id,
-                        prompt,
-                        use_model,
-                        on_chunk=_on_chunk,
-                        on_update=_on_update,
-                    )
-                except TimeoutError:
-                    logger.warning(
-                        "ACP transport still timed out after restart for %s; retrying once",
-                        chat_id,
-                    )
-                    self.runtime.engine.restart()
-                    try:
-                        result, session_id = self.runtime.call_engine_unlocked(
-                            self.runtime._start_new_session,
-                            chat_id,
-                            prompt,
-                            use_model,
-                            on_chunk=_on_chunk,
-                            on_update=_on_update,
-                        )
-                    except TimeoutError:
-                        self.runtime.engine.restart()
-                        raise RuntimeError(
-                            "ACP transport is unresponsive after multiple restarts"
-                        )
                 is_new = True
                 active.session_id = result.session_id
                 reply = result.reply
@@ -573,46 +664,28 @@ class TurnController:
                     empty_id,
                     chat_id,
                 )
-                pctx = self.runtime.context_builder.build_first(
+                ret = self._rehydrate(
                     chat_id,
                     user_message,
                     old_record,
-                    model=use_model,
+                    use_model,
                     reply_to=reply_to,
                     reply_to_is_bot=reply_to_is_bot,
                     reply_to_message_id=reply_to_message_id,
                     continuation_anchor=continuation_anchor,
                     wake_event=wake_event,
                     other_instance_running=other_instance_running,
-                    rehydrated=True,
+                    on_chunk=_on_chunk,
+                    on_update=_on_update,
+                    restart_first=False,
+                    log_prefix="ACP empty-reply rehydration",
                 )
-                prompt = pctx.prompt
-                rehydrate_notice = pctx.notice
+                if isinstance(ret, ChatResult):
+                    return ret
+                result, session_id, pctx = ret
+                rehydrate_notice = _join_notices(rehydrate_notice, pctx.notice)
                 memory_flags = pctx.memory_flags
                 use_model = pctx.model or use_model
-                try:
-                    result, session_id = self.runtime.call_engine_unlocked(
-                        self.runtime._start_new_session,
-                        chat_id,
-                        prompt,
-                        use_model,
-                        on_chunk=_on_chunk,
-                        on_update=_on_update,
-                    )
-                except TimeoutError:
-                    logger.warning(
-                        "ACP transport timed out for %s during empty-reply rehydration",
-                        chat_id,
-                    )
-                    self.runtime.engine.restart()
-                    result, session_id = self.runtime.call_engine_unlocked(
-                        self.runtime._start_new_session,
-                        chat_id,
-                        prompt,
-                        use_model,
-                        on_chunk=_on_chunk,
-                        on_update=_on_update,
-                    )
                 is_new = True
                 active.session_id = result.session_id
                 reply = result.reply
@@ -1017,57 +1090,49 @@ class TurnController:
                     session_id = turn_result.session_id or session_id
                 reply = turn_result.reply
             except (RuntimeError, TimeoutError) as exc:
-                if isinstance(exc, TimeoutError):
-                    logger.warning("ACP transport timed out for %s; restarting", chat_id)
-                    try:
-                        self.runtime.engine.restart()
-                    except Exception:
-                        logger.exception("Failed to restart ACP transport")
-                        raise
+                if isinstance(exc, TimeoutError) or self.runtime.engine.is_transport_error(exc):
+                    log_prefix = "ACP transport unresponsive"
+                    restart_first = True
                 elif self.runtime.engine.is_stale_session_error(exc):
                     logger.warning(
                         "ACP session %s stale; rehydrating for %s",
                         old_record.session_id,
                         chat_id,
                     )
+                    log_prefix = "ACP session stale"
+                    restart_first = False
+                elif self.runtime.engine.is_acp_error(exc):
+                    logger.exception("Unrecoverable ACP error for %s", chat_id)
+                    if record is not None:
+                        record.last_stop_reason = "error"
+                    return ChatResult(
+                        reply=f"Could not continue: {exc}",
+                        notice="An ACP error prevented the turn from completing.",
+                    )
                 else:
-                    raise
+                    logger.exception("Unexpected RuntimeError during ACP call for %s", chat_id)
+                    return ChatResult(
+                        reply=f"Unexpected error: {exc}",
+                        notice="The turn stopped due to an unexpected error.",
+                    )
 
-                pctx = self.runtime.context_builder.build_first(
+                ret = self._rehydrate(
                     chat_id,
                     user_message,
                     old_record,
-                    model=use_model,
+                    use_model,
                     continuation_anchor=continuation_anchor,
-                    rehydrated=True,
+                    on_chunk=_on_chunk,
+                    on_update=_on_update,
+                    restart_first=restart_first,
+                    log_prefix=log_prefix,
                 )
-                prompt = pctx.prompt
-                rehydrate_notice = pctx.notice
+                if isinstance(ret, ChatResult):
+                    return ret
+                turn_result, session_id, pctx = ret
+                rehydrate_notice = _join_notices(rehydrate_notice, pctx.notice)
                 memory_flags = pctx.memory_flags
                 use_model = pctx.model or use_model
-                try:
-                    turn_result, session_id = self.runtime.call_engine_unlocked(
-                        self.runtime._start_new_session,
-                        chat_id,
-                        prompt,
-                        use_model,
-                        on_chunk=_on_chunk,
-                        on_update=_on_update,
-                    )
-                except TimeoutError:
-                    logger.warning(
-                        "ACP transport still timed out after restart for %s; retrying once",
-                        chat_id,
-                    )
-                    self.runtime.engine.restart()
-                    turn_result, session_id = self.runtime.call_engine_unlocked(
-                        self.runtime._start_new_session,
-                        chat_id,
-                        prompt,
-                        use_model,
-                        on_chunk=_on_chunk,
-                        on_update=_on_update,
-                    )
                 is_new = True
                 active.session_id = turn_result.session_id
                 reply = turn_result.reply
@@ -1079,41 +1144,23 @@ class TurnController:
                     empty_id,
                     chat_id,
                 )
-                pctx = self.runtime.context_builder.build_first(
+                ret = self._rehydrate(
                     chat_id,
                     user_message,
                     old_record,
-                    model=use_model,
+                    use_model,
                     continuation_anchor=continuation_anchor,
-                    rehydrated=True,
+                    on_chunk=_on_chunk,
+                    on_update=_on_update,
+                    restart_first=False,
+                    log_prefix="ACP empty-reply rehydration",
                 )
-                prompt = pctx.prompt
-                rehydrate_notice = pctx.notice
+                if isinstance(ret, ChatResult):
+                    return ret
+                turn_result, session_id, pctx = ret
+                rehydrate_notice = _join_notices(rehydrate_notice, pctx.notice)
                 memory_flags = pctx.memory_flags
                 use_model = pctx.model or use_model
-                try:
-                    turn_result, session_id = self.runtime.call_engine_unlocked(
-                        self.runtime._start_new_session,
-                        chat_id,
-                        prompt,
-                        use_model,
-                        on_chunk=_on_chunk,
-                        on_update=_on_update,
-                    )
-                except TimeoutError:
-                    logger.warning(
-                        "ACP transport timed out for %s during empty-reply rehydration",
-                        chat_id,
-                    )
-                    self.runtime.engine.restart()
-                    turn_result, session_id = self.runtime.call_engine_unlocked(
-                        self.runtime._start_new_session,
-                        chat_id,
-                        prompt,
-                        use_model,
-                        on_chunk=_on_chunk,
-                        on_update=_on_update,
-                    )
                 is_new = True
                 active.session_id = turn_result.session_id
                 reply = turn_result.reply

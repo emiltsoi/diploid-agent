@@ -197,3 +197,32 @@ def test_process_releases_runtime_lock_for_streaming_chunks(tmp_path: Path) -> N
 
     assert result.reply == "ok"
     assert elapsed < 1.0
+
+
+def test_process_queues_message_when_chat_is_busy(tmp_path: Path) -> None:
+    runtime = AgentRuntime(_make_config(tmp_path))
+    runtime.engine = _ChunkingEngine()
+
+    runtime.instance_manager.acquire("chat-1")
+    results: list[Any] = []
+
+    def _process() -> None:
+        results.append(runtime.process("chat-1", "hello"))
+
+    worker = threading.Thread(target=_process)
+    worker.start()
+    time.sleep(0.05)
+    runtime.instance_manager.release("chat-1")
+    worker.join(timeout=5.0)
+
+    assert results
+    result = results[0]
+    assert result.reply == "I'll get back to you in a moment."
+    assert result.notice == "This chat is busy; your message was queued."
+
+    pending = runtime.wake_queue.pending(chat_id="chat-1")
+    assert len(pending) == 1
+    assert pending[0].reason == "user_request"
+    assert pending[0].priority == 10
+    assert pending[0].payload["user_message"] == "hello"
+    assert pending[0].payload.get("retry_after") == 2.0

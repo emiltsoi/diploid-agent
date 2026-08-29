@@ -1431,6 +1431,10 @@ class AgentRuntime(RuntimeAPI):
     def _handle_timer_fired(self, event: Event) -> None:
         payload = event.payload
         event_id = payload["event_id"]
+        wake_event = self.wake_queue.get(event_id)
+        retry_after = self.config.harness.timer.retry_after_seconds
+        if wake_event and wake_event.payload:
+            retry_after = wake_event.payload.get("retry_after", retry_after)
         try:
             result = self.wake(
                 payload["chat_id"],
@@ -1442,18 +1446,12 @@ class AgentRuntime(RuntimeAPI):
                 # The wake did not result in a real turn. Retry the transient
                 # cases; otherwise just drop without completing.
                 if result.reply in _WAKE_RETRY_REPLIES:
-                    self.wake_queue.fail(
-                        event_id,
-                        retry_after=self.config.harness.timer.retry_after_seconds,
-                    )
+                    self.wake_queue.fail(event_id, retry_after=retry_after)
                 return
             self.wake_queue.complete(event_id)
         except Exception:
             logger.exception("Wake failed for %s", event_id)
-            self.wake_queue.fail(
-                event_id,
-                retry_after=self.config.harness.timer.retry_after_seconds,
-            )
+            self.wake_queue.fail(event_id, retry_after=retry_after)
 
     def _handle_task_completed(self, event: Event) -> None:
         payload = event.payload
@@ -1717,7 +1715,12 @@ class AgentRuntime(RuntimeAPI):
         )
         result = self.engine.prompt(request, on_chunk=on_chunk, on_update=on_update)
         if result.session_id is None:
-            raise RuntimeError("Engine returned a result without a session id")
+            from diploid_agent.acp_client import AcpError
+
+            raise AcpError(
+                "acp.create_session",
+                {"message": "Engine returned a result without a session id"},
+            )
         return result, result.session_id
 
     def _try_send_message(
@@ -2096,7 +2099,35 @@ class AgentRuntime(RuntimeAPI):
         notify: bool = True,
     ) -> ChatResult:
         if not self.instance_manager.acquire(chat_id):
-            return ChatResult(reply="Another instance is currently handling this chat.")
+            # The chat is busy with another turn. Rather than dropping the user
+            # message, queue it as a high-priority wake so it runs when the
+            # current turn releases the lock.
+            payload = {
+                "user_message": user_message,
+                "model": model,
+                "reply_to": reply_to,
+                "reply_to_is_bot": reply_to_is_bot,
+                "reply_to_message_id": reply_to_message_id,
+                "notify": True,
+                "retry_after": 2.0,
+            }
+            self.wake_queue.enqueue(
+                WakeEvent(
+                    id="",
+                    chat_id=chat_id,
+                    reason="user_request",
+                    priority=10,
+                    scheduled_at=time.time(),
+                    payload=payload,
+                    silent=False,
+                    created_at=time.time(),
+                    ready=True,
+                )
+            )
+            return ChatResult(
+                reply="I'll get back to you in a moment.",
+                notice="This chat is busy; your message was queued.",
+            )
         try:
             return self.turn_controller.process(
                 chat_id,
@@ -2180,6 +2211,12 @@ class AgentRuntime(RuntimeAPI):
                     if payload:
                         user_message += f"\n{json.dumps(payload, default=str)}"
 
+            model = payload.get("model")
+            reply_to = payload.get("reply_to")
+            reply_to_is_bot = payload.get("reply_to_is_bot")
+            reply_to_message_id = payload.get("reply_to_message_id")
+            wake_notify = payload.get("notify", not silent)
+
             if reason == "dispatch" and "dispatch_id" in payload:
                 dispatch = self.dispatch_store.get(payload["dispatch_id"])
                 if dispatch and dispatch.status == DispatchStatus.COMPLETED:
@@ -2188,8 +2225,12 @@ class AgentRuntime(RuntimeAPI):
             return self.turn_controller.process(
                 chat_id,
                 user_message,
+                model=model,
+                reply_to=reply_to,
+                reply_to_is_bot=reply_to_is_bot,
+                reply_to_message_id=reply_to_message_id,
                 wake_event=event,
-                notify=not silent,
+                notify=wake_notify,
                 other_instance_running=False,
             )
         finally:
