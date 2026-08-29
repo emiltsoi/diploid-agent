@@ -213,7 +213,7 @@ def test_create_session_passes_mcp_servers(monkeypatch, tmp_path: Path) -> None:
     new_session_calls = [c for c in calls if c[0] == "session/new"]
     assert len(new_session_calls) == 1
     assert new_session_calls[0][1]["mcpServers"] == [
-        {"name": "github", "command": "npx", "args": ["-y"], "env": []}
+        {"name": "github", "command": "npx", "args": ["-y"], "env": {}}
     ]
 
 

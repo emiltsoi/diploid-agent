@@ -177,23 +177,26 @@ class AcpClient:
         self._startup_timeout = startup_timeout
         self._model_options: list[str] | None = None
         self._devin_home: Path | None = None
+        self._mcp_servers: list[dict[str, Any]] = []
 
         atexit.register(self.close)
 
-    def _prepare_devin_home(self) -> None:
+    def _prepare_devin_home(
+        self,
+        mcp_servers: list[dict[str, Any]] | None = None,
+    ) -> None:
         """Create an isolated HOME for the ACP child process.
 
         Devin's bundled MCP config (e.g. `~/.codeium/windsurf/mcp_config.json`)
         can include MCP servers that deadlock or saturate and block `devin acp`
-        startup indefinitely. We launch the child with a sanitized home directory
-        that contains the user's `devin` permissions but an empty default MCP
-        config, so `devin` only loads the MCP servers the harness explicitly
-        sends after `session/new`.
+        startup indefinitely. We create a sanitized home directory and write the
+        active MCP server list into `mcp_config.json` before `devin acp` starts,
+        because devin 3000.6.7+ loads servers from that file.
         """
         if self._devin_home is not None and self._devin_home.exists():
             # Re-sanitize the MCP config on every (re)start in case the previous
             # `devin` child wrote to it.
-            self._write_mcp_configs()
+            self._write_mcp_configs(mcp_servers)
             return
 
         self._devin_home = Path(tempfile.mkdtemp(prefix="acp-home-"))
@@ -213,18 +216,55 @@ class AcpClient:
                 json.dumps({"version": 1, "permissions": {"allow": ["*"]}})
             )
 
-        self._write_mcp_configs()
+        self._write_mcp_configs(mcp_servers)
 
-    def _write_mcp_configs(self) -> None:
-        """Write empty default MCP configs into the isolated HOME."""
+    def _write_mcp_configs(
+        self,
+        mcp_servers: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Write MCP server definitions into the isolated HOME.
+
+        `devin acp` 3000.6.7+ loads MCP servers from `mcp_config.json` at
+        process startup, so the isolated home must contain the active servers
+        before the child is spawned.
+        """
         if self._devin_home is None:
             return
-        empty_mcp = json.dumps({"mcpServers": {}})
+
+        servers: dict[str, dict[str, Any]] = {}
+        for server in self._normalize_mcp_servers(mcp_servers):
+            name = str(server.get("name", ""))
+            if not name or server.get("disabled"):
+                continue
+            if name in servers:
+                logger.warning("Duplicate MCP server %s in active list; using last", name)
+            entry: dict[str, Any] = {
+                "command": server.get("command", "python"),
+                "args": server.get("args", []),
+            }
+            if "cwd" in server:
+                entry["cwd"] = server["cwd"]
+            env = server.get("env", [])
+            if isinstance(env, list):
+                env_dict: dict[str, str] = {}
+                for e in env:
+                    if isinstance(e, str) and "=" in e:
+                        key, value = e.split("=", 1)
+                        env_dict[key] = value
+                if env_dict:
+                    entry["env"] = env_dict
+            elif isinstance(env, dict) and env:
+                entry["env"] = dict(env)
+            if "instructions" in server:
+                entry["instructions"] = server["instructions"]
+            servers[name] = entry
+
+        mcp_config = json.dumps({"mcpServers": servers}, indent=2)
         try:
-            (self._devin_home / ".config" / "devin" / "mcp_config.json").write_text(empty_mcp)
-            (self._devin_home / ".codeium" / "windsurf" / "mcp_config.json").write_text(empty_mcp)
+            (self._devin_home / ".config" / "devin" / "mcp_config.json").write_text(mcp_config)
+            (self._devin_home / ".codeium" / "windsurf" / "mcp_config.json").write_text(mcp_config)
         except OSError:
-            logger.warning("Failed to write sanitized mcp_config.json")
+            logger.warning("Failed to write mcp_config.json")
 
     def _normalize_mcp_servers(
         self,
@@ -235,6 +275,10 @@ class AcpClient:
         `lean-ctx` has been removed from this setup because the shared daemon is
         a single point of failure and can hang `devin acp` startup. If a caller
         still passes it, strip it out and keep the other servers.
+
+        The ACP `session/new` payload expects `env` as a map of strings, while
+        the harness stores it as a list of `KEY=VALUE` strings. Convert any
+        non-empty list to a dict before sending it to the ACP child.
         """
         if not mcp_servers:
             return []
@@ -249,9 +293,31 @@ class AcpClient:
                     "lean-ctx MCP server requested but is disabled in this setup; dropping"
                 )
                 continue
+            server = dict(server)
+            env = server.get("env")
+            if isinstance(env, list):
+                env_map: dict[str, str] = {}
+                for entry in env:
+                    if isinstance(entry, str) and "=" in entry:
+                        key, value = entry.split("=", 1)
+                        env_map[key] = value
+                server["env"] = env_map
             out.append(server)
 
         return out
+
+    def _mcp_servers_key(self, mcp_servers: list[dict[str, Any]]) -> str:
+        """Return a stable comparison key for a list of MCP server definitions."""
+        simplified = [
+            {
+                "name": str(s.get("name", "")),
+                "command": str(s.get("command", "")),
+                "args": list(s.get("args", [])),
+                "env": list(s.get("env", [])) if isinstance(s.get("env"), list) else dict(s.get("env", {})),
+            }
+            for s in mcp_servers
+        ]
+        return json.dumps(simplified, sort_keys=True)
 
     def _cleanup_devin_home(self) -> None:
         """Remove the isolated HOME created for the ACP child."""
@@ -277,7 +343,8 @@ class AcpClient:
         on_update: Callable[[dict[str, Any]], None] | None = None,
     ) -> AcpPromptResult:
         """Create a new ACP session, send the first prompt, return the result."""
-        self._ensure_started()
+        normalized_mcp_servers = self._normalize_mcp_servers(mcp_servers)
+        self._ensure_started(normalized_mcp_servers)
         if cwd is not None:
             cwd = Path(cwd)
         return self._run(
@@ -285,7 +352,7 @@ class AcpClient:
                 prompt_text,
                 cwd=cwd,
                 model=model,
-                mcp_servers=mcp_servers,
+                mcp_servers=normalized_mcp_servers,
                 soft_timeout=soft_timeout,
                 on_chunk=on_chunk,
                 on_update=on_update,
@@ -449,46 +516,78 @@ class AcpClient:
 
     # ---------------------------------------------------------------- internal
 
-    def _ensure_started(self) -> None:
-        with self._lock:
-            if self._initialized:
-                if self._watchdog_thread is None or not self._watchdog_thread.is_alive():
-                    self._watchdog_running = True
-                    self._watchdog_thread = threading.Thread(target=self._watchdog, daemon=True)
-                    self._watchdog_thread.start()
-                return
+    def _ensure_started(
+        self,
+        mcp_servers: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Start the ACP transport, writing the active MCP list first.
 
-            self._loop = asyncio.new_event_loop()
-            self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
-            self._thread.start()
+        If the transport is already running with a different MCP server list,
+        restart it so `devin acp` picks up the new `mcp_config.json`.
+        """
+        target = self._normalize_mcp_servers(
+            mcp_servers if mcp_servers is not None else self._mcp_servers
+        )
 
-            self._prepare_devin_home()
-
-        # Do not hold _lock while waiting for the transport to start; the
-        # background _send coroutine needs to acquire it to record request time,
-        # and holding it here would block the event loop.
-        last_exc: Exception | None = None
-        attempts = 2
-        for attempt in range(1, attempts + 1):
-            try:
-                self._run(self._start_transport(), timeout=self._startup_timeout)
-                break
-            except TimeoutError as exc:
-                last_exc = exc
-                logger.warning("ACP transport startup timed out (attempt %d/%d)", attempt, attempts)
-                self.close()
-                if attempt < attempts:
-                    with self._lock:
-                        self._loop = asyncio.new_event_loop()
-                        self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
-                        self._thread.start()
-                        self._prepare_devin_home()
+        while True:
+            with self._lock:
+                if self._initialized:
+                    if self._mcp_servers_key(target) == self._mcp_servers_key(self._mcp_servers):
+                        if self._watchdog_thread is None or not self._watchdog_thread.is_alive():
+                            self._watchdog_running = True
+                            self._watchdog_thread = threading.Thread(
+                                target=self._watchdog, daemon=True
+                            )
+                            self._watchdog_thread.start()
+                        return
+                    # MCP list changed; restart outside the lock.
+                    needs_restart = True
                 else:
-                    raise last_exc
+                    needs_restart = False
 
-        with self._lock:
-            self._initialized = True
-            self._transport_healthy = True
+                    self._loop = asyncio.new_event_loop()
+                    self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
+                    self._thread.start()
+
+                    self._prepare_devin_home(target)
+
+            if needs_restart:
+                self.close()
+                # close() sets _initialized=False and clears the transport. Loop
+                # back to start a fresh one with the new target list.
+                continue
+
+            # Do not hold _lock while waiting for the transport to start; the
+            # background _send coroutine needs to acquire it to record request time,
+            # and holding it here would block the event loop.
+            last_exc: Exception | None = None
+            attempts = 2
+            for attempt in range(1, attempts + 1):
+                try:
+                    self._run(self._start_transport(), timeout=self._startup_timeout)
+                    break
+                except TimeoutError as exc:
+                    last_exc = exc
+                    logger.warning(
+                        "ACP transport startup timed out (attempt %d/%d)", attempt, attempts
+                    )
+                    self.close()
+                    if attempt < attempts:
+                        with self._lock:
+                            self._loop = asyncio.new_event_loop()
+                            self._thread = threading.Thread(
+                                target=self._loop.run_forever, daemon=True
+                            )
+                            self._thread.start()
+                            self._prepare_devin_home(target)
+                    else:
+                        raise last_exc
+
+            with self._lock:
+                self._initialized = True
+                self._mcp_servers = target
+                self._transport_healthy = True
+            return
 
     def _run(self, coro: Any, timeout: float | None = None) -> Any:
         """Run a coroutine on the background loop and block for the result."""
