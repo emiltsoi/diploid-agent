@@ -556,6 +556,13 @@ class AcpClient:
 
         self._loop.call_soon_threadsafe(_do_cancel)
 
+    def active_session_id(self) -> str | None:
+        """Return the session id of the currently in-flight prompt, if any."""
+        if not self._active_prompts:
+            return None
+        # There should only be one active prompt per transport; return the first.
+        return next(iter(self._active_prompts.keys()), None)
+
     def list_sessions(self, *, cwd: Path | None = None) -> list[dict[str, Any]]:
         """ACP does not expose a directory-scoped session list."""
         return []

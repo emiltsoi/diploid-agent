@@ -34,6 +34,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Cap the in-memory thought stream so a runaway model cannot exhaust memory
+# or produce giant wake/auto-continue payloads and Telegram status messages.
+_MAX_THOUGHT_TEXT_CHARS = 20000
+
 
 def _join_notices(*parts: str | None) -> str | None:
     """Concatenate non-empty notice strings with a blank line between them."""
@@ -235,8 +239,10 @@ class TurnController:
         """Pre-populate the active turn with content from a previous partial turn."""
         if not wake_event or not isinstance(wake_event.payload, dict):
             return
-        active.message_text = wake_event.payload.get("message_text") or ""
-        active.thought_text = wake_event.payload.get("thought_text") or ""
+        message_text = wake_event.payload.get("message_text") or ""
+        thought_text = wake_event.payload.get("thought_text") or ""
+        active.message_text = message_text[-_MAX_THOUGHT_TEXT_CHARS:]
+        active.thought_text = thought_text[-_MAX_THOUGHT_TEXT_CHARS:]
 
     def _rehydrate(
         self,
@@ -497,6 +503,8 @@ class TurnController:
                 a = self.runtime._active_turns.get(chat_id)
                 if a:
                     a.message_text += text
+                    if len(a.message_text) > _MAX_THOUGHT_TEXT_CHARS:
+                        a.message_text = a.message_text[-_MAX_THOUGHT_TEXT_CHARS:]
             if a:
                 with a._condition:
                     a._condition.notify_all()
@@ -518,6 +526,8 @@ class TurnController:
                 a = self.runtime._active_turns.get(chat_id)
                 if a:
                     a.thought_text += text
+                    if len(a.thought_text) > _MAX_THOUGHT_TEXT_CHARS:
+                        a.thought_text = a.thought_text[-_MAX_THOUGHT_TEXT_CHARS:]
             if a:
                 with a._condition:
                     a._condition.notify_all()
@@ -1001,6 +1011,8 @@ class TurnController:
                 a = self.runtime._active_turns.get(chat_id)
                 if a:
                     a.message_text += text
+                    if len(a.message_text) > _MAX_THOUGHT_TEXT_CHARS:
+                        a.message_text = a.message_text[-_MAX_THOUGHT_TEXT_CHARS:]
             if a:
                 with a._condition:
                     a._condition.notify_all()
@@ -1022,6 +1034,8 @@ class TurnController:
                 a = self.runtime._active_turns.get(chat_id)
                 if a:
                     a.thought_text += text
+                    if len(a.thought_text) > _MAX_THOUGHT_TEXT_CHARS:
+                        a.thought_text = a.thought_text[-_MAX_THOUGHT_TEXT_CHARS:]
             if a:
                 with a._condition:
                     a._condition.notify_all()
@@ -1409,15 +1423,37 @@ class TurnController:
         """Cancel an in-flight ACP turn for a chat and drain pending auto-continues."""
         with self.runtime._lock:
             active = self.runtime._active_turns.get(chat_id)
-        if active is None or active.session_id is None:
+        if active is None:
             return ChatResult(
                 reply="No running turn to stop.",
                 notice="The agent is not currently working on a reply for this chat.",
             )
+
+        # ActiveTurn.session_id is only set after the ACP call returns, so it
+        # is None while a new-session prompt is in flight. Fall back to the
+        # active record and then to whatever session the engine is currently
+        # prompting, so /stop can cancel even during the long-lived call.
+        record = self.runtime._active_record(chat_id)
+        session_id = (
+            active.session_id
+            or (record.session_id if record is not None else None)
+            or self.runtime.engine.active_session_id()
+        )
+        if session_id is None:
+            # Nothing to cancel, but still wake the active turn if it is waiting.
+            with active._condition:
+                active.stopped = True
+                active._condition.notify_all()
+            return ChatResult(
+                reply="No running turn to stop.",
+                notice="The agent is not currently working on a reply for this chat.",
+            )
+
+        active.session_id = session_id
         with active._condition:
             active.stopped = True
             active._condition.notify_all()
-        self.runtime.engine.cancel(active.session_id)
+        self.runtime.engine.cancel(session_id)
         if self.runtime.wake_queue is not None:
             count = self.runtime.wake_queue.cancel(chat_id=chat_id, reason="auto_continue")
             if count:

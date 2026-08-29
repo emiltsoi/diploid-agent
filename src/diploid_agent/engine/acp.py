@@ -196,6 +196,10 @@ class AcpEngine(AgentEngine):
     def session_alive(self, session_id: str) -> bool:
         return self._client.session_alive(session_id)
 
+    def active_session_id(self) -> str | None:
+        """Return the ACP session id currently in flight, if any."""
+        return self._client.active_session_id()
+
     def restart(self) -> None:
         self.restart_transport()
 
