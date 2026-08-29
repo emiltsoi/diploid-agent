@@ -118,6 +118,17 @@ prompt with a clear label. Long quotes are trimmed to
 - [Hindsight API contract](docs/hindsight-api-contract.md)
 - [Background dispatches and continuation](docs/dispatch.md)
 
+## Mesh support
+
+`diploid-agent` can participate in the cross-harness mesh via the [`diploid-mesh`](https://github.com/emiltsoi/diploid-mesh) plugin:
+
+- Receives Ed25519-signed `[mesh]` webhooks on `/mesh/receive` (and the OpenClaw alias `/plugins/openclaw-mesh/webhook`).
+- Wakes the diploid runtime with mesh context so the agent can reply.
+- Exposes MCP tools (`mesh_send`, `mesh_list`, `mesh_register`, `mesh_sync`, `mesh_publish`, `mesh_health`, `mesh_deregister`).
+- Shares the same `mesh-peer-registry` and local vault format with [`hermes-mesh`](https://github.com/emiltsoi/hermes-mesh) and [`openclaw-mesh`](https://github.com/emiltsoi/openclaw-mesh), so a diploid agent can exchange messages with Hermes and OpenClaw agents using the same envelope and signatures.
+
+See the [`diploid-mesh` README](https://github.com/emiltsoi/diploid-mesh/blob/main/README.md) for install, vault setup, and `harness.yaml` configuration.
+
 ## Important caveats
 
 - Authentication is handled by the configured engine (`devin auth login` or
