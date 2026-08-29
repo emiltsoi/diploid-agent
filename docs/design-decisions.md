@@ -100,20 +100,24 @@ agent to manually prune the transcript.
 
 ## Why MCP servers are configured in the harness, not in the ACP wrapper
 
-The ACP `session/new` call accepts a `mcpServers` list, but which servers are
-active is a chat-level policy, not a transport detail. The harness keeps the
-configured server definitions and the per-chat enabled set, and injects the right
-list at session creation time. This lets Telegram and HTTP callers enable or
-disable servers per chat without restarting the engine process.
+Which MCP servers are active is a chat-level policy, not a transport detail.
+The harness keeps the configured server definitions and the per-chat enabled set,
+writes them to an isolated `mcp_config.json` in the ACP child's `HOME`, and passes
+`mcpServers: []` to `session/new`. `devin acp` 3000.6.7+ loads its MCP servers from
+that file and rejects inline definitions in the `session/new` payload. This lets
+Telegram and HTTP callers enable or disable servers per chat, and lets the harness
+restart the ACP transport only when the active MCP list actually changes.
 
 ## Why stale-session rehydration rebuilds the full prompt
 
-When an ACP session becomes stale (`_is_stale_session_error`), the harness falls
-back to `_build_first_prompt` and starts a fresh session. The new first prompt
+When an ACP session becomes stale, the harness falls back to `_build_first_prompt`
+and creates a new ACP session on the existing transport. The new first prompt
 re-injects the persona, current memory, recalled transcript context, and the
 optional continuation anchor. This is a full context reload, not an incremental
 re-injection. It is a known cost of the stale-session fallback and is
-intentionally chosen over trying to resume a broken ACP session.
+intentionally chosen over trying to resume a broken ACP session. If the new
+session also reports a stale or transport-level error, the harness restarts the
+ACP transport and retries once.
 
 ## Why skills are files synced into the chat working directory
 

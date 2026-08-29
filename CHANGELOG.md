@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.5.0 — 2026-08-30
+
+### Summary
+Hardened ACP transport handling and stale-session recovery. The harness now
+classifies ACP errors, rehydrates stale sessions without restarting the transport
+when possible, and avoids tight kill/restart loops with a restart backoff. It also
+queues user messages when a chat is busy instead of returning an error.
+
+### Added
+- Typed ACP exceptions: `AcpError`, `AcpTransportError`, `AcpSessionStaleError`,
+  `AcpModelError`, `AcpMcpError`, plus an ACP JSON-RPC error classifier.
+- `acp_max_restarts` and `acp_restart_backoff_window` config to rate-limit ACP
+  transport restarts.
+- `last_stdout_at` transport-death fallback in the ACP prompt watchdog.
+- `user_request` wake queueing in `AgentRuntime.process` when a chat is busy.
+- Dispatch/wake payload plumbing (`model`, `reply_to`, `notify`) through
+  `AgentRuntime.wake`.
+
+### Changed
+- `AcpClient` now writes the active MCP server list to an isolated
+  `mcp_config.json` and passes `mcpServers: []` to `session/new`, matching
+  `devin acp` 3000.6.7+ behavior.
+- Stale-session rehydration in `TurnController` now reuses the existing ACP
+  transport and only restarts on a transport failure or after a second stale
+  failure from the new session.
+- Unrecoverable ACP configuration errors now return a graceful `ChatResult` and
+  set `last_stop_reason = "error"` instead of crashing the harness child.
+
 ## 0.4.0 — 2026-08-26
 
 ### Summary

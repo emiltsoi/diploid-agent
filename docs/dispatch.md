@@ -90,9 +90,10 @@ The dispatch result is retained to the chat memory with the tag `dispatch`. The
 continuation itself is recorded as a normal turn, so later turns can recall the
 outcome.
 
-If the ACP session is stale or the transport times out during the continuation,
-the harness rehydrates a new session from the local transcript and memory, just
-as it does for a normal turn.
+If the ACP session is stale during the continuation, the harness rehydrates a
+new session on the existing transport from the local transcript and memory. If
+the transport itself is unresponsive, it restarts the ACP process and then
+rehydrates, just as it does for a normal turn.
 
 ## Errors and guards
 

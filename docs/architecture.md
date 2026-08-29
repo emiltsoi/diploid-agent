@@ -141,10 +141,13 @@ for details on `/new`, `/resume`, `/branch`, `/sessions`, and auto-recovery.
    - If `reply_to` is present, the quoted text is inserted with a clear
      "In reply to ..." label and capped at `max_reply_quote_chars`.
    - Sends to the ACP engine and receives an `AcpPromptResult` with `reply`,
-     `stop_reason`, `cancelled`, and `partial`. If the ACP session is stale or
-     the transport times out, the harness restarts the ACP process (if needed),
-     rehydrates a new ACP session from the local transcript and memory, and
-     retries once.
+     `stop_reason`, `cancelled`, and `partial`. If the ACP session is stale, the
+     harness reuses the existing transport, creates a new ACP session from the
+     local transcript and memory, and continues the turn. If the transport itself
+     is unresponsive or the new session also fails, the ACP process is restarted
+     and the turn is retried once. Unrecoverable ACP errors (e.g. an unknown
+     model or rejected MCP server config) return a graceful `ChatResult` instead
+     of crashing the harness.
    - If `engine.soft_timeout` elapses before the ACP turn completes,
      `AcpClient` sends a `session/cancel` notification and the result is
      `partial=True`. The reply includes a notice prompting the user to send

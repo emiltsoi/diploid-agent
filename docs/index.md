@@ -21,6 +21,6 @@ This is the wiki for the `diploid-agent`.
 
 The harness turns an ACP-compatible agent engine (default `devin acp`) into a
 persistent, chat-scoped service with a Telegram bot, model switching, pluggable
-memory, background dispatches that
-continue when work completes, optional MCP servers and reusable skills, and a
-rich plugin lifecycle hook surface for intercepting and extending conversations.
+memory, background dispatches that continue when work completes, optional MCP
+servers and reusable skills, robust ACP transport recovery, and a rich plugin
+lifecycle hook surface for intercepting and extending conversations.

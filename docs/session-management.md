@@ -104,13 +104,20 @@ Long-running ACP turns can be interrupted mid-flight:
 
 During a normal turn, if `AcpClient.send_message` fails because the ACP session
 is stale, the harness catches the error, builds a first prompt from the current
-local state, creates a new ACP session, and continues the turn. The user does
-not need to manually type `/new` after a service restart.
+local state, and creates a new ACP session on the existing transport. The user
+does not need to manually type `/new` after a service restart.
 
-If a hard `devin.timeout` elapses and the ACP process becomes unresponsive, the
-next turn detects the `TimeoutError`, calls `AcpClient.restart_transport()` to
-kill and restart the `devin acp` process, and then rehydrates a fresh session
-from the durable transcript. The interrupted turn's `last_stop_reason` is
+If the ACP transport itself is unresponsive (a `TimeoutError` or transport
+failure), the harness calls `AcpClient.restart_transport()` to kill and restart
+the `devin acp` process, then rehydrates a fresh session from the durable
+transcript. Restart attempts are rate-limited with
+`acp_max_restarts` / `acp_restart_backoff_window` (default 3 per 300 s) to
+avoid tight kill/restart loops. The interrupted turn's `last_stop_reason` is
 stored on the session record, and a continuation trigger (`Continue`, `Go on`,
 `Proceed`, or `Resume`) inserts a prompt anchor telling the model to pick up
 where it left off.
+
+Unrecoverable ACP configuration errors (e.g. an unknown model or a rejected MCP
+server definition) are classified as `AcpModelError` / `AcpMcpError` and return
+a `ChatResult` with `last_stop_reason` set to `error` instead of crashing the
+harness.

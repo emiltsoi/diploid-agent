@@ -192,8 +192,9 @@ When a turn hits `engine.soft_timeout` (600 s by default) or is cancelled with
 
 You can reply with the literal word **Continue** (or any configured
 `continuation_triggers`), use the `/continue` command, or just send your next
-message. If the ACP process was stuck, the harness will restart it and
-rehydrate a fresh session from the durable transcript.
+message. If the ACP session was stale, the harness reuses the existing transport
+and rehydrates a fresh session from the durable transcript. If the transport
+itself was stuck, it restarts the ACP process and then rehydrates.
 
 
 ## Switching to a webhook
