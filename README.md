@@ -109,6 +109,8 @@ prompt with a clear label. Long quotes are trimmed to
 
 ## Documentation
 
+Browse the docs as a searchable site: **https://emiltsoi.github.io/diploid-agent/**
+
 - [Architecture and data flow](docs/architecture.md)
 - [Memory loop and Hindsight](docs/memory.md)
 - [State plugins and lifecycle hooks](docs/state.md)
