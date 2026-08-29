@@ -413,6 +413,7 @@ class ContextBuilder:
             "system_notice": [],
             "memory": [],
             "recall": [],
+            "chat_memory": [],
             "persistent_memory": [],
             "wake": [],
             "working_memory": [],
@@ -440,6 +441,10 @@ class ContextBuilder:
         if recall.text:
             slots["recall"].append("## Chat memory\n\n" + recall.text)
 
+        chat_mem = self.memory_factory(chat_id).chat_memory_block()
+        if chat_mem:
+            slots["chat_memory"].append("## Chat memory (on disk)\n\n" + chat_mem)
+
         self.plugin_manager.fill_prompt_slots(chat_id, slots, is_first=True)
 
         metrics_context = self.metrics_context_for_prompt(chat_id)
@@ -460,6 +465,7 @@ class ContextBuilder:
             "system_notice",
             "memory",
             "recall",
+            "chat_memory",
             "persistent_memory",
             "wake",
             "working_memory",
@@ -521,6 +527,7 @@ class ContextBuilder:
             "self_narrative": [],
             "working_memory": [],
             "persistent_memory": [],
+            "chat_memory": [],
             "persona_state": [],
             "continuation": [],
             "skills": [],
@@ -536,12 +543,17 @@ class ContextBuilder:
         if skill_context:
             slots["skills"].append(skill_context)
 
+        chat_mem = self.memory_factory(chat_id).chat_memory_block(max_chars=512)
+        if chat_mem:
+            slots["chat_memory"].append("## Chat memory anchor\n\n" + chat_mem)
+
         parts: list[str] = []
         for slot in [
             "anchor",
             "self_narrative",
             "working_memory",
             "persistent_memory",
+            "chat_memory",
             "persona_state",
             "continuation",
             "skills",

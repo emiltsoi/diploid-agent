@@ -413,7 +413,7 @@ curl -X POST http://127.0.0.1:4003/plugins \
     "plugin": {
       "name": "planner",
       "enabled": true,
-      "module": "diploid_agent.plugins.planner",
+      "module": "diploid_plugins.planner",
       "prompt_slot": "persona_state"
     },
     "dry_run": true
@@ -467,7 +467,7 @@ curl -X PATCH http://127.0.0.1:4003/plugins/continuity \
   -d '{
     "name": "continuity",
     "plugin": {
-      "module": "diploid_agent.plugins.continuity"
+      "module": "diploid_plugins.continuity"
     },
     "dry_run": true
   }'

@@ -26,6 +26,8 @@ retention to a Hindsight memory server.
 - Supports state plugins with a rich lifecycle hook surface: plugins can intercept turns, sessions, dispatches, memory transitions, skill/MCP commands, retain/promote, and shutdown.
 - Runs a `diploid-memory` MCP server with `memory_recall`, `memory_retain`, and
   `memory_promote` tools, plus a shared `memory` skill that lets the agent use them.
+- Exposes a plugin framework for per-chat state plugins; the built-in state plugins
+  live in [`diploid-plugins`](https://github.com/emiltsoi/diploid-plugins).
 
 ## Quick start
 
@@ -117,6 +119,8 @@ prompt with a clear label. Long quotes are trimmed to
 - [Design decisions](docs/design-decisions.md)
 - [Hindsight API contract](docs/hindsight-api-contract.md)
 - [Background dispatches and continuation](docs/dispatch.md)
+- [Index of all documentation](docs/index.md)
+- [Plugin contract](docs/plugin-contract.md)
 
 ## Mesh support
 
@@ -175,3 +179,7 @@ If you fork or redistribute this project, keep this section intact: the
 compliance story is part of the design, not an afterthought. Do not market the
 harness as "free Devin" or as a way to bypass paid tiers — it is a way to get
 more value from a subscription you already hold.
+
+## License
+
+[MIT](LICENSE)

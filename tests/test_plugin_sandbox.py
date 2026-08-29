@@ -36,7 +36,7 @@ def _make_config(tmp_path):
             session_prune_enabled=False,
             plugins=[
                 PluginConfig(
-                    name="continuity", enabled=True, module="diploid_agent.plugins.continuity"
+                    name="continuity", enabled=True, module="diploid_plugins.continuity"
                 )
             ],
         ),
@@ -47,7 +47,7 @@ def test_plugin_sandbox_valid_module(tmp_path):
     runtime = AgentRuntime(_make_config(tmp_path))
     runtime.engine = FakeEngine()
     client = TestClient(create_app(_make_config(tmp_path), runtime))
-    resp = client.post("/plugin/sandbox", json={"module": "diploid_agent.plugins.continuity"})
+    resp = client.post("/plugin/sandbox", json={"module": "diploid_plugins.continuity"})
     assert resp.status_code == 200
     data = json.loads(resp.json()["reply"])
     assert data["ok"] is True

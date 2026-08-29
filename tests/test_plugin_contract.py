@@ -52,7 +52,7 @@ def test_validate_contract_rejects_builtin_module(tmp_path: Path) -> None:
 def test_runtime_health_reports_plugin_health(tmp_path: Path) -> None:
     config = _make_config(
         tmp_path,
-        [PluginConfig(name="continuity", enabled=True, module="diploid_agent.plugins.continuity")],
+        [PluginConfig(name="continuity", enabled=True, module="diploid_plugins.continuity")],
     )
     runtime = AgentRuntime(config)
     runtime.engine = FakeEngine()

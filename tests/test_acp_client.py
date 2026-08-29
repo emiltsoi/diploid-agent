@@ -360,7 +360,7 @@ def test_normalize_mcp_servers_drops_lean_ctx(tmp_path: Path) -> None:
         [
             {
                 "name": "lean-ctx",
-                "command": "~/.local/bin/lean-ctx",
+                "command": "lean-ctx",
                 "args": [],
                 "env": ["OTHER=value", "LEAN_CTX_SOCKET=/tmp/noop.sock"],
             },

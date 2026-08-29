@@ -33,7 +33,7 @@ def _make_config(tmp_path: Path, fixture_root: Path) -> Config:
                 PluginConfig(
                     name="self_state",
                     enabled=True,
-                    module="diploid_agent.plugins.self_state",
+                    module="diploid_plugins.self_state",
                     prompt_slot="persona_state",
                     prompt_order=90,
                     state_file="chat_self_state.md",

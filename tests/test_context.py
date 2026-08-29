@@ -7,7 +7,7 @@ from diploid_agent.config import Config, DiploidConfig, HarnessConfig, PersonaCo
 from diploid_agent.context import ContextBuilder
 from diploid_agent.dispatch import DispatchStore
 from diploid_agent.engine.fake import FakeAgentEngine
-from diploid_agent.memory import MemoryManager
+from diploid_agent.memory import MemoryItem, MemoryManager
 from diploid_agent.models import SessionRecord
 from diploid_agent.plugins import PluginManager
 from diploid_agent.skills import SkillManager
@@ -190,3 +190,27 @@ def test_skill_context_is_compact_index_no_full_content(tmp_path: Path) -> None:
     assert "model-review" in pctx.prompt
     assert "(active)" in pctx.prompt
     assert "Run model review." not in pctx.prompt
+
+
+def test_build_first_includes_chat_memory_block(tmp_path: Path) -> None:
+    """A first-turn prompt loads the on-disk chat memory block."""
+    builder = _make_builder(tmp_path)
+    mgr = builder.memory_factory("chat-1")
+    fb = mgr._file_backend
+    assert fb is not None
+    fb.retain([MemoryItem(content="We agreed on Postgres.", tags=["memory"])])
+    pctx = builder.build_first("chat-1", "hello", record=None)
+    assert "## Chat memory (on disk)" in pctx.prompt
+    assert "Postgres" in pctx.prompt
+
+
+def test_build_follow_up_includes_chat_memory_anchor(tmp_path: Path) -> None:
+    """A follow-up prompt loads a small chat memory anchor."""
+    builder = _make_builder(tmp_path)
+    mgr = builder.memory_factory("chat-1")
+    fb = mgr._file_backend
+    assert fb is not None
+    fb.retain([MemoryItem(content="We agreed on Postgres.", tags=["memory"])])
+    pctx = builder.build_follow_up("chat-1", "what next?", record=None)
+    assert "## Chat memory anchor" in pctx.prompt
+    assert "Postgres" in pctx.prompt

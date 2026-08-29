@@ -4,10 +4,19 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "diploid-agent"
-version = "0.4.0"
-description = "Persistent ACP agent harness"
+version = "0.5.0"
+description = "Persistent ACP agent harness with pluggable state"
 readme = "README.md"
 requires-python = ">=3.12"
+license = {text = "MIT"}
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
 dependencies = [
     "httpx>=0.27",
     "pydantic>=2.0",
@@ -18,12 +27,20 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+plugins = [
+    "diploid-plugins>=0.1.0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.5",
     "respx>=0.20",
 ]
+
+[project.urls]
+Homepage = "https://github.com/emiltsoi/diploid-agent"
+Repository = "https://github.com/emiltsoi/diploid-agent.git"
+Issues = "https://github.com/emiltsoi/diploid-agent/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -1030,19 +1030,9 @@ class MemoryManager:
         turn_number: int = 0,
         session_number: int = 0,
     ) -> None:
-        """For the file backend: summarize the last N turns and store as memory.
+        """Summarize the last N turns and retain to the active backend and the file mirror."""
 
-        Hindsight does its own consolidation, so this is a no-op for
-        hindsight unless the user explicitly configures it.
-        """
-        if self.memory_config.backend == "hindsight":
-            return
-
-        fb = self._file_backend
-        if not fb:
-            return
-
-        transcript = fb.load_transcript()
+        transcript = self._load_transcript()
         n = self.memory_config.n_turns_summarization
         n = min(n * 2, len(transcript)) if n else 0
         if n <= 0:
@@ -1088,6 +1078,9 @@ class MemoryManager:
                 ],
             )
             self.backend.retain([summary_item])
+            fb = self._file_backend
+            if fb and fb is not self.backend:
+                fb.retain([summary_item])
         except Exception as exc:  # noqa: BLE001
             logger.warning("Summarization failed: %s", exc)
 

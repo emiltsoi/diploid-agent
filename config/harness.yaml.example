@@ -58,7 +58,7 @@ harness:
   plugins:
     - name: continuity
       enabled: true
-      module: diploid_agent.plugins.continuity
+      module: diploid_plugins.continuity
       prompt_slot: wake
       first_prompt_only: true
       prompt_order: 0
@@ -66,7 +66,7 @@ harness:
       max_prompt_chars: 1024
     - name: identity
       enabled: true
-      module: diploid_agent.plugins.identity
+      module: diploid_plugins.identity
       prompt_slot: self_narrative
       first_prompt_only: true
       prompt_order: 5
@@ -78,7 +78,7 @@ harness:
         command: python
         args:
           - "-m"
-          - "diploid_agent.plugins.identity.identity_mcp"
+          - "diploid_plugins.identity.identity_mcp"
           - "--chat-id"
           - "{chat_id}"
           - "--sessions-root"
@@ -86,7 +86,7 @@ harness:
         env: []
     - name: working_memory
       enabled: true
-      module: diploid_agent.plugins.working_memory
+      module: diploid_plugins.working_memory
       prompt_slot: working_memory
       first_prompt_only: false
       prompt_order: 40
@@ -97,7 +97,7 @@ harness:
         command: python
         args:
           - "-m"
-          - "diploid_agent.plugins.working_memory.working_memory_mcp"
+          - "diploid_plugins.working_memory.working_memory_mcp"
           - "--chat-id"
           - "{chat_id}"
           - "--sessions-root"
@@ -105,7 +105,7 @@ harness:
         env: []
     - name: persistent_memory
       enabled: true  # auto-recalls on memory-seeking questions and auto-promotes ```memory blocks
-      module: diploid_agent.plugins.persistent_memory
+      module: diploid_plugins.persistent_memory
       prompt_slot: persistent_memory
       first_prompt_only: false
       prompt_order: 32
@@ -119,7 +119,7 @@ harness:
         recall_max_tokens: 500
     - name: curriculum
       enabled: false  # example plugin; not needed for this persona
-      module: diploid_agent.plugins.curriculum
+      module: diploid_plugins.curriculum
       prompt_slot: persona_state
       first_prompt_only: false
       prompt_order: 100
@@ -130,7 +130,7 @@ harness:
         command: python
         args:
           - "-m"
-          - "diploid_agent.plugins.curriculum.curriculum_mcp"
+          - "diploid_plugins.curriculum.curriculum_mcp"
           - "--chat-id"
           - "{chat_id}"
           - "--sessions-root"
@@ -138,7 +138,7 @@ harness:
       skill: curriculum
     - name: planner
       enabled: true
-      module: diploid_agent.plugins.planner
+      module: diploid_plugins.planner
       prompt_slot: persona_state
       first_prompt_only: false
       prompt_order: 50
@@ -152,7 +152,7 @@ harness:
         max_tasks: 10
     - name: auto_continue
       enabled: true
-      module: diploid_agent.plugins.auto_continue
+      module: diploid_plugins.auto_continue
       prompt_slot: persona_state
       first_prompt_only: false
       prompt_order: 55
@@ -166,14 +166,14 @@ harness:
           - cancelled
     - name: self_state
       enabled: true
-      module: diploid_agent.plugins.self_state
+      module: diploid_plugins.self_state
       prompt_slot: persona_state
       prompt_order: 90
       state_file: chat_self_state.md
       max_prompt_chars: 512
     - name: self_management
       enabled: true
-      module: diploid_agent.plugins.self_management
+      module: diploid_plugins.self_management
       prompt_slot: persona_state
       prompt_order: 95
       max_prompt_chars: 0
@@ -182,7 +182,7 @@ harness:
         command: python
         args:
           - "-m"
-          - "diploid_agent.plugins.self_management.self_management_mcp"
+          - "diploid_plugins.self_management.self_management_mcp"
           - "--chat-id"
           - "{chat_id}"
           - "--harness-url"
@@ -253,7 +253,7 @@ harness:
         command: python
         args:
           - "-m"
-          - "diploid_agent.plugins.curriculum.curriculum_mcp"
+          - "diploid_plugins.curriculum.curriculum_mcp"
           - "--chat-id"
           - "{chat_id}"
           - "--sessions-root"

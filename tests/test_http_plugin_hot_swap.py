@@ -54,7 +54,7 @@ def _make_config(tmp_path: Path) -> Config:
                 {
                     "name": "continuity",
                     "enabled": True,
-                    "module": "diploid_agent.plugins.continuity",
+                    "module": "diploid_plugins.continuity",
                 }
             ],
         ),
@@ -75,7 +75,7 @@ def test_plugin_add_and_remove(client: TestClient) -> None:
         "plugin": {
             "name": "self_state",
             "enabled": True,
-            "module": "diploid_agent.plugins.self_state",
+            "module": "diploid_plugins.self_state",
             "prompt_slot": "persona_state",
             "state_file": "chat_self_state.md",
         }
@@ -112,7 +112,7 @@ def test_plugin_dry_run_validates_module(client: TestClient) -> None:
             "plugin": {
                 "name": "self_state",
                 "enabled": True,
-                "module": "diploid_agent.plugins.self_state",
+                "module": "diploid_plugins.self_state",
                 "prompt_slot": "persona_state",
             },
             "dry_run": True,
@@ -151,7 +151,7 @@ def test_plugin_update_validates_module(client: TestClient) -> None:
         "/plugins/continuity",
         json={
             "name": "continuity",
-            "plugin": {"module": "diploid_agent.plugins.continuity"},
+            "plugin": {"module": "diploid_plugins.continuity"},
             "dry_run": True,
         },
     )

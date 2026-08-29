@@ -485,3 +485,65 @@ def test_persona_memory_loads_and_truncates(tmp_path: Path) -> None:
     assert result["truncated"] is True
     assert result["loaded"] <= 10
     assert result["path"] == memory_path
+
+
+def test_chat_memory_block_returns_last_blocks(tmp_path: Path) -> None:
+    from diploid_agent.config import MemoryConfig, PersonaConfig
+    from diploid_agent.engine.fake import FakeAgentEngine
+
+    persona = PersonaConfig(name="test", profile_root=tmp_path / "persona")
+    persona.profile_root.mkdir(parents=True, exist_ok=True)
+    config = MemoryConfig(backend="file")
+    mgr = MemoryManager(
+        config=config,
+        persona=persona,
+        sessions_root=tmp_path,
+        chat_id="chat-1",
+        devin_client=FakeAgentEngine(),
+    )
+    fb = mgr._file_backend
+    assert fb is not None
+    fb.retain([MemoryItem(content="first summary", tags=["memory", "summary"])])
+    fb.retain([MemoryItem(content="second summary", tags=["memory", "summary"])])
+    block = mgr.chat_memory_block(max_chars=256)
+    assert block is not None
+    assert "second summary" in block
+
+
+def test_summarize_mirrors_to_file_backend(tmp_path: Path, monkeypatch) -> None:
+    from diploid_agent.config import MemoryConfig, PersonaConfig
+    from diploid_agent.engine.fake import FakeAgentEngine
+
+    persona = PersonaConfig(name="test", profile_root=tmp_path / "persona")
+    persona.profile_root.mkdir(parents=True, exist_ok=True)
+    engine = FakeAgentEngine(replies=["We agreed on Postgres."])
+    config = MemoryConfig(
+        backend="hindsight",
+        n_turns_summarization=2,
+        hindsight={
+            "base_url": "http://127.0.0.1:1",
+            "bank": "test",
+            "spool_path": tmp_path / "spool.jsonl",
+            "fallback_to_file": True,
+        },
+    )
+    mgr = MemoryManager(
+        config=config,
+        persona=persona,
+        sessions_root=tmp_path,
+        chat_id="chat-1",
+        devin_client=engine,
+    )
+    monkeypatch.setattr(mgr.backend, "health", lambda: False)
+    mgr.record_turn("hi", "hello", model="m1", turn_number=1)
+    mgr.record_turn("how are you", "fine", model="m1", turn_number=2)
+
+    # The local file mirror should contain the summary even though the active backend is Hindsight.
+    fb = mgr._file_backend
+    assert fb is not None
+    memory_text = fb._load_memory_text()
+    assert "We agreed on Postgres." in memory_text
+
+    # The active Hindsight backend should also have received the summary.
+    spool_lines = (tmp_path / "spool.jsonl").read_text().splitlines()
+    assert any("We agreed on Postgres." in line for line in spool_lines)

@@ -40,3 +40,7 @@ uv.lock
 
 # Plan review drafts — session-specific review notes, not committed.
 PLAN-REVIEW-*.md
+
+# Local agent notes and planning docs — these are persona/operator specific.
+/AGENTS.md
+docs/superpowers/plans/

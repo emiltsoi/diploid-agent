@@ -40,7 +40,7 @@ def _make_config(tmp_path: Path) -> Config:
             plugin_paths=[tmp_path / "plugins"],
             plugins=[
                 PluginConfig(
-                    name="continuity", enabled=True, module="diploid_agent.plugins.continuity"
+                    name="continuity", enabled=True, module="diploid_plugins.continuity"
                 )
             ],
         ),

@@ -276,7 +276,7 @@ def test_persistent_memory_recalls_on_memory_seeking_question(monkeypatch, tmp_p
                 PluginConfig(
                     name="persistent_memory",
                     enabled=True,
-                    module="diploid_agent.plugins.persistent_memory",
+                    module="diploid_plugins.persistent_memory",
                     prompt_slot="persistent_memory",
                     first_prompt_only=False,
                     prompt_order=32,
@@ -1216,3 +1216,33 @@ def test_harness_continue_turn_rehydrates_stale_session(monkeypatch, tmp_path: P
 
     assert result.reply == "Rehydrated."
     assert ("create",) in call_log
+
+
+def test_first_prompt_includes_chat_memory_block(monkeypatch, tmp_path: Path) -> None:
+    """A first-turn prompt includes the on-disk chat memory block."""
+    from diploid_agent.acp_client import AcpPromptResult
+
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root)
+    harness = ConversationHarness(config)
+
+    prompts: list[str] = []
+
+    def fake_create_session(prompt, *, cwd=None, model=None, **kwargs):
+        prompts.append(prompt)
+        return AcpPromptResult(reply="Ready.", session_id="session-1")
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+    monkeypatch.setattr(
+        harness.client,
+        "send_message",
+        lambda *a, **kwargs: AcpPromptResult(reply="Follow-up."),
+    )
+
+    mgr = harness._memory_manager("chat-mem")
+    mgr.retain("We agreed on Postgres.", tags=["memory"])
+
+    harness.process("chat-mem", "hello")
+    assert len(prompts) == 1
+    assert "## Chat memory (on disk)" in prompts[0]
+    assert "Postgres" in prompts[0]

@@ -113,6 +113,8 @@ This is the mechanism for proposing summarization or other memory discipline beh
 
 ## Built-in plugins
 
+The built-in state plugins now live in the [`diploid-plugins`](https://github.com/emiltsoi/diploid-plugins) package. Install them with `pip install diploid-agent[plugins]` (or `pip install diploid-plugins`).
+
 ### `continuity`
 
 Tracks wake state: time since last turn, last stop reason, and any pending background dispatches.

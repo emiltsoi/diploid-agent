@@ -59,7 +59,7 @@ def _make_runtime(tmp_path: Path) -> AgentRuntime:
                 PluginConfig(
                     name="continuity",
                     enabled=True,
-                    module="diploid_agent.plugins.continuity",
+                    module="diploid_plugins.continuity",
                 ),
             ],
         ),
@@ -75,7 +75,7 @@ def test_add_plugin(tmp_path: Path) -> None:
     cfg = PluginConfig(
         name="self_state",
         enabled=True,
-        module="diploid_agent.plugins.self_state",
+        module="diploid_plugins.self_state",
         prompt_slot="persona_state",
         state_file="chat_self_state.md",
     )
@@ -107,7 +107,7 @@ def test_rollback(tmp_path: Path) -> None:
         PluginConfig(
             name="planner",
             enabled=True,
-            module="diploid_agent.plugins.planner",
+            module="diploid_plugins.planner",
             prompt_slot="persona_state",
         )
     )
@@ -115,7 +115,7 @@ def test_rollback(tmp_path: Path) -> None:
         PluginConfig(
             name="self_state",
             enabled=True,
-            module="diploid_agent.plugins.self_state",
+            module="diploid_plugins.self_state",
             prompt_slot="persona_state",
         )
     )
@@ -135,7 +135,7 @@ def test_persisted_to_runtime_overrides(tmp_path: Path) -> None:
         PluginConfig(
             name="self_state",
             enabled=True,
-            module="diploid_agent.plugins.self_state",
+            module="diploid_plugins.self_state",
             prompt_slot="persona_state",
         )
     )
@@ -165,7 +165,7 @@ def test_reconfigure_stops_removed_plugin(tmp_path: Path) -> None:
 
     before_snapshots = len(runtime._plugins._config_history)
     runtime._plugins.reconfigure(
-        [PluginConfig(name="continuity", enabled=True, module="diploid_agent.plugins.continuity")]
+        [PluginConfig(name="continuity", enabled=True, module="diploid_plugins.continuity")]
     )
 
     assert fake.stop.called, "reconfigure() should stop a plugin no longer in the new list"
@@ -183,7 +183,7 @@ def test_add_plugin_rejects_empty_name_and_duplicates(tmp_path: Path) -> None:
             PluginConfig(
                 name="continuity",
                 enabled=True,
-                module="diploid_agent.plugins.continuity",
+                module="diploid_plugins.continuity",
             )
         )
 
@@ -208,7 +208,7 @@ def test_persisted_plugins_loaded_on_new_runtime(tmp_path: Path) -> None:
         PluginConfig(
             name="self_state",
             enabled=True,
-            module="diploid_agent.plugins.self_state",
+            module="diploid_plugins.self_state",
             prompt_slot="persona_state",
         )
     )

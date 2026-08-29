@@ -32,7 +32,7 @@ def _test_config(tmp_path: Path) -> Config:
             plugins=[
                 PluginConfig(
                     name="curriculum",
-                    module="diploid_agent.plugins.curriculum",
+                    module="diploid_plugins.curriculum",
                     prompt_slot="persona_state",
                     state_file="chat_curriculum.json",
                     max_prompt_chars=1024,
