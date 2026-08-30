@@ -20,9 +20,18 @@ from diploid_agent.harness import ConversationHarness
 from diploid_agent.models import ChatResult
 
 
-def _make_config(tmp_path: Path, fixture_root: Path) -> Config:
+def _make_config(
+    tmp_path: Path,
+    fixture_root: Path,
+    *,
+    acp_resume_enabled: bool = False,
+) -> Config:
     return Config(
-        diploid=DiploidConfig(bin="/bin/echo", model="swe-1-7"),
+        diploid=DiploidConfig(
+            bin="/bin/echo",
+            model="swe-1-7",
+            acp_resume_enabled=acp_resume_enabled,
+        ),
         persona=PersonaConfig(
             name="test-pilot",
             profile_root=fixture_root,

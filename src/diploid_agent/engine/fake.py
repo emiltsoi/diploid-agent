@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from diploid_agent.config import EngineConfig
@@ -23,6 +24,8 @@ class FakeAgentEngine(AgentEngine):
     default_session_id: str = "fake-session-1"
     models: list[str] = field(default_factory=lambda: ["swe-1-7"])
     alive: bool = True
+    resume_fail: bool = False
+    resumed: list[str] = field(default_factory=list)
     replies: list[str] = field(default_factory=list)
     call_log: list[tuple[str, Any]] = field(default_factory=list)
     session_counter: int = field(default=0, init=False)
@@ -59,6 +62,20 @@ class FakeAgentEngine(AgentEngine):
     def session_alive(self, session_id: str) -> bool:
         self.call_log.append(("session_alive", session_id))
         return self.alive
+
+    def resume_session(
+        self,
+        session_id: str,
+        *,
+        cwd: Path | None = None,
+        model: str | None = None,
+        mcp_servers: list[dict[str, Any]] | None = None,
+    ) -> str:
+        self.call_log.append(("resume_session", session_id, cwd, model, mcp_servers))
+        if self.resume_fail:
+            raise RuntimeError(f"resume failed for {session_id}")
+        self.resumed.append(session_id)
+        return session_id
 
     def close(self) -> None:
         self.call_log.append(("close", None))

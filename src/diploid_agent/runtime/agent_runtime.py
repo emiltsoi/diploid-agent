@@ -1730,7 +1730,7 @@ class AgentRuntime(RuntimeAPI):
         record: SessionRecord,
         use_model: str,
     ) -> tuple[TurnResult, str | None, SessionRecord]:
-        """Send a follow-up, or rehydrate if the ACP session is stale."""
+        """Send a follow-up, resume a stale ACP session, or rehydrate as a fallback."""
         cwd = self._chat_dir(chat_id)
         prompt = self.context_builder.build_follow_up(
             chat_id,
@@ -1746,23 +1746,47 @@ class AgentRuntime(RuntimeAPI):
             result = self.engine.prompt(request, session_id=record.session_id)
             return result, None, record
         except RuntimeError as exc:
-            if self.engine.is_stale_session_error(exc):
-                logger.warning(
-                    "ACP session %s stale; rehydrating for %s", record.session_id, chat_id
-                )
-                pctx = self.context_builder.build_first(
-                    chat_id, user_message, record, model=use_model, rehydrated=True
-                )
-                result, session_id = self._start_new_session(chat_id, pctx.prompt, use_model)
-                record.session_id = session_id
-                record.model = use_model
-                record.updated_at = time.time()
-                record.chat_memory_exceeded = pctx.memory_flags.get("chat_memory_exceeded", False)
-                record.persona_memory_exceeded = pctx.memory_flags.get(
-                    "persona_memory_exceeded", False
-                )
-                return result, pctx.notice, record
-            raise
+            if not self.engine.is_stale_session_error(exc):
+                raise
+
+            if self.config.engine.acp_resume_enabled:
+                try:
+                    logger.warning(
+                        "ACP session %s stale; attempting resume for %s",
+                        record.session_id,
+                        chat_id,
+                    )
+                    resumed_id = self.engine.resume_session(
+                        record.session_id,
+                        cwd=cwd,
+                        model=use_model,
+                        mcp_servers=self._active_mcp_servers(chat_id),
+                    )
+                    result = self.engine.prompt(
+                        TurnRequest(prompt=prompt, cwd=cwd, model=use_model),
+                        session_id=resumed_id,
+                    )
+                    return result, None, record
+                except (RuntimeError, TimeoutError) as resume_exc:
+                    logger.warning(
+                        "ACP session resume failed for %s: %s", record.session_id, resume_exc
+                    )
+
+            logger.warning(
+                "ACP session %s stale; rehydrating for %s", record.session_id, chat_id
+            )
+            pctx = self.context_builder.build_first(
+                chat_id, user_message, record, model=use_model, rehydrated=True
+            )
+            result, session_id = self._start_new_session(chat_id, pctx.prompt, use_model)
+            record.session_id = session_id
+            record.model = use_model
+            record.updated_at = time.time()
+            record.chat_memory_exceeded = pctx.memory_flags.get("chat_memory_exceeded", False)
+            record.persona_memory_exceeded = pctx.memory_flags.get(
+                "persona_memory_exceeded", False
+            )
+            return result, pctx.notice, record
 
     def _check_chat_memory_transition(self, chat_id: str, record: SessionRecord) -> str | None:
         """Return a system notice if the chat memory just exceeded its cap."""

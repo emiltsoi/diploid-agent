@@ -36,6 +36,16 @@ class FakeAgentEngine(AgentEngine):
     def session_alive(self, session_id: str) -> bool:
         return True
 
+    def resume_session(
+        self,
+        session_id: str,
+        *,
+        cwd: Path | None = None,
+        model: str | None = None,
+        mcp_servers: list[dict[str, Any]] | None = None,
+    ) -> str:
+        return session_id
+
     def close(self) -> None:
         return
 

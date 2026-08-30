@@ -244,6 +244,22 @@ class TurnController:
         active.message_text = message_text[-_MAX_THOUGHT_TEXT_CHARS:]
         active.thought_text = thought_text[-_MAX_THOUGHT_TEXT_CHARS:]
 
+    def _can_resume_record(self, chat_id: str, record: SessionRecord, use_model: str) -> bool:
+        """Return True if the ACP session for this record can be resumed."""
+        if not record or not record.session_id:
+            return False
+        if record.model and record.model != use_model:
+            return False
+        if record.last_stop_reason == "timeout":
+            return False
+        current_mcp = sorted(self.runtime._active_mcp_server_names(chat_id))
+        record_mcp = sorted(record.enabled_mcp_servers or [])
+        if current_mcp != record_mcp:
+            return False
+        current_skills = sorted(self.runtime._active_skill_names(chat_id))
+        record_skills = sorted(record.enabled_skills or [])
+        return current_skills == record_skills
+
     def _rehydrate(
         self,
         chat_id: str,
@@ -262,7 +278,61 @@ class TurnController:
         restart_first: bool = False,
         log_prefix: str = "Rehydrating",
     ) -> tuple[TurnResult, str, PromptContext] | ChatResult:
-        """Build a fresh prompt and start a new ACP session, with retry/back-off."""
+        """Resume a persisted ACP session if possible, otherwise start a new one."""
+        if restart_first:
+            logger.warning("%s; restarting ACP transport for %s", log_prefix, chat_id)
+            try:
+                self.runtime.engine.restart()
+            except Exception:
+                logger.exception("Failed to restart ACP transport for %s", chat_id)
+                return ChatResult(
+                    reply="Could not restart the ACP transport.",
+                    notice="The agent is unavailable after a transport restart failure.",
+                )
+
+        if self._can_resume_record(chat_id, old_record, use_model):
+            assert old_record is not None
+            try:
+                logger.warning(
+                    "%s; attempting ACP session resume for %s", log_prefix, chat_id
+                )
+                resumed_id = self.runtime.call_engine_unlocked(
+                    self.runtime.engine.resume_session,
+                    old_record.session_id,
+                    cwd=self.runtime._chat_dir(chat_id),
+                    model=use_model,
+                    mcp_servers=self.runtime._active_mcp_servers(chat_id),
+                )
+                pctx = self.runtime.context_builder.build_follow_up(
+                    chat_id,
+                    user_message,
+                    old_record,
+                    reply_to=reply_to,
+                    reply_to_is_bot=reply_to_is_bot,
+                    reply_to_message_id=reply_to_message_id,
+                    continuation_anchor=continuation_anchor,
+                )
+                follow_model = pctx.model or use_model
+                request = TurnRequest(
+                    prompt=pctx.prompt,
+                    cwd=self.runtime._chat_dir(chat_id),
+                    model=follow_model,
+                    mcp_servers=None,
+                    soft_timeout=self.runtime.config.engine.soft_timeout,
+                )
+                result = self.runtime.call_engine_unlocked(
+                    self.runtime.engine.prompt,
+                    request,
+                    session_id=resumed_id,
+                    on_chunk=on_chunk,
+                    on_update=on_update,
+                )
+                return result, resumed_id, pctx
+            except (RuntimeError, TimeoutError) as exc:
+                logger.warning(
+                    "%s: ACP session resume failed for %s: %s", log_prefix, chat_id, exc
+                )
+
         pctx = self.runtime.context_builder.build_first(
             chat_id,
             user_message,
@@ -277,17 +347,6 @@ class TurnController:
             rehydrated=True,
         )
         model = pctx.model or use_model
-
-        if restart_first:
-            logger.warning("%s; restarting ACP transport for %s", log_prefix, chat_id)
-            try:
-                self.runtime.engine.restart()
-            except Exception:
-                logger.exception("Failed to restart ACP transport for %s", chat_id)
-                return ChatResult(
-                    reply="Could not restart the ACP transport.",
-                    notice="The agent is unavailable after a transport restart failure.",
-                )
 
         for attempt in range(2):
             try:
@@ -661,7 +720,7 @@ class TurnController:
                 rehydrate_notice = pctx.notice
                 memory_flags = pctx.memory_flags
                 use_model = pctx.model or use_model
-                is_new = True
+                is_new = session_id != (old_record.session_id if old_record else None)
                 active.session_id = result.session_id
                 reply = result.reply
 
@@ -696,7 +755,7 @@ class TurnController:
                 rehydrate_notice = _join_notices(rehydrate_notice, pctx.notice)
                 memory_flags = pctx.memory_flags
                 use_model = pctx.model or use_model
-                is_new = True
+                is_new = session_id != (old_record.session_id if old_record else None)
                 active.session_id = result.session_id
                 reply = result.reply
 
@@ -1147,7 +1206,7 @@ class TurnController:
                 rehydrate_notice = _join_notices(rehydrate_notice, pctx.notice)
                 memory_flags = pctx.memory_flags
                 use_model = pctx.model or use_model
-                is_new = True
+                is_new = session_id != (old_record.session_id if old_record else None)
                 active.session_id = turn_result.session_id
                 reply = turn_result.reply
 
@@ -1175,7 +1234,7 @@ class TurnController:
                 rehydrate_notice = _join_notices(rehydrate_notice, pctx.notice)
                 memory_flags = pctx.memory_flags
                 use_model = pctx.model or use_model
-                is_new = True
+                is_new = session_id != (old_record.session_id if old_record else None)
                 active.session_id = turn_result.session_id
                 reply = turn_result.reply
 
@@ -1698,15 +1757,6 @@ class TurnController:
             self.runtime._archive_dir(chat_id, session_number), self.runtime._chat_dir(chat_id)
         )
 
-        # Try to reconnect to the ACP session; otherwise rehydrate.
-        try:
-            alive = self.runtime._call_unlocked(
-                self.runtime.engine.session_alive, source.session_id
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to probe ACP session %s: %s", source.session_id, exc)
-            alive = False
-
         source_mcp_names = (
             source.enabled_mcp_servers
             if source.enabled_mcp_servers is not None
@@ -1717,18 +1767,96 @@ class TurnController:
             if source.enabled_skills is not None
             else self.runtime._active_skill_names(chat_id)
         )
-        if alive:
-            source.updated_at = time.time()
-            source.cwd = str(self.runtime._chat_dir(chat_id))
-            source.enabled_mcp_servers = source_mcp_names
-            source.enabled_skills = sorted(source_skill_names)
-            self.runtime.skills.sync_to_chat(
-                chat_id, self.runtime._chat_dir(chat_id), source_skill_names
-            )
-            self.runtime._chat_state(chat_id).sessions[source.session_number] = source
-            record = source
-            reply = "Resumed existing session."
+
+        resumed_id: str | None = None
+        reply = ""
+        memory_flags: dict[str, bool] = {}
+        use_model = source.model
+
+        if self.runtime.config.engine.acp_resume_enabled:
+            try:
+                logger.debug("Attempting ACP session resume for %s", source.session_id)
+                resumed_id = self.runtime._call_unlocked(
+                    self.runtime.engine.resume_session,
+                    source.session_id,
+                    cwd=self.runtime._chat_dir(chat_id),
+                    model=source.model,
+                    mcp_servers=self.runtime.mcp.enabled_servers(chat_id, source_mcp_names),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to resume ACP session %s: %s", source.session_id, exc)
+
+        if not resumed_id:
+            # Fall back to the legacy probe/rehydrate path.
+            try:
+                alive = self.runtime._call_unlocked(
+                    self.runtime.engine.session_alive, source.session_id
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to probe ACP session %s: %s", source.session_id, exc)
+                alive = False
+
+            if alive:
+                source.updated_at = time.time()
+                source.cwd = str(self.runtime._chat_dir(chat_id))
+                source.enabled_mcp_servers = source_mcp_names
+                source.enabled_skills = sorted(source_skill_names)
+                self.runtime.skills.sync_to_chat(
+                    chat_id, self.runtime._chat_dir(chat_id), source_skill_names
+                )
+                self.runtime._chat_state(chat_id).sessions[source.session_number] = source
+                reply = "Resumed existing session."
+            else:
+                user_message = "Continue the conversation as your true self."
+                start_ctx = self.runtime._plugins.before_session_start(
+                    chat_id,
+                    SessionStartContext(
+                        chat_id=chat_id,
+                        kind="resume",
+                        user_message=user_message,
+                        model=source.model,
+                        session_number=source.session_number,
+                        skill_names=source_skill_names,
+                        mcp_servers=self.runtime.mcp.enabled_servers(chat_id, source_mcp_names),
+                    ),
+                )
+                if isinstance(start_ctx, ChatResult):
+                    return start_ctx
+                use_model = start_ctx.model or source.model
+                user_message = start_ctx.user_message
+
+                pctx = self.runtime.context_builder.build_first(
+                    chat_id,
+                    user_message,
+                    active,
+                    model=use_model,
+                    skill_names=start_ctx.skill_names,
+                    mcp_names=None,
+                    rehydrated=True,
+                )
+                prompt = pctx.prompt
+                memory_flags = pctx.memory_flags
+                use_model = pctx.model or use_model
+                result, session_id = self.runtime._call_unlocked(
+                    self.runtime._start_new_session,
+                    chat_id,
+                    prompt,
+                    use_model,
+                    mcp_servers=start_ctx.mcp_servers
+                    or self.runtime.mcp.enabled_servers(chat_id, source_mcp_names),
+                    skill_names=start_ctx.skill_names or source_skill_names,
+                )
+                reply = result.reply
+                source.session_id = session_id
+                source.updated_at = time.time()
+                source.cwd = str(self.runtime._chat_dir(chat_id))
+                source.chat_memory_exceeded = memory_flags.get("chat_memory_exceeded", False)
+                source.persona_memory_exceeded = memory_flags.get("persona_memory_exceeded", False)
+                source.enabled_mcp_servers = source_mcp_names
+                source.enabled_skills = sorted(source_skill_names)
+                source.model = use_model
         else:
+            # ACP resume succeeded; send a follow-up on the resumed session.
             user_message = "Continue the conversation as your true self."
             start_ctx = self.runtime._plugins.before_session_start(
                 chat_id,
@@ -1747,30 +1875,29 @@ class TurnController:
             use_model = start_ctx.model or source.model
             user_message = start_ctx.user_message
 
-            pctx = self.runtime.context_builder.build_first(
+            pctx = self.runtime.context_builder.build_follow_up(
                 chat_id,
                 user_message,
-                active,
-                model=use_model,
-                skill_names=start_ctx.skill_names,
-                mcp_names=None,
-                rehydrated=True,
+                source,
+                skill_names=source_skill_names,
             )
             prompt = pctx.prompt
-            notice = pctx.notice
             memory_flags = pctx.memory_flags
             use_model = pctx.model or use_model
-            result, session_id = self.runtime._call_unlocked(
-                self.runtime._start_new_session,
-                chat_id,
-                prompt,
-                use_model,
-                mcp_servers=start_ctx.mcp_servers
-                or self.runtime.mcp.enabled_servers(chat_id, source_mcp_names),
-                skill_names=start_ctx.skill_names or source_skill_names,
+            request = TurnRequest(
+                prompt=prompt,
+                cwd=self.runtime._chat_dir(chat_id),
+                model=use_model,
+                mcp_servers=None,
+                soft_timeout=self.runtime.config.engine.soft_timeout,
+            )
+            result = self.runtime.call_engine_unlocked(
+                self.runtime.engine.prompt,
+                request,
+                session_id=resumed_id,
             )
             reply = result.reply
-            source.session_id = session_id
+            source.session_id = resumed_id
             source.updated_at = time.time()
             source.cwd = str(self.runtime._chat_dir(chat_id))
             source.chat_memory_exceeded = memory_flags.get("chat_memory_exceeded", False)
@@ -1778,8 +1905,11 @@ class TurnController:
             source.enabled_mcp_servers = source_mcp_names
             source.enabled_skills = sorted(source_skill_names)
             source.model = use_model
-            record = source
+            self.runtime.skills.sync_to_chat(
+                chat_id, self.runtime._chat_dir(chat_id), source_skill_names
+            )
 
+        record = source
         record.turn_number += 1
         self.runtime._memory_manager(chat_id).record_turn(
             user_message="[system: resumed session]",
@@ -1866,28 +1996,75 @@ class TurnController:
             else self.runtime._active_skill_names(chat_id)
         )
 
-        pctx = self.runtime.context_builder.build_first(
-            chat_id,
-            user_message,
-            active,
-            model=use_model,
-            skill_names=start_ctx.skill_names,
-            mcp_names=None,
-        )
-        prompt = pctx.prompt
-        notice = pctx.notice
-        memory_flags = pctx.memory_flags
-        use_model = pctx.model or use_model
-        result, session_id = self.runtime._call_unlocked(
-            self.runtime._start_new_session,
-            chat_id,
-            prompt,
-            use_model,
-            mcp_servers=start_ctx.mcp_servers
-            or self.runtime.mcp.enabled_servers(chat_id, source_mcp_names),
-            skill_names=start_ctx.skill_names or source_skill_names,
-        )
-        reply = result.reply
+        resumed_id: str | None = None
+        if self.runtime.config.engine.acp_resume_enabled and self._can_resume_record(
+            chat_id, source, use_model
+        ):
+            try:
+                logger.debug(
+                    "Attempting ACP session resume for branch of %s", source.session_id
+                )
+                resumed_id = self.runtime._call_unlocked(
+                    self.runtime.engine.resume_session,
+                    source.session_id,
+                    cwd=self.runtime._chat_dir(chat_id),
+                    model=use_model,
+                    mcp_servers=start_ctx.mcp_servers
+                    or self.runtime.mcp.enabled_servers(chat_id, source_mcp_names),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Failed to resume ACP session for branch %s: %s", chat_id, exc
+                )
+
+        if resumed_id:
+            pctx = self.runtime.context_builder.build_follow_up(
+                chat_id,
+                user_message,
+                source,
+                skill_names=source_skill_names,
+            )
+            prompt = pctx.prompt
+            notice = pctx.notice
+            memory_flags = pctx.memory_flags
+            use_model = pctx.model or use_model
+            request = TurnRequest(
+                prompt=prompt,
+                cwd=self.runtime._chat_dir(chat_id),
+                model=use_model,
+                mcp_servers=None,
+                soft_timeout=self.runtime.config.engine.soft_timeout,
+            )
+            result = self.runtime.call_engine_unlocked(
+                self.runtime.engine.prompt,
+                request,
+                session_id=resumed_id,
+            )
+            session_id = resumed_id
+            reply = result.reply
+        else:
+            pctx = self.runtime.context_builder.build_first(
+                chat_id,
+                user_message,
+                active,
+                model=use_model,
+                skill_names=start_ctx.skill_names,
+                mcp_names=None,
+            )
+            prompt = pctx.prompt
+            notice = pctx.notice
+            memory_flags = pctx.memory_flags
+            use_model = pctx.model or use_model
+            result, session_id = self.runtime._call_unlocked(
+                self.runtime._start_new_session,
+                chat_id,
+                prompt,
+                use_model,
+                mcp_servers=start_ctx.mcp_servers
+                or self.runtime.mcp.enabled_servers(chat_id, source_mcp_names),
+                skill_names=start_ctx.skill_names or source_skill_names,
+            )
+            reply = result.reply
 
         new_record = self.runtime._create_record(
             chat_id,

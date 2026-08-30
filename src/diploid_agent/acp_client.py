@@ -524,6 +524,31 @@ class AcpClient:
         self._ensure_started()
         return self._run(self._session_alive(session_id), timeout=30.0)
 
+    def resume_session(
+        self,
+        session_id: str,
+        *,
+        cwd: Path | None = None,
+        model: str | None = None,
+        mcp_servers: list[dict[str, Any]] | None = None,
+    ) -> str:
+        """Resume a persisted ACP session and return the active session id.
+
+        Tries ``session/resume`` first, then falls back to ``session/load`` if
+        the agent does not advertise the unstable ``session/resume`` method.
+        After a successful resume the session mode and model are re-applied.
+        """
+        self._ensure_started()
+        return self._run(
+            self._resume_session(
+                session_id,
+                cwd=cwd,
+                model=model,
+                mcp_servers=mcp_servers,
+            ),
+            timeout=self.timeout + 30.0,
+        )
+
     def cancel(self, session_id: str) -> None:
         """Send a `session/cancel` notification for an in-flight prompt.
 
@@ -1039,6 +1064,14 @@ class AcpClient:
             or "empty reply" in msg
         )
 
+    @staticmethod
+    def _is_method_not_found(exc: AcpError) -> bool:
+        """Return True if the ACP agent reports a method it does not implement."""
+        if exc.code == -32601:
+            return True
+        msg = str(exc.message or "").lower()
+        return "method not found" in msg or "not found" in msg and "session/resume" in str(exc.method or "").lower()
+
     async def _send_cancel_notification(self, session_id: str) -> None:
         """Send a fire-and-forget `session/cancel` notification."""
         await self._send(
@@ -1067,6 +1100,110 @@ class AcpClient:
             if self._is_stale_session_error(exc):
                 return False
             raise
+
+    async def _resume_session(
+        self,
+        session_id: str,
+        *,
+        cwd: Path | None = None,
+        model: str | None = None,
+        mcp_servers: list[dict[str, Any]] | None = None,
+    ) -> str:
+        """Resume a persisted ACP session.
+
+        ``session/resume`` is the ACP-unstable method intended for continuing a
+        user-visible session; ``session/load`` is the stable equivalent used by
+        the Devin CLI.  We try ``session/resume`` first and fall back to
+        ``session/load`` so the harness works with both current and future ACP
+        servers.
+        """
+        use_cwd = str(cwd) if cwd else os.getcwd()
+        use_model = _normalize_model(model or self.model)
+        normalized_mcp = self._normalize_mcp_servers(mcp_servers)
+        resume_params: dict[str, Any] = {"sessionId": session_id, "cwd": use_cwd}
+        if normalized_mcp:
+            resume_params["mcpServers"] = normalized_mcp
+        load_params: dict[str, Any] = {
+            "sessionId": session_id,
+            "cwd": use_cwd,
+            "mcpServers": normalized_mcp,
+        }
+
+        try:
+            try:
+                await self._call(
+                    "session/resume",
+                    resume_params,
+                    timeout=self._control_timeout,
+                )
+            except AcpError as exc:
+                if self._is_method_not_found(exc):
+                    logger.debug(
+                        "session/resume not supported; trying session/load for %s", session_id
+                    )
+                    await self._call(
+                        "session/load",
+                        load_params,
+                        timeout=self._control_timeout,
+                    )
+                else:
+                    raise
+            await self._apply_session_config(session_id, use_model)
+        except (AcpError, TimeoutError):
+            if self.metrics is not None:
+                self.metrics.inc("acp_resume_failures_total")
+            raise
+
+        if self.metrics is not None:
+            self.metrics.inc("acp_resumes_total")
+        return session_id
+
+    async def _session_load(
+        self,
+        session_id: str,
+        *,
+        cwd: Path | None = None,
+        model: str | None = None,
+        mcp_servers: list[dict[str, Any]] | None = None,
+    ) -> str:
+        """Load a persisted ACP session with ``session/load``.
+
+        Exposed separately so callers can force the stable load path.
+        """
+        use_cwd = str(cwd) if cwd else os.getcwd()
+        use_model = _normalize_model(model or self.model)
+        normalized_mcp = self._normalize_mcp_servers(mcp_servers)
+        try:
+            await self._call(
+                "session/load",
+                {
+                    "sessionId": session_id,
+                    "cwd": use_cwd,
+                    "mcpServers": normalized_mcp,
+                },
+                timeout=self._control_timeout,
+            )
+            await self._apply_session_config(session_id, use_model)
+        except (AcpError, TimeoutError):
+            if self.metrics is not None:
+                self.metrics.inc("acp_resume_failures_total")
+            raise
+
+        if self.metrics is not None:
+            self.metrics.inc("acp_resumes_total")
+        return session_id
+
+    async def _apply_session_config(self, session_id: str, use_model: str) -> None:
+        """Set mode and model on a freshly created or resumed session."""
+        await self._call(
+            "session/set_config_option",
+            {"sessionId": session_id, "configId": "mode", "value": self.acp_mode},
+        )
+        await self._call(
+            "session/set_config_option",
+            {"sessionId": session_id, "configId": "model", "value": use_model},
+        )
+        self._session_models[session_id] = use_model
 
     async def _create_session(
         self,
@@ -1105,15 +1242,7 @@ class AcpClient:
             self._model_options = self._extract_model_options(session)
 
         # Honor the requested mode and model for this session.
-        await self._call(
-            "session/set_config_option",
-            {"sessionId": session_id, "configId": "mode", "value": self.acp_mode},
-        )
-        await self._call(
-            "session/set_config_option",
-            {"sessionId": session_id, "configId": "model", "value": use_model},
-        )
-        self._session_models[session_id] = use_model
+        await self._apply_session_config(session_id, use_model)
 
         return await self._prompt(
             session_id,

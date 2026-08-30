@@ -196,6 +196,23 @@ class AcpEngine(AgentEngine):
     def session_alive(self, session_id: str) -> bool:
         return self._client.session_alive(session_id)
 
+    def resume_session(
+        self,
+        session_id: str,
+        *,
+        cwd: Path | None = None,
+        model: str | None = None,
+        mcp_servers: list[dict[str, Any]] | None = None,
+    ) -> str:
+        if cwd is not None:
+            cwd = Path(cwd)
+        return self._client.resume_session(
+            session_id,
+            cwd=cwd,
+            model=model,
+            mcp_servers=mcp_servers,
+        )
+
     def active_session_id(self) -> str | None:
         """Return the ACP session id currently in flight, if any."""
         return self._client.active_session_id()

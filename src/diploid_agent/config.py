@@ -43,6 +43,7 @@ class EngineConfig(BaseModel):
     )
     acp_max_restarts: int = 3  # transport restarts allowed in the backoff window
     acp_restart_backoff_window: float = 300.0  # seconds for max_restarts budget
+    acp_resume_enabled: bool = False  # use ACP session/resume (or load) instead of prompt rehydration
     continuation_triggers: list[str] = Field(
         default_factory=lambda: ["continue", "go on", "proceed", "resume"]
     )

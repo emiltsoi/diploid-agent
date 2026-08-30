@@ -68,6 +68,20 @@ class AgentEngine(abc.ABC):
     def session_alive(self, session_id: str) -> bool:
         """Return True if the session can still be used."""
 
+    def resume_session(
+        self,
+        session_id: str,
+        *,
+        cwd: Path | None = None,
+        model: str | None = None,
+        mcp_servers: list[dict[str, Any]] | None = None,
+    ) -> str:
+        """Resume a persisted agent session and return the active session id.
+
+        The default implementation assumes the session is already available.
+        """
+        return session_id
+
     @abc.abstractmethod
     def close(self) -> None:
         """Close the engine and release resources."""
