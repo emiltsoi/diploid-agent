@@ -226,3 +226,18 @@ def test_process_queues_message_when_chat_is_busy(tmp_path: Path) -> None:
     assert pending[0].priority == 10
     assert pending[0].payload["user_message"] == "hello"
     assert pending[0].payload.get("retry_after") == 2.0
+
+
+def test_agent_runtime_restarts_transport(tmp_path: Path) -> None:
+    runtime = AgentRuntime(_make_config(tmp_path))
+    called: list[bool] = []
+
+    class _RestartEngine(_ChunkingEngine):
+        def restart(self) -> None:
+            called.append(True)
+
+    runtime.engine = _RestartEngine()
+
+    result = runtime.restart("chat-1")
+    assert called
+    assert "restarted" in result.reply.lower()

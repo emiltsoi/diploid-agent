@@ -550,6 +550,37 @@ def test_handle_update_routes_help_command(tmp_path: Path) -> None:
     assert sent[0][2] == 1
 
 
+def test_handle_update_routes_restart_command(tmp_path: Path) -> None:
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    sent: list[tuple[int, str, int | None]] = []
+
+    def fake_send(
+        chat_id: int,
+        text: str,
+        *,
+        reply_to_message_id: int | None = None,
+        first_message_id: int | None = None,
+    ) -> None:
+        sent.append((chat_id, text, reply_to_message_id))
+
+    poller._send_text = fake_send
+    poller._harness_restart = lambda chat_id: {"reply": "Restarted", "notice": None}
+    update = _update(
+        message={
+            "message_id": 1,
+            "chat": {"id": 12345, "type": "private"},
+            "from": {"id": 1, "is_bot": False},
+            "text": "/restart",
+        }
+    )
+    poller._handle_update(update)
+    assert sent == [(12345, "Restarted", 1)]
+
+
 def test_stream_turn_finalizes_thought_before_final(tmp_path: Path) -> None:
     """When thinking is streamed, the thought block is finalized before the final placeholder is created."""
     poller = TelegramPoller(

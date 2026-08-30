@@ -2,6 +2,7 @@
 
 import asyncio
 import concurrent.futures
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -288,6 +289,41 @@ def test_is_stale_session_error_with_typed_exceptions() -> None:
     )
 
 
+def test_restart_transport_unblocks_inflight_future(monkeypatch) -> None:
+    client = AcpClient(agent_bin="/bin/true", api_key="test-key")
+    client._transport_healthy = True
+    client._initialized = True
+    client._proc = None
+    client._loop = asyncio.new_event_loop()
+    client._thread = threading.Thread(target=client._loop.run_forever, daemon=True)
+    client._thread.start()
+
+    fut = concurrent.futures.Future()
+    client._inflight_future = fut
+
+    close_called: list[bool] = []
+    ensure_started: list[bool] = []
+
+    def fake_close() -> None:
+        close_called.append(True)
+
+    def fake_ensure_started(*a: Any, **k: Any) -> None:
+        ensure_started.append(True)
+
+    monkeypatch.setattr(client, "close", fake_close)
+    monkeypatch.setattr(client, "_ensure_started", fake_ensure_started)
+    monkeypatch.setattr(client, "_check_restart_backoff", lambda: None)
+    monkeypatch.setattr(client, "_record_restart_attempt", lambda: None)
+
+    client.restart_transport()
+
+    assert fut.done()
+    with pytest.raises(TimeoutError, match="ACP transport restarted"):
+        fut.result()
+    assert close_called
+    assert ensure_started
+
+
 class FakeStream:
     def write(self, data: bytes) -> None:
         pass
@@ -476,8 +512,13 @@ def test_watchdog_waits_for_prompt_soft_timeout() -> None:
     assert not inflight.done()
 
 
-def test_watchdog_kills_after_prompt_soft_timeout() -> None:
-    """The prompt inactivity watchdog fires after the soft timeout + grace."""
+def test_watchdog_does_not_kill_prompt_after_soft_timeout() -> None:
+    """The prompt watchdog does not kill a prompt just because soft_timeout passed.
+
+    A soft timeout triggers a client-side cancel and a partial reply; the child
+    is only killed if the process exits or the explicit hard `timeout` deadline
+    is exceeded.
+    """
     client = AcpClient(agent_bin="/bin/true", api_key="test-key", watchdog_timeout=0.01)
     client._control_timeout = 0.05
     client._loop = asyncio.new_event_loop()
@@ -504,13 +545,12 @@ def test_watchdog_kills_after_prompt_soft_timeout() -> None:
 
     client._check_watchdog()
 
-    assert inflight.done()
-    assert isinstance(inflight.exception(), TimeoutError)
-    assert client._proc.returncode == -9
+    assert not inflight.done()
+    assert client._proc.returncode is None
 
 
-def test_watchdog_kills_prompt_that_keeps_printing_past_soft_timeout() -> None:
-    """The watchdog kills a prompt that keeps printing but exceeds soft_timeout + grace."""
+def test_watchdog_does_not_kill_prompt_that_keeps_printing_past_soft_timeout() -> None:
+    """A prompt that is still producing output past soft_timeout is not killed."""
     client = AcpClient(agent_bin="/bin/true", api_key="test-key", watchdog_timeout=10.0)
     client._control_timeout = 0.05
     client._loop = asyncio.new_event_loop()
@@ -537,9 +577,8 @@ def test_watchdog_kills_prompt_that_keeps_printing_past_soft_timeout() -> None:
 
     client._check_watchdog()
 
-    assert inflight.done()
-    assert isinstance(inflight.exception(), TimeoutError)
-    assert client._proc.returncode == -9
+    assert not inflight.done()
+    assert client._proc.returncode is None
 
 
 def test_watchdog_respects_per_call_control_timeout() -> None:
@@ -684,8 +723,8 @@ def test_watchdog_does_not_fire_for_long_silent_prompt() -> None:
     assert not inflight.done()
 
 
-def test_watchdog_fires_when_no_stdout_for_dead_timeout() -> None:
-    """A prompt that produces no stdout for control_timeout + 30s is treated as a dead transport."""
+def test_watchdog_does_not_kill_silent_prompt_before_soft_timeout() -> None:
+    """A prompt that is silent but alive is only killed by its own soft/hard deadline."""
     client = AcpClient(agent_bin="/bin/true", api_key="test-key", watchdog_timeout=0.01)
     client._control_timeout = 0.05
     client._loop = asyncio.new_event_loop()
@@ -712,10 +751,8 @@ def test_watchdog_fires_when_no_stdout_for_dead_timeout() -> None:
 
     client._check_watchdog()
 
-    # With a long soft_timeout the kill_at deadline is far away, but the
-    # transport-dead fallback should fire after control_timeout + 30s.
-    assert inflight.done()
-    assert isinstance(inflight.exception(), TimeoutError)
+    # 40s of silence is well short of soft_timeout + grace (600 + 30).
+    assert not inflight.done()
 
 
 def test_restart_transport_backoff() -> None:

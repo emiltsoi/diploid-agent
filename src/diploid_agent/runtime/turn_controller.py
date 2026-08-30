@@ -9,6 +9,7 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from diploid_agent.acp_client import AcpTransportError
 from diploid_agent.dispatch import DispatchStatus
 from diploid_agent.engine import TurnRequest, TurnResult
 from diploid_agent.models import ActiveTurn, ChatResult, PartialTurn, SessionRecord, WakeEvent
@@ -290,7 +291,10 @@ class TurnController:
                     notice="The agent is unavailable after a transport restart failure.",
                 )
 
-        if self._can_resume_record(chat_id, old_record, use_model):
+        if (
+            self.runtime.config.engine.acp_resume_enabled
+            and self._can_resume_record(chat_id, old_record, use_model)
+        ):
             assert old_record is not None
             try:
                 logger.warning(
@@ -303,6 +307,14 @@ class TurnController:
                     model=use_model,
                     mcp_servers=self.runtime._active_mcp_servers(chat_id),
                 )
+                logger.warning("Resumed ACP session %s for %s", resumed_id, chat_id)
+                self.runtime._plugins.on_waking(
+                    chat_id,
+                    old_record,
+                    time.time(),
+                    wake_event=wake_event,
+                    other_instance_running=other_instance_running,
+                )
                 pctx = self.runtime.context_builder.build_follow_up(
                     chat_id,
                     user_message,
@@ -311,6 +323,7 @@ class TurnController:
                     reply_to_is_bot=reply_to_is_bot,
                     reply_to_message_id=reply_to_message_id,
                     continuation_anchor=continuation_anchor,
+                    rehydrated=True,
                 )
                 follow_model = pctx.model or use_model
                 request = TurnRequest(
@@ -1520,6 +1533,41 @@ class TurnController:
         return ChatResult(
             reply="Stopping the current turn...",
             notice="The agent will return a partial summary when it aborts.",
+        )
+
+    @_locked
+    def restart(self, chat_id: str) -> ChatResult:
+        """Kill the ACP child and start a fresh transport."""
+        with self.runtime._lock:
+            active = self.runtime._active_turns.get(chat_id)
+
+        if active is not None:
+            with active._condition:
+                active.stopped = True
+                active._condition.notify_all()
+
+        if self.runtime.wake_queue is not None:
+            count = self.runtime.wake_queue.cancel(chat_id=chat_id, reason="auto_continue")
+            if count:
+                logger.info("Cancelled %d pending auto-continue wake(s) for %s", count, chat_id)
+
+        try:
+            self.runtime.engine.restart()
+        except AcpTransportError as exc:
+            return ChatResult(
+                reply="Could not restart the ACP transport.",
+                notice=str(exc),
+            )
+        except Exception:
+            logger.exception("Failed to restart ACP transport for %s", chat_id)
+            return ChatResult(
+                reply="Could not restart the ACP transport.",
+                notice="See logs for details.",
+            )
+
+        return ChatResult(
+            reply="ACP transport restarted.",
+            notice="The next message will start a fresh Devin session.",
         )
 
     @_locked

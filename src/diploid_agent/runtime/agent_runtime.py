@@ -2383,6 +2383,9 @@ class AgentRuntime(RuntimeAPI):
     def stop(self, chat_id: str) -> ChatResult:
         return self.turn_controller.stop(chat_id)
 
+    def restart(self, chat_id: str) -> ChatResult:
+        return self.turn_controller.restart(chat_id)
+
     @_locked
     def switch_model(self, chat_id: str, model: str) -> ChatResult:
         return self.turn_controller.switch_model(chat_id, model)

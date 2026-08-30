@@ -20,6 +20,7 @@ from diploid_agent.config import (
     TimerConfig,
     WakerConfig,
 )
+from diploid_agent.models import ChatResult
 from diploid_agent.runtime.agent_runtime import AgentRuntime
 from diploid_agent.transport.http import create_app
 
@@ -305,6 +306,21 @@ def test_waker_config_get_and_update(client: TestClient) -> None:
     body = resp.json()
     assert body["enabled"] is True
     assert body["retry_after"] == 90.0
+
+
+def test_restart_endpoint_calls_runtime_restart(client: TestClient, monkeypatch) -> None:
+    called: list[str] = []
+
+    def fake_restart(chat_id: str) -> ChatResult:
+        called.append(chat_id)
+        return ChatResult(reply="Restarted")
+
+    monkeypatch.setattr(client.app.state.runtime, "restart", fake_restart)
+
+    resp = client.post("/restart", json={"chat_id": "12345"})
+    assert resp.status_code == 200
+    assert resp.json()["reply"] == "Restarted"
+    assert called == ["12345"]
 
 
 def test_waker_config_persists_and_reloads(tmp_path: Path) -> None:

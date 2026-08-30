@@ -105,6 +105,10 @@ class StopRequest(BaseModel):
     chat_id: str
 
 
+class RestartRequest(BaseModel):
+    chat_id: str
+
+
 class TimerRequest(BaseModel):
     chat_id: str
     reason: str
@@ -445,6 +449,10 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
     @app.post("/stop", response_model=ChatResponse, dependencies=[Depends(_require_api_key)])
     def stop(req: StopRequest) -> ChatResponse:
         return _to_response(runtime.stop(req.chat_id))
+
+    @app.post("/restart", response_model=ChatResponse, dependencies=[Depends(_require_api_key)])
+    def restart(req: RestartRequest) -> ChatResponse:
+        return _to_response(runtime.restart(req.chat_id))
 
     @app.post("/state", response_model=ChatResponse, dependencies=[Depends(_require_api_key)])
     def state_event(req: StateEventRequest) -> ChatResponse:

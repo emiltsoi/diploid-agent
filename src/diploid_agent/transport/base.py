@@ -59,6 +59,10 @@ class RuntimeAPI(abc.ABC):
         """Cancel a running turn."""
 
     @abc.abstractmethod
+    def restart(self, chat_id: str) -> Any:
+        """Kill the ACP child and start a fresh transport for this chat."""
+
+    @abc.abstractmethod
     def turn_status(self, chat_id: str, wait: float = 0.0) -> Any:
         """Return the current streaming state."""
 
