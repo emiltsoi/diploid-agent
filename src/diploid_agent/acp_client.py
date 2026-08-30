@@ -1116,17 +1116,27 @@ class AcpClient:
         the Devin CLI.  We try ``session/resume`` first and fall back to
         ``session/load`` so the harness works with both current and future ACP
         servers.
+
+        The active MCP server list is written to the ACP child's
+        ``mcp_config.json`` by ``_prepare_devin_home``; ``devin acp`` 3000.6.7+
+        rejects inline ``mcpServers`` definitions in the resume/load payload, so
+        we pass an empty list just like we do for ``session/new``.
         """
         use_cwd = str(cwd) if cwd else os.getcwd()
         use_model = _normalize_model(model or self.model)
-        normalized_mcp = self._normalize_mcp_servers(mcp_servers)
-        resume_params: dict[str, Any] = {"sessionId": session_id, "cwd": use_cwd}
-        if normalized_mcp:
-            resume_params["mcpServers"] = normalized_mcp
+        # Keep the client-side MCP list in sync so future transport restarts
+        # write the correct mcp_config.json.
+        if mcp_servers is not None:
+            self._mcp_servers = self._normalize_mcp_servers(mcp_servers)
+        resume_params: dict[str, Any] = {
+            "sessionId": session_id,
+            "cwd": use_cwd,
+            "mcpServers": [],
+        }
         load_params: dict[str, Any] = {
             "sessionId": session_id,
             "cwd": use_cwd,
-            "mcpServers": normalized_mcp,
+            "mcpServers": [],
         }
 
         try:
@@ -1172,14 +1182,17 @@ class AcpClient:
         """
         use_cwd = str(cwd) if cwd else os.getcwd()
         use_model = _normalize_model(model or self.model)
-        normalized_mcp = self._normalize_mcp_servers(mcp_servers)
+        # Keep the client-side MCP list in sync so future transport restarts
+        # write the correct mcp_config.json.
+        if mcp_servers is not None:
+            self._mcp_servers = self._normalize_mcp_servers(mcp_servers)
         try:
             await self._call(
                 "session/load",
                 {
                     "sessionId": session_id,
                     "cwd": use_cwd,
-                    "mcpServers": normalized_mcp,
+                    "mcpServers": [],
                 },
                 timeout=self._control_timeout,
             )

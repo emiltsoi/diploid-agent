@@ -96,8 +96,8 @@ def test_resume_session_succeeds_immediately(client: AcpClient, monkeypatch) -> 
     ]
 
 
-def test_session_load_uses_required_mcp_servers(client: AcpClient, monkeypatch) -> None:
-    """_session_load always sends mcpServers in the request."""
+def test_session_load_passes_empty_mcp_servers(client: AcpClient, monkeypatch) -> None:
+    """_session_load sends an empty mcpServers list; devin acp loads from mcp_config.json."""
     calls: list[tuple[str, dict[str, Any]]] = []
 
     async def fake_call(method: str, params: dict[str, Any], **kwargs: Any) -> Any:
@@ -111,7 +111,8 @@ def test_session_load_uses_required_mcp_servers(client: AcpClient, monkeypatch) 
     )
     assert result == "s-3"
     load_params = next(c[1] for c in calls if c[0] == "session/load")
-    assert load_params["mcpServers"] == mcp_servers
+    assert load_params["mcpServers"] == []
+    assert client._mcp_servers == mcp_servers
 
 
 @pytest.mark.parametrize(
