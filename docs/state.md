@@ -3,9 +3,11 @@
 The harness supports pluggable, per-chat state. Each plugin can:
 
 - Persist a JSON state file inside the chat session directory.
-- Inject a prompt block into a named slot (`wake`, `persona_state`, etc.).
+- Inject a prompt block into a named slot (`wake`, `self_state`, `body`, `mesh`, etc.).
 - Expose an MCP server or a chat skill.
 - Intercept, modify, or observe the conversation through **lifecycle hooks**.
+
+The former `persona_state` slot has been split into three dedicated slots: `body` (sensation), `self_state` (private mood/resume note), and `mesh` (external protocol). Plugins that do not set `prompt_slot` now default to `self_state`.
 
 ## Lifecycle hooks
 
@@ -118,7 +120,7 @@ The built-in state plugins now live in the [`diploid-plugins`](https://github.co
 ### `continuity`
 
 Tracks wake state: time since last turn, last stop reason, and any pending background dispatches.
-By default it is placed in the `wake` slot and only shown on the first prompt of a session.
+By default it is placed in the `wake` slot and shown at session boundaries: the first prompt of a session and any rehydrated prompt (for example after ACP resume or stale-session rehydration).
 State is stored in `sessions/<chat_id>/chat_wake_state.json`.
 
 ### `curriculum`

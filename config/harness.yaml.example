@@ -4,10 +4,10 @@ engine:                 # `diploid:` is the YAML alias for this block
   # start_args: ["acp", "--model", "swe-1-7"]  # override command-line args for other ACP binaries
   model: swe-1-7
   permission_mode: dangerous
-  timeout: 900.0      # absolute ACP call limit
-  soft_timeout: 600.0 # seconds before auto-cancel + partial reply; 0.0 or null disables
+  timeout: 900.0      # absolute prompt hard deadline; null waits for /stop or completion
+  soft_timeout: 600.0 # seconds before auto-cancel + partial reply; null disables
   acp_watchdog_interval: 10.0 # seconds between transport health checks
-  acp_watchdog_timeout: 120.0 # seconds without prompt output before killing the ACP process
+  acp_watchdog_timeout: 120.0 # seconds without a control-call response before transport reset
   acp_resume_enabled: false  # use ACP session/resume (or load) instead of prompt rehydration
   continuation_triggers:  # plain-text replies that resume a partial turn
     - continue
@@ -121,7 +121,7 @@ harness:
     - name: curriculum
       enabled: false  # example plugin; not needed for this persona
       module: diploid_plugins.curriculum
-      prompt_slot: persona_state
+      prompt_slot: self_state
       first_prompt_only: false
       prompt_order: 100
       state_file: chat_curriculum.json
@@ -140,7 +140,6 @@ harness:
     - name: planner
       enabled: true
       module: diploid_plugins.planner
-      prompt_slot: persona_state
       first_prompt_only: false
       prompt_order: 50
       max_prompt_chars: 1024
@@ -154,7 +153,6 @@ harness:
     - name: auto_continue
       enabled: true
       module: diploid_plugins.auto_continue
-      prompt_slot: persona_state
       first_prompt_only: false
       prompt_order: 55
       state_file: chat_auto_continue.json
@@ -168,14 +166,13 @@ harness:
     - name: self_state
       enabled: true
       module: diploid_plugins.self_state
-      prompt_slot: persona_state
+      prompt_slot: self_state
       prompt_order: 90
       state_file: chat_self_state.md
       max_prompt_chars: 512
     - name: self_management
       enabled: true
       module: diploid_plugins.self_management
-      prompt_slot: persona_state
       prompt_order: 95
       max_prompt_chars: 0
       mcp_server:

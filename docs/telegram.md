@@ -95,6 +95,16 @@ Should I continue?
 ```
 ````
 
+If the list needs an open-ended escape option, include `"Other (please specify)"` as the final option:
+
+````
+Where should the rule live?
+
+```ask
+{"question": "Where should the rule live?", "options": ["Shared AGENTS.md", "Private AGENTS.md", "Both", "Other (please specify)"]}
+```
+````
+
 ## Replying to messages
 
 If you reply to any earlier message in the Telegram chat, the poller extracts

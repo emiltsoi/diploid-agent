@@ -76,7 +76,7 @@ def test_plugin_add_and_remove(client: TestClient) -> None:
             "name": "self_state",
             "enabled": True,
             "module": "diploid_plugins.self_state",
-            "prompt_slot": "persona_state",
+            "prompt_slot": "self_state",
             "state_file": "chat_self_state.md",
         }
     }
@@ -113,7 +113,7 @@ def test_plugin_dry_run_validates_module(client: TestClient) -> None:
                 "name": "self_state",
                 "enabled": True,
                 "module": "diploid_plugins.self_state",
-                "prompt_slot": "persona_state",
+                "prompt_slot": "self_state",
             },
             "dry_run": True,
         },

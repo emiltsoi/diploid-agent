@@ -481,9 +481,10 @@ class PluginManager:
         chat_id: str,
         slots: dict[str, list[str]],
         is_first: bool,
+        rehydrated: bool = False,
     ) -> dict[str, list[str]]:
         for plugin in self._plugins_for(chat_id):
-            if plugin.first_prompt_only and not is_first:
+            if plugin.first_prompt_only and not is_first and not rehydrated:
                 continue
             try:
                 block = plugin.prompt_block(plugin.max_prompt_chars)

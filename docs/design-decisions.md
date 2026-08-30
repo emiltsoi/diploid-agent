@@ -110,12 +110,14 @@ restart the ACP transport only when the active MCP list actually changes.
 
 ## Why stale-session rehydration rebuilds the full prompt
 
-When an ACP session becomes stale, the harness falls back to `_build_first_prompt`
+When an ACP session becomes stale, the harness falls back to `build_first`
 and creates a new ACP session on the existing transport. The new first prompt
-re-injects the persona, current memory, recalled transcript context, and the
-optional continuation anchor. This is a full context reload, not an incremental
-re-injection. It is a known cost of the stale-session fallback and is
-intentionally chosen over trying to resume a broken ACP session. If the new
+re-injects the persona, current memory, recalled transcript context, the
+optional continuation anchor, and first-prompt-only plugin blocks. It is built
+with `rehydrated=True`, so the model sees a rehydration notice and plugins such
+as `continuity` still run at the session boundary. This is a full context reload,
+not an incremental re-injection. It is a known cost of the stale-session fallback
+and is intentionally chosen over trying to resume a broken ACP session. If the new
 session also reports a stale or transport-level error, the harness restarts the
 ACP transport and retries once.
 

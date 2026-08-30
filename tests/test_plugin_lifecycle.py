@@ -693,8 +693,8 @@ def test_plugin_disable_hides_from_prompt(monkeypatch, tmp_path: Path) -> None:
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
     config = _make_config(tmp_path, fixture_root)
     config.harness.plugins = [
-        PluginConfig(name="visible", enabled=True, prompt_slot="persona_state"),
-        PluginConfig(name="hidden", enabled=True, prompt_slot="persona_state"),
+        PluginConfig(name="visible", enabled=True, prompt_slot="self_state"),
+        PluginConfig(name="hidden", enabled=True, prompt_slot="self_state"),
     ]
     harness = ConversationHarness(config)
 
@@ -718,8 +718,8 @@ def test_plugin_disable_hides_from_prompt(monkeypatch, tmp_path: Path) -> None:
         def prompt_block(self, max_chars: int | None = None) -> str | None:
             return f"[{self.config.name}]"
 
-    visible_cfg = PluginConfig(name="visible", enabled=True, prompt_slot="persona_state")
-    hidden_cfg = PluginConfig(name="hidden", enabled=True, prompt_slot="persona_state")
+    visible_cfg = PluginConfig(name="visible", enabled=True, prompt_slot="self_state")
+    hidden_cfg = PluginConfig(name="hidden", enabled=True, prompt_slot="self_state")
     harness._plugins._plugins = [visible_cfg, hidden_cfg]
 
     def _plugins_for(chat_id: str) -> list[StatePlugin]:

@@ -18,9 +18,10 @@ process can continue a previously saved session with `session/resume` or
 
 When the harness wants to continue an existing diploid session, it asks the
 current `devin acp` child to resume the stored `session_id`. If that succeeds,
-the ACP message chain continues and the next user message is sent as a normal
-follow-up. Only explicit `/new` or a chat that fails consistency checks starts a
-fresh `session/new` with a full first prompt.
+the ACP message chain continues and the next user message is sent as a
+rehydrated follow-up, so first-prompt-only plugins (e.g. `continuity`) still
+appear at the session boundary. Only explicit `/new` or a chat that fails
+consistency checks starts a fresh `session/new` with a full first prompt.
 
 ## Concepts
 
@@ -55,10 +56,12 @@ fresh `session/new` with a full first prompt.
    tries ACP `session/resume` first and falls back to the stable `session/load`
    if the ACP server does not advertise the unstable `session/resume` method.
    After a successful resume, the session `mode` and `model` are re-applied.
+   The resumed follow-up is built with `rehydrated=True`, so the prompt includes
+   first-prompt-only plugins and a rehydration notice.
 2. If the ACP session cannot be resumed (or the feature is disabled), fall back
    to building a fresh first prompt from the archived transcript and memory,
    calling `AcpClient.create_session`, and updating the record with the new
-   `session_id`.
+   `session_id`. This prompt is also built with `rehydrated=True`.
 
 This means a service restart or transport restart does not lose the conversation:
 the ACP state is reloaded from `sessions.db` and the next message is sent as a
@@ -74,9 +77,7 @@ session seeded with the archived transcript and memory.
 
 ## ACP resume configuration
 
-ACP session resume is controlled by `diploid.acp_resume_enabled` (default
-`false`). When enabled, the harness tries ACP `session/resume` (falling back to
-`session/load`) before rehydrating from a rebuilt prompt.
+ACP session resume is controlled by `engine.acp_resume_enabled` (also writable as `diploid.acp_resume_enabled`; default `false`). When enabled, the harness tries ACP `session/resume` (falling back to `session/load`) before rehydrating from a rebuilt prompt.
 
 Resume is only attempted when the active configuration matches the stored
 session:
@@ -133,7 +134,8 @@ Long-running ACP turns can be interrupted mid-flight:
 During a normal turn, if `AcpClient.send_message` fails because the ACP session
 is stale, the harness first attempts `AcpClient.resume_session` to reload the
 stored `session_id` from `sessions.db`. If that succeeds, the turn continues as a
-normal follow-up. If resume fails or is disabled, the harness falls back to
+rehydrated follow-up, so first-prompt-only plugins still run and a rehydration
+notice is injected. If resume fails or is disabled, the harness falls back to
 building a first prompt from the current local state and creating a new ACP
 session on the existing transport. The user does not need to manually type `/new`
 after a service restart.

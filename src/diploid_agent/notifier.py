@@ -78,7 +78,7 @@ class TelegramNotifier(Notifier):
         self.metrics = metrics
         self._lock = threading.Lock()
         self._typing_threads: dict[str, tuple[threading.Thread, threading.Event]] = {}
-        self._typing_lock = threading.Lock()
+        self._typing_lock = threading.RLock()
 
     def _post(self, url: str, data: dict[str, Any] | None = None) -> httpx.Response:
         with self._lock:

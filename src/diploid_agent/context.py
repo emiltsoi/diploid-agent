@@ -416,7 +416,9 @@ class ContextBuilder:
             "persistent_memory": [],
             "wake": [],
             "working_memory": [],
-            "persona_state": [],
+            "body": [],
+            "self_state": [],
+            "mesh": [],
             "metrics": [],
             "skills": [],
             "continuation": [],
@@ -458,6 +460,9 @@ class ContextBuilder:
             slots["skills"].append(skill_context)
 
         parts: list[str] = []
+        # Slots are rendered in this order.  The former `persona_state` slot
+        # is split into three dedicated slots: body (sensation), self_state
+        # (private mood/resume note), and mesh (external protocol).
         for slot in [
             "identity",
             "self_narrative",
@@ -468,7 +473,9 @@ class ContextBuilder:
             "persistent_memory",
             "wake",
             "working_memory",
-            "persona_state",
+            "body",
+            "self_state",
+            "mesh",
             "metrics",
             "skills",
             "continuation",
@@ -501,6 +508,7 @@ class ContextBuilder:
         reply_to_message_id: int | None = None,
         continuation_anchor: str | None = None,
         skill_names: set[str] | None = None,
+        rehydrated: bool = False,
     ) -> PromptContext:
         """Build a follow-up prompt, re-injecting full persona and chat memory."""
         build_ctx = PromptBuildContext(
@@ -509,6 +517,7 @@ class ContextBuilder:
             model=record.model if record else None,
             is_first=False,
             continuation_anchor=continuation_anchor,
+            rehydrated=rehydrated,
         )
         build_ctx = self.plugin_manager.before_build_prompt(chat_id, build_ctx)
         effective_model = build_ctx.model or self.config.engine.model
@@ -543,15 +552,25 @@ class ContextBuilder:
             "persistent_memory": [],
             "wake": [],
             "working_memory": [],
-            "persona_state": [],
+            "body": [],
+            "self_state": [],
+            "mesh": [],
             "metrics": [],
             "skills": [],
             "continuation": [],
             "user": [formatted],
         }
 
-        if notice:
-            slots["system_notice"].append("## System notice\n\n" + notice)
+        rehydration_notice = ""
+        if build_ctx.rehydrated:
+            rehydration_notice = (
+                "This ACP session was rehydrated. Full persona memory and "
+                "long-term chat memory have been re-injected into the prompt."
+            )
+
+        if notice or rehydration_notice:
+            parts = [p for p in [rehydration_notice, notice] if p]
+            slots["system_notice"].append("## System notice\n\n" + "\n\n".join(parts))
         if persona.memory_text:
             slots["memory"].append(
                 f"## Current memory ({persona.memory_path.name})\n\n{persona.memory_text}"
@@ -563,7 +582,7 @@ class ContextBuilder:
         if chat_mem:
             slots["chat_memory"].append("## Chat memory (on disk)\n\n" + chat_mem)
 
-        self.plugin_manager.fill_prompt_slots(chat_id, slots, is_first=False)
+        self.plugin_manager.fill_prompt_slots(chat_id, slots, is_first=False, rehydrated=build_ctx.rehydrated)
 
         if build_ctx.continuation_anchor:
             slots["continuation"].append(build_ctx.continuation_anchor)
@@ -577,6 +596,9 @@ class ContextBuilder:
             slots["metrics"].append(metrics_context)
 
         parts: list[str] = []
+        # Slots are rendered in this order.  The former `persona_state` slot
+        # is split into three dedicated slots: body (sensation), self_state
+        # (private mood/resume note), and mesh (external protocol).
         for slot in [
             "identity",
             "self_narrative",
@@ -587,7 +609,9 @@ class ContextBuilder:
             "persistent_memory",
             "wake",
             "working_memory",
-            "persona_state",
+            "body",
+            "self_state",
+            "mesh",
             "metrics",
             "skills",
             "continuation",

@@ -31,12 +31,12 @@ class EngineConfig(BaseModel):
     model: str = "swe-1-7"
     context_window: int | None = None
     permission_mode: str = "dangerous"
-    timeout: float = 900.0
+    timeout: float | None = 900.0  # hard prompt deadline; None waits until /stop or completion
     soft_timeout: float | None = 600.0  # seconds before auto-cancel + partial reply; None disables
     acp_startup_timeout: float = 30.0  # seconds to wait for `devin acp` initialize handshake
     acp_watchdog_interval: float = 10.0  # seconds between ACP transport watchdog checks
     acp_watchdog_timeout: float = (
-        120.0  # seconds without ACP prompt output before the watchdog kills the child
+        120.0  # seconds without a control-call response before the transport is reset
     )
     acp_control_timeout: float = (
         120.0  # seconds without a control-call response before the transport is reset
@@ -169,7 +169,7 @@ class PluginConfig(BaseModel):
     mcp_server: McpServerConfig | None = None
     skill: str | None = None
     skill_path: Path | None = None
-    prompt_slot: str = "persona_state"
+    prompt_slot: str = "self_state"
     first_prompt_only: bool = False
     prompt_order: int = 100
     max_prompt_chars: int = 1024

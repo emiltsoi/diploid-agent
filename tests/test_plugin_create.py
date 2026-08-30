@@ -51,7 +51,7 @@ def test_plugin_create_scaffolds_and_sandboxes(tmp_path: Path):
     runtime = AgentRuntime(_make_config(tmp_path))
     runtime.engine = FakeEngine()
 
-    result = runtime.plugin_create(name="hello_world", prompt_slot="persona_state")
+    result = runtime.plugin_create(name="hello_world", prompt_slot="self_state")
 
     assert result.get("name") == "hello_world"
     assert result.get("module") == "hello_world"

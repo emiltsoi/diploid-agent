@@ -141,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--chat-id", default="sandbox")
     parser.add_argument("--sessions-root", default=None)
     parser.add_argument("--state-file", default=None)
-    parser.add_argument("--prompt-slot", default="persona_state")
+    parser.add_argument("--prompt-slot", default="self_state")
     parser.add_argument("--plugin-path", action="append", default=[])
     parser.add_argument("--config-json", default=None)
     args = parser.parse_args(argv)

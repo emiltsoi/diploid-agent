@@ -211,7 +211,7 @@ class PluginSandboxRequest(BaseModel):
 class PluginCreateRequest(BaseModel):
     name: str
     module: str | None = None
-    prompt_slot: str = "persona_state"
+    prompt_slot: str = "self_state"
     state_file: str | None = None
     mcp_server: dict[str, Any] | None = None
     config: dict[str, Any] | None = None

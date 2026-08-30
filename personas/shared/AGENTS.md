@@ -20,6 +20,16 @@ For an approval question, use options like `["Approve", "Decline", "Cancel"]`.
 
 Keep the question short. The options are what the user will see as buttons. Do not explain that you are inserting a special block; just include it exactly as shown.
 
+If the list needs an open-ended escape option, include `"Other (please specify)"` as the final option. The user can select it to give a custom answer.
+
+````
+Where should the rule live?
+
+```ask
+{"question": "Where should the rule live?", "options": ["Shared AGENTS.md", "Private AGENTS.md", "Both", "Other (please specify)"]}
+```
+````
+
 ## Memory tools
 
 The `diploid-memory` MCP server is always available. When you learn a fact, preference, decision, or anything that should survive this session, make it durable:

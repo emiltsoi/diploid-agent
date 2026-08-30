@@ -76,7 +76,7 @@ def test_add_plugin(tmp_path: Path) -> None:
         name="self_state",
         enabled=True,
         module="diploid_plugins.self_state",
-        prompt_slot="persona_state",
+        prompt_slot="self_state",
         state_file="chat_self_state.md",
     )
     result = runtime.plugin_add(cfg)
@@ -108,7 +108,6 @@ def test_rollback(tmp_path: Path) -> None:
             name="planner",
             enabled=True,
             module="diploid_plugins.planner",
-            prompt_slot="persona_state",
         )
     )
     runtime.plugin_add(
@@ -116,7 +115,7 @@ def test_rollback(tmp_path: Path) -> None:
             name="self_state",
             enabled=True,
             module="diploid_plugins.self_state",
-            prompt_slot="persona_state",
+            prompt_slot="self_state",
         )
     )
     runtime.plugin_rollback(1)
@@ -136,7 +135,7 @@ def test_persisted_to_runtime_overrides(tmp_path: Path) -> None:
             name="self_state",
             enabled=True,
             module="diploid_plugins.self_state",
-            prompt_slot="persona_state",
+            prompt_slot="self_state",
         )
     )
     overrides_path = runtime._runtime_overrides_path
@@ -209,7 +208,7 @@ def test_persisted_plugins_loaded_on_new_runtime(tmp_path: Path) -> None:
             name="self_state",
             enabled=True,
             module="diploid_plugins.self_state",
-            prompt_slot="persona_state",
+            prompt_slot="self_state",
         )
     )
 

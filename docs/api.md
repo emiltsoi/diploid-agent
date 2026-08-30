@@ -413,8 +413,7 @@ curl -X POST http://127.0.0.1:4003/plugins \
     "plugin": {
       "name": "planner",
       "enabled": true,
-      "module": "diploid_plugins.planner",
-      "prompt_slot": "persona_state"
+      "module": "diploid_plugins.planner"
     },
     "dry_run": true
   }'

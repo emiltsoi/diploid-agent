@@ -69,6 +69,11 @@ def test_build_first_prompt_for_new_chat(tmp_path: Path) -> None:
         "chat_memory_exceeded": False,
     }
     assert pctx.slots.get("user") == ["Hello, can you help me?"]
+    # The `persona_state` slot has been split into three dedicated slots.
+    assert "body" in pctx.slots
+    assert "self_state" in pctx.slots
+    assert "mesh" in pctx.slots
+    assert "persona_state" not in pctx.slots
     # The fixture has a SOUL.md and AGENTS.md identity file.
     assert "## SOUL" in pctx.prompt or "## AGENTS" in pctx.prompt
 
@@ -88,6 +93,11 @@ def test_build_follow_up_for_existing_chat(tmp_path: Path) -> None:
     }
     assert "identity" in pctx.slots
     assert "user" in pctx.slots
+    # The `persona_state` slot has been split into three dedicated slots.
+    assert "body" in pctx.slots
+    assert "self_state" in pctx.slots
+    assert "mesh" in pctx.slots
+    assert "persona_state" not in pctx.slots
 
 
 def test_build_first_prompt_trims_reply_quote_and_injects_continuation(tmp_path: Path) -> None:
