@@ -11,12 +11,16 @@ For the current implementation, see:
 
 ## Background
 
-The harness keeps one active ACP session per Telegram chat. ACP session IDs are
-only valid for as long as the ACP engine subprocess that created them is alive.
-If the service restarts or the subprocess crashes, the stored ACP
-`session_id` becomes stale. The harness therefore treats the ACP session as
-ephemeral and the **local on-disk state** (transcript, memory, session record)
-as the authoritative conversation history.
+The harness keeps one active ACP session per Telegram chat. The Devin ACP binary
+persists session state in `~/.local/share/devin/cli/sessions.db`, so a new ACP
+process can continue a previously saved session with `session/resume` or
+`session/load`.
+
+When the harness wants to continue an existing diploid session, it asks the
+current `devin acp` child to resume the stored `session_id`. If that succeeds,
+the ACP message chain continues and the next user message is sent as a normal
+follow-up. Only explicit `/new` or a chat that fails consistency checks starts a
+fresh `session/new` with a full first prompt.
 
 ## Concepts
 
@@ -47,20 +51,44 @@ as the authoritative conversation history.
 
 `/resume 1` works in two steps:
 
-1. Try to reuse the stored ACP `session_id` by sending a low-cost
-   `session/set_config_option` probe.
-2. If the session is stale, build a fresh first prompt from the archived
-   transcript and memory, call `AcpClient.create_session`, and update the record
-   with the new `session_id`.
+1. Attempt `AcpClient.resume_session` for the stored `session_id`. The client
+   tries ACP `session/resume` first and falls back to the stable `session/load`
+   if the ACP server does not advertise the unstable `session/resume` method.
+   After a successful resume, the session `mode` and `model` are re-applied.
+2. If the ACP session cannot be resumed (or the feature is disabled), fall back
+   to building a fresh first prompt from the archived transcript and memory,
+   calling `AcpClient.create_session`, and updating the record with the new
+   `session_id`.
 
-This means a service restart does not lose the conversation; the next message
-automatically rehydrates the ACP session from local context.
+This means a service restart or transport restart does not lose the conversation:
+the ACP state is reloaded from `sessions.db` and the next message is sent as a
+follow-up on the resumed session.
 
 ## Branching
 
-`/branch 1` always creates a **new** ACP session seeded with the context of
-session `1`. It does not reuse the original ACP session, so the new branch can
-be edited without affecting the source session.
+`/branch 1` starts a new diploid session number. By default it first attempts to
+resume the source ACP `session_id` so the new branch continues the same ACP
+message chain. If the source session cannot be resumed (incompatible model,
+MCP list, skills, or a previous timeout), it falls back to creating a new ACP
+session seeded with the archived transcript and memory.
+
+## ACP resume configuration
+
+ACP session resume is controlled by `diploid.acp_resume_enabled` (default
+`false`). When enabled, the harness tries ACP `session/resume` (falling back to
+`session/load`) before rehydrating from a rebuilt prompt.
+
+Resume is only attempted when the active configuration matches the stored
+session:
+
+- The requested model must match the session's model.
+- The active MCP server list must match `record.enabled_mcp_servers`.
+- The active skill list must match `record.enabled_skills`.
+- The previous turn must not have stopped with `timeout` (timed-out sessions are
+  restarted from scratch).
+
+If any of these checks fail, or if ACP resume raises an error, the harness falls
+back to `session/new` with a full `build_first` prompt.
 
 ## Auto-pruning
 
@@ -103,14 +131,17 @@ Long-running ACP turns can be interrupted mid-flight:
 ## Auto-recovery
 
 During a normal turn, if `AcpClient.send_message` fails because the ACP session
-is stale, the harness catches the error, builds a first prompt from the current
-local state, and creates a new ACP session on the existing transport. The user
-does not need to manually type `/new` after a service restart.
+is stale, the harness first attempts `AcpClient.resume_session` to reload the
+stored `session_id` from `sessions.db`. If that succeeds, the turn continues as a
+normal follow-up. If resume fails or is disabled, the harness falls back to
+building a first prompt from the current local state and creating a new ACP
+session on the existing transport. The user does not need to manually type `/new`
+after a service restart.
 
 If the ACP transport itself is unresponsive (a `TimeoutError` or transport
 failure), the harness calls `AcpClient.restart_transport()` to kill and restart
-the `devin acp` process, then rehydrates a fresh session from the durable
-transcript. Restart attempts are rate-limited with
+the `devin acp` process, then attempts to resume the last active session before
+falling back to rehydration. Restart attempts are rate-limited with
 `acp_max_restarts` / `acp_restart_backoff_window` (default 3 per 300 s) to
 avoid tight kill/restart loops. The interrupted turn's `last_stop_reason` is
 stored on the session record, and a continuation trigger (`Continue`, `Go on`,

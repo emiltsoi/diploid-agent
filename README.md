@@ -24,7 +24,7 @@ retention to a Hindsight memory server.
 - Supports background dispatches that continue the conversation when they complete (`/dispatch`, `/continue`).
 - Supports live runtime configuration of task, waker, timer, notifications, and Telegram settings via HTTP and Telegram without restarting.
 - Supports state plugins with a rich lifecycle hook surface: plugins can intercept turns, sessions, dispatches, memory transitions, skill/MCP commands, retain/promote, and shutdown.
-- Hardens the ACP transport with typed error classification, restart backoff, and stale-session rehydration that reuses the existing transport when possible.
+- Hardens the ACP transport with typed error classification, restart backoff, and stale-session recovery that attempts ACP `session/resume` (falling back to `session/load`) before prompt rehydration.
 - Queues incoming user messages as high-priority wake events when a chat is busy instead of dropping them.
 - Runs a `diploid-memory` MCP server with `memory_recall`, `memory_retain`, and
   `memory_promote` tools, plus a shared `memory` skill that lets the agent use them.
