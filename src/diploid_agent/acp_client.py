@@ -269,6 +269,7 @@ class AcpClient:
         self._next_id = 0
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._active_prompts: dict[str, _Prompt] = {}
+        self._session_models: dict[str, str] = {}
         self._pending_cancels: set[str] = set()
         self._lock = threading.RLock()
         self._initialized = False
@@ -1112,6 +1113,7 @@ class AcpClient:
             "session/set_config_option",
             {"sessionId": session_id, "configId": "model", "value": use_model},
         )
+        self._session_models[session_id] = use_model
 
         return await self._prompt(
             session_id,
@@ -1132,12 +1134,15 @@ class AcpClient:
         on_update: Callable[[dict[str, Any]], None] | None = None,
     ) -> AcpPromptResult:
         use_model = _normalize_model(model or self.model)
-        # Always set the session model on follow-up to keep it in sync with the
-        # harness record (ACP ignores a no-op switch).
-        await self._call(
-            "session/set_config_option",
-            {"sessionId": session_id, "configId": "model", "value": use_model},
-        )
+        # Only set the session model on follow-up when it has changed. Repeated
+        # no-op model changes can re-render the session's system prefix and
+        # destabilize the ACP child.
+        if self._session_models.get(session_id) != use_model:
+            await self._call(
+                "session/set_config_option",
+                {"sessionId": session_id, "configId": "model", "value": use_model},
+            )
+            self._session_models[session_id] = use_model
 
         return await self._prompt(
             session_id,

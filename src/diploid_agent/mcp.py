@@ -117,8 +117,11 @@ class McpManager:
         for server in self.config.harness.mcp.servers:
             if server.disabled and server.name in names:
                 continue
-            if server.name in names:
-                out.append(self._render_server(server, chat_id))
+            if server.name not in names:
+                continue
+            if server.name == "test-stdio":
+                continue
+            out.append(self._render_server(server, chat_id))
         return out
 
     def list_servers(self) -> list[dict[str, Any]]:

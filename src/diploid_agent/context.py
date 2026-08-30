@@ -23,7 +23,6 @@ from diploid_agent.persona_composer import (
     PersonaPrompt,
     _trim_to_section,
     compose_persona,
-    identity_anchor,
 )
 from diploid_agent.plugins import PluginManager
 from diploid_agent.plugins.contexts import (
@@ -503,7 +502,7 @@ class ContextBuilder:
         continuation_anchor: str | None = None,
         skill_names: set[str] | None = None,
     ) -> PromptContext:
-        """Build a follow-up prompt for an existing session."""
+        """Build a follow-up prompt, re-injecting full persona and chat memory."""
         build_ctx = PromptBuildContext(
             chat_id=chat_id,
             record=record,
@@ -512,8 +511,8 @@ class ContextBuilder:
             continuation_anchor=continuation_anchor,
         )
         build_ctx = self.plugin_manager.before_build_prompt(chat_id, build_ctx)
+        effective_model = build_ctx.model or self.config.engine.model
 
-        anchor = identity_anchor(self.config.persona)
         formatted = self.format_user_message(
             user_message,
             reply_to,
@@ -521,18 +520,48 @@ class ContextBuilder:
             reply_to_message_id,
             chat_id,
         )
+        persona = compose_persona(self.config.persona)
+        mgr = self.memory_factory(chat_id)
+        recall = mgr.recall_context(formatted, model=effective_model)
+        chat_status = mgr.chat_memory_status()
+        pm = mgr.persona_memory(self.config.harness.memory.max_persona_memory_chars)
+        persona.memory_text = pm["text"]
+        persona.memory_truncated = pm["truncated"]
+        persona.memory_path = pm["path"]
+        persona.limit = pm["limit"]
+        persona.loaded = pm["loaded"]
+        persona.total = pm["total"]
+        notice = self.build_system_notice(persona, recall, chat_status)
 
         slots: dict[str, list[str]] = {
-            "anchor": [anchor],
+            "identity": [persona.text],
             "self_narrative": [],
-            "working_memory": [],
-            "persistent_memory": [],
+            "system_notice": [],
+            "memory": [],
+            "recall": [],
             "chat_memory": [],
+            "persistent_memory": [],
+            "wake": [],
+            "working_memory": [],
             "persona_state": [],
-            "continuation": [],
+            "metrics": [],
             "skills": [],
+            "continuation": [],
             "user": [formatted],
         }
+
+        if notice:
+            slots["system_notice"].append("## System notice\n\n" + notice)
+        if persona.memory_text:
+            slots["memory"].append(
+                f"## Current memory ({persona.memory_path.name})\n\n{persona.memory_text}"
+            )
+        if recall.text:
+            slots["recall"].append("## Chat memory\n\n" + recall.text)
+
+        chat_mem = self.memory_factory(chat_id).chat_memory_block()
+        if chat_mem:
+            slots["chat_memory"].append("## Chat memory (on disk)\n\n" + chat_mem)
 
         self.plugin_manager.fill_prompt_slots(chat_id, slots, is_first=False)
 
@@ -543,27 +572,34 @@ class ContextBuilder:
         if skill_context:
             slots["skills"].append(skill_context)
 
-        chat_mem = self.memory_factory(chat_id).chat_memory_block(max_chars=512)
-        if chat_mem:
-            slots["chat_memory"].append("## Chat memory anchor\n\n" + chat_mem)
+        metrics_context = self.metrics_context_for_prompt(chat_id, compact=True)
+        if metrics_context:
+            slots["metrics"].append(metrics_context)
 
         parts: list[str] = []
         for slot in [
-            "anchor",
+            "identity",
             "self_narrative",
-            "working_memory",
-            "persistent_memory",
+            "system_notice",
+            "memory",
+            "recall",
             "chat_memory",
+            "persistent_memory",
+            "wake",
+            "working_memory",
             "persona_state",
-            "continuation",
+            "metrics",
             "skills",
+            "continuation",
             "user",
         ]:
             parts.extend(slots.get(slot, []))
 
+        flags = {
+            "persona_memory_exceeded": persona.memory_truncated,
+            "chat_memory_exceeded": chat_status.get("exceeded", False),
+        }
+
         prompt = "\n\n".join(parts)
-        metrics_context = self.metrics_context_for_prompt(chat_id, compact=True)
-        if metrics_context:
-            prompt += f"\n\n{metrics_context}"
-        pctx = PromptContext(prompt, None, {}, slots, model=build_ctx.model)
+        pctx = PromptContext(prompt, notice, flags, slots, model=effective_model)
         return self.plugin_manager.after_prompt_built(chat_id, pctx)

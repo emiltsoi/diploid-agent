@@ -74,16 +74,19 @@ def test_build_first_prompt_for_new_chat(tmp_path: Path) -> None:
 
 
 def test_build_follow_up_for_existing_chat(tmp_path: Path) -> None:
-    """A follow-up prompt contains the identity anchor and the user message."""
+    """A follow-up prompt re-injects the full identity and the user message."""
     builder = _make_builder(tmp_path)
 
     pctx = builder.build_follow_up("chat-1", "What about the second item?", record=None)
 
     assert "What about the second item?" in pctx.prompt
-    assert "You are test-pilot" in pctx.prompt
+    assert "I am **Test Pilot**" in pctx.prompt
     assert pctx.notice is None
-    assert pctx.memory_flags == {}
-    assert "anchor" in pctx.slots
+    assert pctx.memory_flags == {
+        "persona_memory_exceeded": False,
+        "chat_memory_exceeded": False,
+    }
+    assert "identity" in pctx.slots
     assert "user" in pctx.slots
 
 
@@ -205,12 +208,12 @@ def test_build_first_includes_chat_memory_block(tmp_path: Path) -> None:
 
 
 def test_build_follow_up_includes_chat_memory_anchor(tmp_path: Path) -> None:
-    """A follow-up prompt loads a small chat memory anchor."""
+    """A follow-up prompt loads the full chat memory."""
     builder = _make_builder(tmp_path)
     mgr = builder.memory_factory("chat-1")
     fb = mgr._file_backend
     assert fb is not None
     fb.retain([MemoryItem(content="We agreed on Postgres.", tags=["memory"])])
     pctx = builder.build_follow_up("chat-1", "what next?", record=None)
-    assert "## Chat memory anchor" in pctx.prompt
+    assert "## Chat memory (on disk)" in pctx.prompt
     assert "Postgres" in pctx.prompt
