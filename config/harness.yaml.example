@@ -257,7 +257,17 @@ harness:
           - "--sessions-root"
           - "{sessions_root}"
         env: []
-    default_enabled: [github, diploid-memory, diploid-working-memory, diploid-identity, diploid-self-management]
+      - name: diploid-harness
+        command: python
+        args:
+          - "-m"
+          - "diploid_plugins.harness.harness_mcp"
+          - "--chat-id"
+          - "{chat_id}"
+          - "--harness-url"
+          - "{harness_url}"
+        env: []
+    default_enabled: [github, diploid-memory, diploid-working-memory, diploid-identity, diploid-self-management, diploid-harness]
   skills:
     shared_root: personas/shared
     default_lazy: true  # only match skills by keyword; do not auto-load all default_enabled

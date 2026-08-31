@@ -115,6 +115,15 @@ class GracefulRestartRequest(BaseModel):
     reason: str = ""
 
 
+class SubagentRequest(BaseModel):
+    chat_id: str
+    prompt: str
+    context: str | None = None
+    model: str | None = None
+    cwd: str | None = None
+    acp_timeout: float | None = None
+
+
 class TimerRequest(BaseModel):
     chat_id: str
     reason: str
@@ -471,6 +480,23 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
                 req.chat_id,
                 req.service,
                 reason=req.reason,
+            )
+        )
+
+    @app.post(
+        "/subagent",
+        response_model=ChatResponse,
+        dependencies=[Depends(_require_api_key)],
+    )
+    def subagent(req: SubagentRequest) -> ChatResponse:
+        return _to_response(
+            runtime.subagent_start(
+                req.chat_id,
+                req.prompt,
+                context=req.context,
+                model=req.model,
+                cwd=Path(req.cwd) if req.cwd else None,
+                acp_timeout=req.acp_timeout,
             )
         )
 

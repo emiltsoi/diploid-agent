@@ -12,6 +12,7 @@ from pathlib import Path
 
 from diploid_agent.config import Config, TaskConfig
 from diploid_agent.engine import AcpEngine, AgentEngine, TurnRequest
+from diploid_agent.engine.factory import build_engine
 from diploid_agent.plan.manager import PlanManager
 from diploid_agent.plan.models import Plan, Task, TaskStatus, TaskType
 from diploid_agent.runtime.event_bus import Event, EventBus
@@ -42,6 +43,7 @@ class TaskEngine:
         shell_timeout: float = 60.0,
         on_task_start: Callable[[str, Task], None] | None = None,
         on_task_done: Callable[[str, Task, tuple[str, str, int]], None] | None = None,
+        on_service_restart: Callable[[str, str], None] | None = None,
     ) -> None:
         self.plan_manager = plan_manager
         self.event_bus = event_bus
@@ -61,6 +63,7 @@ class TaskEngine:
         self._pool = WorkerPool(max_workers=self._task_config.workers)
         self._on_task_start = on_task_start
         self._on_task_done = on_task_done
+        self._on_service_restart = on_service_restart
 
     @property
     def task_config(self) -> TaskConfig:
@@ -185,7 +188,7 @@ class TaskEngine:
     def _execute(self, task: Task) -> tuple[str, str, int]:
         if task.type == TaskType.SHELL:
             return self._run_shell(task)
-        if task.type == TaskType.ACP:
+        if task.type in (TaskType.ACP, TaskType.SUBAGENT):
             return self._run_acp(task)
         if task.type == TaskType.NOOP:
             return "noop", "", 0
@@ -218,18 +221,23 @@ class TaskEngine:
         cwd = task.cwd if task.cwd is not None else Path(os.getcwd())
 
         # ACP tasks are background subagents and must not share the chat's
-        # AcpClient / devin acp process. Create a fresh engine per task.
-        if isinstance(self.engine, AcpEngine):
-            if self.config is None:
-                return "ACP task config not available", "", -1
-            api_key = None
-            if self.config.secrets:
-                api_key = self.config.secrets.windsurf_api_key
-            engine = AcpEngine(config=self.config.engine, api_key=api_key)
-        elif self.engine is not None:
-            engine = self.engine
-        else:
+        # AcpClient / devin acp process. Create a fresh engine per task, unless
+        # an explicit non-ACP engine has been injected (e.g. FakeAgentEngine in
+        # tests).
+        if self.config is None:
             return "ACP engine not configured", "", -1
+
+        if self.engine is None or isinstance(self.engine, AcpEngine):
+            api_key = self.config.secrets.windsurf_api_key if self.config.secrets else None
+            service_name = f"{self.config.persona.name}.service" if self.config.persona else None
+            engine = build_engine(
+                self.config.engine,
+                api_key=api_key,
+                service_name=service_name,
+                on_service_restart=self._on_service_restart,
+            )
+        else:
+            engine = self.engine
 
         model = (
             task.acp_model
@@ -239,24 +247,22 @@ class TaskEngine:
             else self._model
             if self._model is not None
             else self.config.engine.model
-            if self.config is not None
-            else None
         )
         soft_timeout = (
-            self._task_config.acp_timeout
+            task.acp_timeout
+            if task.acp_timeout is not None
+            else self._task_config.acp_timeout
             if self._task_config.acp_timeout is not None
             else self._acp_timeout
             if self._acp_timeout is not None
             else self.config.engine.soft_timeout
-            if self.config is not None
-            else None
         )
 
         request = TurnRequest(
             prompt=prompt_text,
             cwd=cwd,
             model=model,
-            mcp_servers=None,
+            mcp_servers=task.mcp_servers,
             soft_timeout=soft_timeout,
         )
         try:
@@ -269,7 +275,7 @@ class TaskEngine:
             logger.exception("ACP task %s failed", task.id)
             return (str(exc), "", -1)
         finally:
-            if isinstance(engine, AcpEngine):
+            if engine is not self.engine:
                 engine.close()
 
     def _start_ready_dependents(self, plan_id: str) -> None:

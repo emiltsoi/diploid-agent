@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import abc
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from diploid_agent.config import NotificationsConfig, TaskConfig, TimerConfig, WakerConfig
@@ -164,6 +165,19 @@ class RuntimeAPI(abc.ABC):
         log: str = "",
     ) -> Any:
         """Manually mark a plan task as done."""
+
+    @abc.abstractmethod
+    def subagent_start(
+        self,
+        chat_id: str,
+        prompt: str,
+        *,
+        context: str | None = None,
+        model: str | None = None,
+        cwd: Path | None = None,
+        acp_timeout: float | None = None,
+    ) -> Any:
+        """Start a background ACP subagent and return a dispatch id."""
 
     @abc.abstractmethod
     def get_task_config(self) -> TaskConfig:

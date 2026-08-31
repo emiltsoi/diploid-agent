@@ -24,6 +24,7 @@ class TaskType(str, Enum):
     SHELL = "shell"
     NOOP = "noop"
     ACP = "acp"
+    SUBAGENT = "subagent"
 
 
 class PlanStatus(str, Enum):
@@ -53,6 +54,9 @@ class Task(BaseModel):
     cwd: Path | None = None
     chat_id: str | None = None
     acp_model: str | None = None
+    acp_timeout: float | None = None
+    mcp_servers: list[dict[str, Any]] | None = None
+    dispatch_id: str | None = None
 
     @field_validator("cwd")
     @classmethod

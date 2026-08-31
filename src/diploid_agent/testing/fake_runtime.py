@@ -169,6 +169,18 @@ class FakePluginRuntime:
     def is_auto_continue_suppressed(self, chat_id: str) -> bool:
         return False
 
+    def subagent_start(
+        self,
+        chat_id: str,
+        prompt: str,
+        *,
+        context: str | None = None,
+        model: str | None = None,
+        cwd: Path | None = None,
+        acp_timeout: float | None = None,
+    ) -> ChatResult:
+        return ChatResult(reply="subagent started", dispatch_id="dispatch-test")
+
     def _active_record(self, chat_id: str) -> SessionRecord | None:
         return None
 

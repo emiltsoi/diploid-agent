@@ -47,7 +47,7 @@ from diploid_agent.models import (
 from diploid_agent.notifier import NoopNotifier, Notifier, TelegramNotifier, WebhookNotifier
 from diploid_agent.persona_composer import PersonaPrompt
 from diploid_agent.plan.manager import PlanManager
-from diploid_agent.plan.models import Plan, PlanStatus, Task, TaskStatus
+from diploid_agent.plan.models import Plan, PlanStatus, Task, TaskStatus, TaskType
 from diploid_agent.plugin_incidents import PluginIncidentStore
 from diploid_agent.plugins import PluginManager
 from diploid_agent.plugins.contexts import (
@@ -175,6 +175,7 @@ class AgentRuntime(RuntimeAPI):
             task_config=config.harness.task,
             on_task_start=self._on_task_started,
             on_task_done=self._on_task_done,
+            on_service_restart=self._on_service_restart,
         )
 
         self.timer_service = TimerService(
@@ -1568,6 +1569,9 @@ class AgentRuntime(RuntimeAPI):
                 payload.get("plan_id"),
             )
             return
+        if task.type == TaskType.SUBAGENT:
+            self._complete_subagent_task(task)
+            return
         plan = self.plan_manager.get_plan(payload["plan_id"])
         if plan is None:
             return
@@ -1587,6 +1591,9 @@ class AgentRuntime(RuntimeAPI):
                 payload.get("task_id"),
                 payload.get("plan_id"),
             )
+            return
+        if task.type == TaskType.SUBAGENT:
+            self._complete_subagent_task(task)
             return
         plan = self.plan_manager.get_plan(payload["plan_id"])
         if plan is None:
@@ -2606,6 +2613,93 @@ class AgentRuntime(RuntimeAPI):
                 )
             )
         return task
+
+    @_locked
+    def subagent_start(
+        self,
+        chat_id: str,
+        prompt: str,
+        *,
+        context: str | None = None,
+        model: str | None = None,
+        cwd: Path | None = None,
+        acp_timeout: float | None = None,
+    ) -> ChatResult:
+        """Start a background ACP subagent and return a dispatch id.
+
+        The subagent runs in a fresh AcpEngine, so it survives the parent turn
+        being stopped or killed. When it completes, the harness starts a new
+        turn for the chat via the existing dispatch/continue flow.
+        """
+        record = self._active_record(chat_id)
+        if record is None:
+            return ChatResult(reply="No active session for this chat.")
+
+        use_model = model or self._model(record)
+        dispatch = self.dispatch_store.add(
+            chat_id, record.session_id, context=context or prompt[:200]
+        )
+        task = Task(
+            name="subagent",
+            type=TaskType.SUBAGENT,
+            prompt=prompt,
+            chat_id=chat_id,
+            acp_model=use_model,
+            acp_timeout=acp_timeout,
+            mcp_servers=self.mcp.enabled_servers(chat_id, self._active_mcp_server_names(chat_id)),
+            dispatch_id=dispatch.id,
+            cwd=cwd or self._chat_dir(chat_id),
+        )
+        plan = self.plan_manager.create_plan(
+            f"subagent-{dispatch.id[:8]}",
+            description="Background subagent task",
+            chat_id=chat_id,
+            tasks=[task],
+        )
+
+        wake_id = f"wake-{dispatch.id}"
+        self.wake_queue.enqueue(
+            WakeEvent(
+                id=wake_id,
+                chat_id=chat_id,
+                reason="dispatch",
+                priority=1,
+                scheduled_at=time.time(),
+                created_at=time.time(),
+                silent=False,
+                payload={"dispatch_id": dispatch.id, "notify": True},
+                ready=False,
+            )
+        )
+
+        self.task_engine.start_task(plan.id, task.id)
+        return ChatResult(
+            reply="Subagent started. I'll report back when it finishes.",
+            dispatch_id=dispatch.id,
+        )
+
+    def _complete_subagent_task(self, task: Task) -> None:
+        """Finish the dispatch for a subagent task and make the wake ready.
+
+        The TimerService will pick up the wake and call `continue_turn`, which
+        starts a real new turn and sends a Telegram message.
+        """
+        if task.dispatch_id is None or task.chat_id is None:
+            return
+        dispatch = self.dispatch_store.get(task.dispatch_id)
+        if dispatch is None:
+            return
+
+        result = task.result or "(no result)"
+        if task.status == TaskStatus.FAILED:
+            result = task.log or "(subagent failed)"
+        self.dispatch_store.complete(task.dispatch_id, result)
+
+        wake_id = f"wake-{task.dispatch_id}"
+        try:
+            self.wake_queue.ready(wake_id, now=time.time())
+        except Exception:
+            logger.exception("Failed to mark subagent wake %s ready", wake_id)
 
     def plan_list(self) -> list[Plan]:
         """List all plans."""

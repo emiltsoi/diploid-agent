@@ -67,3 +67,14 @@ class PluginRuntime(Protocol):
     def suppress_auto_continue(self, chat_id: str, seconds: float = 300.0) -> None: ...
 
     def is_auto_continue_suppressed(self, chat_id: str) -> bool: ...
+
+    def subagent_start(
+        self,
+        chat_id: str,
+        prompt: str,
+        *,
+        context: str | None = None,
+        model: str | None = None,
+        cwd: Path | None = None,
+        acp_timeout: float | None = None,
+    ) -> ChatResult: ...

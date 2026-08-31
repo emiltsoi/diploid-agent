@@ -127,6 +127,7 @@ _TELEGRAM_HELP = """Available commands:
 /stop - cancel the current turn and return a partial reply
 /restart - kill the ACP child and start a fresh transport
 /graceful-restart [service] - schedule a graceful restart of the named service
+/subagent <prompt> - start a background subagent and continue when it finishes
 /continue - resume the previous turn after a partial reply or timeout
 /sessions - list numbered sessions for this chat
 /resume <n> - resume session n as the active session
@@ -2000,6 +2001,36 @@ class TelegramPoller:
                 "notice": None,
             }
 
+    def _harness_subagent(self, chat_id: int, prompt: str) -> dict[str, Any]:
+        if self.runtime is not None:
+            try:
+                result = self.runtime.subagent_start(str(chat_id), prompt)
+                return {
+                    "reply": getattr(result, "reply", ""),
+                    "notice": getattr(result, "notice", None),
+                }
+            except Exception:
+                logger.exception("Runtime subagent_start failed")
+                return {
+                    "reply": "Sorry, I could not start the subagent.",
+                    "notice": None,
+                }
+
+        try:
+            resp = self.client.post(
+                f"{self.harness_url}/subagent",
+                json={"chat_id": str(chat_id), "prompt": prompt},
+                timeout=60.0,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except Exception:
+            logger.exception("Harness /subagent failed")
+            return {
+                "reply": "Sorry, I could not start the subagent.",
+                "notice": None,
+            }
+
     def _harness_help(self, chat_id: int) -> str:
         return _TELEGRAM_HELP
 
@@ -2182,6 +2213,13 @@ class TelegramPoller:
                 self._send_text(chat_id, reply, reply_to_message_id=chat_input.message_id)
             else:
                 result = self._harness_branch(chat_id, int(arg))
+                self._send_result(chat_id, result, reply_to_message_id=chat_input.message_id)
+        elif command == "/subagent":
+            if not arg:
+                reply = "Usage: /subagent <prompt>"
+                self._send_text(chat_id, reply, reply_to_message_id=chat_input.message_id)
+            else:
+                result = self._harness_subagent(chat_id, arg)
                 self._send_result(chat_id, result, reply_to_message_id=chat_input.message_id)
         elif command == "/help":
             self._send_text(

@@ -61,6 +61,18 @@ class FakeRuntime:
     def is_auto_continue_suppressed(self, chat_id):
         return False
 
+    def subagent_start(
+        self,
+        chat_id,
+        prompt,
+        *,
+        context=None,
+        model=None,
+        cwd=None,
+        acp_timeout=None,
+    ):
+        return ChatResult(reply="subagent started")
+
 
 class FakePlugin(StatePlugin):
     pass
