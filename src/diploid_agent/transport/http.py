@@ -70,6 +70,11 @@ class ChatResponse(BaseModel):
     metrics: dict[str, Any] | None = None
 
 
+class OutboxResponse(BaseModel):
+    chat_id: str | None = None
+    result: ChatResponse | None = None
+
+
 class DispatchRequest(BaseModel):
     chat_id: str
     context: str | None = None
@@ -514,6 +519,20 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
             http_method="GET",
             catch=False,
         )
+
+    @app.get("/outbox/{chat_id}", response_model=OutboxResponse)
+    def outbox(chat_id: str, wait: float = Query(0.0, ge=0, le=60)) -> OutboxResponse:
+        raw = command_handler.call(
+            method="outbox_pop",
+            chat_id=chat_id,
+            http_path="/outbox/{chat_id}",
+            http_method="GET",
+            wait=wait,
+            catch=False,
+        )
+        if raw is None:
+            return OutboxResponse(chat_id=chat_id, result=None)
+        return OutboxResponse(chat_id=chat_id, result=_to_response(raw))
 
     @app.post("/resume", response_model=ChatResponse, dependencies=[Depends(_require_api_key)])
     def resume(req: ResumeRequest) -> ChatResponse:

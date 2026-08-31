@@ -16,6 +16,7 @@ import os
 import re
 import threading
 import time
+from collections import deque
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -175,14 +176,13 @@ class TurnWorker(threading.Thread):
         self.chat_input = chat_input
         self.chat_id = chat_input.chat_id
         self._stop = threading.Event()
-        self._next_input: ChatInput | None = None
-        self._next_lock = threading.Lock()
 
     def steer(self, chat_input: ChatInput) -> None:
-        """Ask the worker to cancel the current turn and start a new one."""
-        with self._next_lock:
-            self._next_input = chat_input
-        self.poller._harness_stop(self.chat_id)
+        """Queue the new input and ask the worker to cancel the current turn."""
+        with self.poller._worker_lock:
+            self.poller._pending_inputs.setdefault(self.chat_id, deque()).append(chat_input)
+        if self.is_alive():
+            self.poller._harness_stop(self.chat_id)
 
     def stop(self) -> None:
         """Cancel the current turn and stop the worker."""
@@ -190,12 +190,13 @@ class TurnWorker(threading.Thread):
         self.poller._harness_stop(self.chat_id)
 
     def _take_next_message(self) -> ChatInput | None:
-        with self._next_lock:
-            if self._stop.is_set():
-                return None
-            chat_input = self._next_input
-            self._next_input = None
-            return chat_input
+        if self._stop.is_set():
+            return None
+        with self.poller._worker_lock:
+            queue = self.poller._pending_inputs.get(self.chat_id)
+            if queue:
+                return queue.popleft()
+            return None
 
     def _harness_chat(self, chat_input: ChatInput) -> dict[str, Any]:
         if self.poller.runtime is not None:
@@ -554,8 +555,67 @@ class TurnWorker(threading.Thread):
                 chat_input = self._take_next_message()
         finally:
             with self.poller._worker_lock:
-                self.poller._active_workers.pop(self.chat_id, None)
+                active = self.poller._active_workers.get(self.chat_id)
+                if active is self:
+                    self.poller._active_workers.pop(self.chat_id, None)
+                queue = self.poller._pending_inputs.get(self.chat_id)
+                if queue and not self.poller._active_workers.get(self.chat_id):
+                    next_input = queue.popleft()
+                    worker = TurnWorker(self.poller, next_input)
+                    self.poller._active_workers[self.chat_id] = worker
+                    worker.start()
             self.poller._close_client()
+
+
+class DeliveryWorker(threading.Thread):
+    """Long-poll the runtime outbox and deliver ChatResults to Telegram."""
+
+    _POLL_WAIT = 5.0
+
+    def __init__(self, poller: TelegramPoller, chat_id: int) -> None:
+        super().__init__(daemon=True, name=f"delivery-{chat_id}")
+        self.poller = poller
+        self.chat_id = chat_id
+        self._stop = threading.Event()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _fetch_outbox(self) -> ChatResult | None:
+        raw = self.poller.command_handler.call(
+            method="outbox_pop",
+            chat_id=self.chat_id,
+            http_path="/outbox/{chat_id}",
+            http_method="GET",
+            wait=self._POLL_WAIT,
+        )
+        if raw is None:
+            return None
+        if isinstance(raw, ChatResult):
+            return raw
+        if isinstance(raw, dict):
+            if "error" in raw:
+                return None
+            result = raw.get("result")
+            if result is None:
+                return None
+            if isinstance(result, dict):
+                return _coerce_chat_result(result)
+            if isinstance(result, ChatResult):
+                return result
+        return _coerce_chat_result(raw)
+
+    def run(self) -> None:
+        while not self._stop.is_set() and not self.poller._stop.is_set():
+            try:
+                chat_result = self._fetch_outbox()
+                if chat_result is None:
+                    time.sleep(self._POLL_WAIT)
+                    continue
+                self.poller._deliver_outbox_result(self.chat_id, chat_result)
+            except Exception:
+                logger.exception("DeliveryWorker error for chat %s", self.chat_id)
+                time.sleep(self._POLL_WAIT)
 
 
 class TelegramPoller:
@@ -611,6 +671,9 @@ class TelegramPoller:
         self._client_timeout = 35.0
         self._stream_thoughts: dict[int, bool] = {}
         self._active_workers: dict[int, TurnWorker] = {}
+        self._pending_inputs: dict[int, deque[ChatInput]] = {}
+        self._delivery_workers: dict[int, DeliveryWorker] = {}
+        self._last_user_message_ids: dict[int, int] = {}
         self._worker_lock = threading.RLock()
         self._message_registry_lock = threading.RLock()
         self._rate_limit_lock = threading.RLock()
@@ -654,6 +717,52 @@ class TelegramPoller:
 
     def _stream_thoughts_enabled(self, chat_id: int) -> bool:
         return self._stream_thoughts.get(chat_id, self._live_telegram_config.stream_thoughts)
+
+    def _ensure_delivery_worker(self, chat_id: int) -> None:
+        """Start a DeliveryWorker for this chat if outbox delivery is enabled."""
+        with self._worker_lock:
+            if chat_id in self._delivery_workers and self._delivery_workers[chat_id].is_alive():
+                return
+            config = self.command_handler.call(
+                method="get_config",
+                http_path="/config",
+                http_method="GET",
+                requires_chat_id=False,
+                catch=True,
+            )
+            if not isinstance(config, dict):
+                return
+            notifications = config.get("harness", {}).get("notifications", {})
+            if not notifications.get("outbox_delivery"):
+                return
+            worker = DeliveryWorker(self, chat_id)
+            self._delivery_workers[chat_id] = worker
+            worker.start()
+
+    def _deliver_outbox_result(self, chat_id: int, chat_result: ChatResult) -> None:
+        """Deliver an outbox ChatResult to Telegram, registering sent message IDs."""
+        reply_to_message_id = self._last_user_message_ids.get(chat_id)
+        if chat_result.reply:
+            sent = self._send_text(
+                chat_id,
+                chat_result.reply,
+                reply_to_message_id=reply_to_message_id,
+            )
+            if sent and chat_result.session_number is not None and chat_result.turn_number is not None:
+                self._register_message_ids(
+                    chat_id,
+                    sent,
+                    chat_result.session_number,
+                    chat_result.turn_number,
+                    chat_result.reply,
+                    kind="outbox",
+                )
+        if chat_result.notice:
+            self._send_text(
+                chat_id,
+                f"System: {chat_result.notice}",
+                reply_to_message_id=reply_to_message_id,
+            )
 
     def _throttle_telegram(
         self, method: str, chat_id: int | None, *, throttle: bool = True
@@ -2032,6 +2141,9 @@ class TelegramPoller:
         chat_input = self._maybe_answer_pending_question(chat_input)
 
         chat_id = chat_input.chat_id
+        self._last_user_message_ids[chat_id] = chat_input.message_id
+        self._ensure_delivery_worker(chat_id)
+
         text = chat_input.text
 
         # Handle bot commands. Strip the bot's Telegram username and any
@@ -2237,14 +2349,13 @@ class TelegramPoller:
         else:
             logger.info("Message from chat %s: %r", chat_id, text[:80])
             with self._worker_lock:
+                self._pending_inputs.setdefault(chat_id, deque()).append(chat_input)
                 worker = self._active_workers.get(chat_id)
-            if worker and worker.is_alive():
-                worker.steer(chat_input)
-            else:
-                worker = TurnWorker(self, chat_input)
-                with self._worker_lock:
+                if worker is None or not worker.is_alive():
+                    next_input = self._pending_inputs[chat_id].popleft()
+                    worker = TurnWorker(self, next_input)
                     self._active_workers[chat_id] = worker
-                worker.start()
+                    worker.start()
 
 
 class TelegramTransport(Transport):
@@ -2277,7 +2388,10 @@ class TelegramTransport(Transport):
         self._poller._stop.set()
         with self._poller._worker_lock:
             workers = list(self._poller._active_workers.values())
+            delivery_workers = list(self._poller._delivery_workers.values())
         for worker in workers:
+            worker.stop()
+        for worker in delivery_workers:
             worker.stop()
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=5.0)

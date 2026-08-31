@@ -935,6 +935,9 @@ class TurnController:
                 else:
                     notifier_stream.finish(ChatResult(reply=""))
 
+        if notify and "chat_result" in vars():
+            self.runtime._deliver_chat_result(chat_id, chat_result)
+
         return chat_result
 
     @_locked
@@ -987,7 +990,7 @@ class TurnController:
             dispatch = self.runtime.dispatch_store.get(dispatch_id)
             if dispatch is None:
                 return ChatResult(reply="Unknown dispatch.")
-            if dispatch.status in (DispatchStatus.COMPLETED, DispatchStatus.FAILED):
+            if dispatch.status == DispatchStatus.COMPLETED:
                 return ChatResult(reply="Dispatch already completed.")
 
             dispatch.result = result
@@ -1449,7 +1452,7 @@ class TurnController:
                     active._condition.notify_all()
 
         if notify:
-            self.runtime.notifier.send(chat_id, reply)
+            self.runtime._deliver_chat_result(chat_id, chat_result)
 
         return chat_result
 

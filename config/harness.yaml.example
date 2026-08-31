@@ -202,6 +202,7 @@ harness:
     message_format: markdown_v2
   notifications:
     enabled: true
+    outbox_delivery: false     # set to true so the Telegram transport consumes the outbox instead of the runtime notifier
     webhook_url: null          # set to receive HTTP push on continuation
   memory:
     backend: file                  # file | hindsight

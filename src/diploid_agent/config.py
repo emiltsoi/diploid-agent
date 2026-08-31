@@ -194,6 +194,7 @@ class NotificationsConfig(BaseModel):
 
     enabled: bool = True
     webhook_url: str | None = Field(default=None, min_length=1)
+    outbox_delivery: bool = False
 
     @field_validator("webhook_url", mode="before")
     @classmethod

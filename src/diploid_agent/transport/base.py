@@ -143,6 +143,14 @@ class RuntimeAPI(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
+    def outbox_pop(
+        self,
+        chat_id: str | None = None,
+        wait: float = 0.0,
+    ) -> Any:
+        """Return the next ChatResult from the outbox, optionally for a chat."""
+
+    @abc.abstractmethod
     def plan_create(
         self,
         name: str,

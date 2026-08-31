@@ -84,6 +84,7 @@ _WAKE_RETRY_REPLIES = {
     "Chat is busy; wake re-enqueued.",
     "A turn is already in progress for this chat.",
     "Another instance is currently handling this chat.",
+    "A turn is already in progress; continuation queued.",
 }
 
 
@@ -193,6 +194,9 @@ class AgentRuntime(RuntimeAPI):
         self._typing_threads: dict[str, tuple[threading.Thread, threading.Event]] = {}
         self._typing_lock = threading.Lock()
         self._started = False
+
+        self._outbox: deque[tuple[str, ChatResult]] = deque()
+        self._outbox_condition = threading.Condition()
 
         self.instance_manager = InstanceManager(
             self.sessions_root,
@@ -375,6 +379,9 @@ class AgentRuntime(RuntimeAPI):
         return False
 
     def _create_notifier(self) -> Notifier:
+        if self.config.harness.notifications.outbox_delivery:
+            # The transport (e.g. Telegram long-poller) will consume the outbox.
+            return NoopNotifier()
         if not self.config.harness.notifications.enabled:
             return NoopNotifier()
         if self.config.harness.notifications.webhook_url:
@@ -383,6 +390,46 @@ class AgentRuntime(RuntimeAPI):
         if token:
             return TelegramNotifier(token, metrics=self.metrics)
         return NoopNotifier()
+
+    @property
+    def _outbox_delivery_enabled(self) -> bool:
+        return self.config.harness.notifications.outbox_delivery
+
+    def _enqueue_outbox(self, chat_id: str, chat_result: ChatResult) -> None:
+        """Put a final ChatResult in the outbox for the transport to deliver."""
+        with self._outbox_condition:
+            self._outbox.append((chat_id, chat_result))
+            self._outbox_condition.notify_all()
+
+    def _deliver_chat_result(self, chat_id: str, chat_result: ChatResult) -> None:
+        """Send a final ChatResult through the configured delivery channel."""
+        if self._outbox_delivery_enabled:
+            self._enqueue_outbox(chat_id, chat_result)
+            return
+        if self.config.harness.notifications.enabled and chat_result.reply:
+            try:
+                self.notifier.send(chat_id, chat_result.reply)
+            except Exception:
+                logger.exception("Failed to send chat result for %s", chat_id)
+
+    def outbox_pop(
+        self,
+        chat_id: str | None = None,
+        wait: float = 0.0,
+    ) -> ChatResult | None:
+        """Return the next ChatResult for a chat, blocking up to ``wait`` seconds."""
+        deadline = time.monotonic() + wait if wait > 0 else 0.0
+        with self._outbox_condition:
+            while True:
+                for i, (cid, result) in enumerate(self._outbox):
+                    if chat_id is None or cid == chat_id:
+                        return self._outbox.pop(i)[1]
+                if wait <= 0:
+                    return None
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self._outbox_condition.wait(timeout=remaining)
 
     def _call_unlocked(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         """Release the RLock while running a long call, then reacquire."""
@@ -1548,6 +1595,12 @@ class AgentRuntime(RuntimeAPI):
                 # cases; otherwise just drop without completing.
                 if result.reply in _WAKE_RETRY_REPLIES:
                     self.wake_queue.fail(event_id, retry_after=retry_after)
+                    return
+                # Some wake results are final messages (e.g. budget notice or
+                # "dispatch already completed") that should still be delivered.
+                if (result.reply or result.notice) and self._outbox_delivery_enabled:
+                    self._deliver_chat_result(payload["chat_id"], result)
+                self.wake_queue.complete(event_id)
                 return
             self.wake_queue.complete(event_id)
         except Exception:
@@ -2364,6 +2417,7 @@ class AgentRuntime(RuntimeAPI):
                     DispatchStatus.PENDING,
                     DispatchStatus.TIMEOUT,
                     DispatchStatus.CANCELLED,
+                    DispatchStatus.FAILED,
                 ):
                     return self.continue_turn(
                         payload["dispatch_id"],
@@ -2403,6 +2457,7 @@ class AgentRuntime(RuntimeAPI):
             "task_detail": ((detail or "").replace("\n", " ").strip())[:500],
             "completed_count": completed_count,
             "total_count": total,
+            "retry_after": 5.0,
         }
         self.wake_queue.enqueue(
             WakeEvent(
@@ -2442,6 +2497,7 @@ class AgentRuntime(RuntimeAPI):
             "plan_name": plan.name,
             "plan_status": plan.status.value,
             "tasks_summary": "\n".join(task_lines),
+            "retry_after": 5.0,
         }
         self.wake_queue.enqueue(
             WakeEvent(
@@ -2689,7 +2745,7 @@ class AgentRuntime(RuntimeAPI):
                 scheduled_at=time.time(),
                 created_at=time.time(),
                 silent=False,
-                payload={"dispatch_id": dispatch.id, "notify": True},
+                payload={"dispatch_id": dispatch.id, "notify": True, "retry_after": 5.0},
                 ready=False,
             )
         )
@@ -2818,7 +2874,8 @@ class AgentRuntime(RuntimeAPI):
 
         Returns ``(dispatch_status, stop_reason, is_timeout, is_cancelled, is_partial)``.
         ``dispatch_status`` is ``None`` for normal completions so the dispatch
-        stays PENDING until ``continue_turn`` completes it.
+        stays PENDING until ``continue_turn`` completes it. ``FAILED`` is set for
+        genuine failures so the continuation prompt can report them.
         """
         log = (task.log or "").lower()
         if (
@@ -2847,7 +2904,7 @@ class AgentRuntime(RuntimeAPI):
             )
         if task.status == TaskStatus.FAILED:
             return (
-                None,
+                DispatchStatus.FAILED,
                 "failed",
                 False,
                 False,
@@ -2879,6 +2936,14 @@ class AgentRuntime(RuntimeAPI):
             duration = self._human_duration(finished - start)
         reason = "timed out" if is_timeout else "was cancelled"
         text = f"Subagent {dispatch_id} {reason} after {duration}. Partial summary: {summary}"
+        chat_result = ChatResult(
+            reply=text,
+            dispatch_id=dispatch_id,
+            session_id=dispatch.session_id if dispatch else None,
+        )
+        if self._outbox_delivery_enabled:
+            self._enqueue_outbox(chat_id, chat_result)
+            return
         try:
             self.notifier.send(chat_id, text)
         except Exception:
