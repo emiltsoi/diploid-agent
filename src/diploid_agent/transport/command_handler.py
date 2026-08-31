@@ -68,6 +68,7 @@ class CommandHandler:
         http_method: str = "POST",
         http_body: dict[str, Any] | None = None,
         requires_chat_id: bool = True,
+        catch: bool = True,
         **kwargs: Any,
     ) -> Any:
         """Call a runtime method or the matching HTTP endpoint.
@@ -85,6 +86,8 @@ class CommandHandler:
                 return fn(**call_kwargs)
             except Exception:
                 logger.exception("Runtime %s failed", method)
+                if not catch:
+                    raise
                 return {"error": f"Sorry, I could not run {method}."}
 
         client = self._http_client()

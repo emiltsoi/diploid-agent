@@ -34,6 +34,7 @@ from diploid_agent.plan.models import Plan, Task
 from diploid_agent.plugins import PluginManager
 from diploid_agent.runtime.agent_runtime import AgentRuntime
 from diploid_agent.transport.base import OutboundMessage, RuntimeAPI, Transport
+from diploid_agent.transport.command_handler import CommandHandler
 
 
 class ChatRequest(BaseModel):
@@ -337,6 +338,7 @@ def _plan_to_response(plan: Plan) -> PlanResponse:
 
 def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
     runtime = runtime or AgentRuntime(config)
+    command_handler = CommandHandler(runtime=runtime)
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -366,7 +368,11 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, Any]:
-        return runtime.health()
+        return command_handler.call(
+            method="health",
+            requires_chat_id=False,
+            catch=False,
+        )
 
     @app.post("/ingress/{protocol}")
     async def ingress_route(protocol: str, request: Request) -> Response:
@@ -385,7 +391,12 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
 
     @app.get("/prometheus")
     def prometheus() -> PlainTextResponse:
-        return PlainTextResponse(runtime.get_prometheus_metrics())
+        raw = command_handler.call(
+            method="get_prometheus_metrics",
+            requires_chat_id=False,
+            catch=False,
+        )
+        return PlainTextResponse(raw)
 
     @app.post("/chat", response_model=ChatResponse, dependencies=[Depends(_require_api_key)])
     def chat(req: ChatRequest) -> ChatResponse:
@@ -404,70 +415,133 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
 
     @app.post("/dispatch", response_model=ChatResponse, dependencies=[Depends(_require_api_key)])
     def dispatch(req: DispatchRequest) -> ChatResponse:
-        return _to_response(runtime.dispatch(req.chat_id, context=req.context))
+        raw = command_handler.call(
+            method="dispatch",
+            chat_id=req.chat_id,
+            context=req.context,
+            catch=False,
+        )
+        return _to_response(raw)
 
     @app.post("/continue", response_model=ChatResponse, dependencies=[Depends(_require_api_key)])
     def continue_turn(req: ContinueRequest) -> ChatResponse:
-        return _to_response(runtime.continue_turn(req.dispatch_id, req.result))
+        raw = command_handler.call(
+            method="continue_turn",
+            dispatch_id=req.dispatch_id,
+            result=req.result,
+            requires_chat_id=False,
+            catch=False,
+        )
+        return _to_response(raw)
 
     @app.post("/wake", response_model=ChatResponse, dependencies=[Depends(_require_api_key)])
     def wake(req: WakeRequest) -> ChatResponse:
-        result = runtime.wake(
-            req.chat_id,
+        raw = command_handler.call(
+            method="wake",
+            chat_id=req.chat_id,
             event_id=req.event_id,
             reason=req.reason,
             silent=req.silent,
+            catch=False,
         )
-        if result.reply == "Chat is busy; wake re-enqueued.":
+        if raw.reply == "Chat is busy; wake re-enqueued.":
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=result.reply,
+                detail=raw.reply,
             )
-        if result.reply == "Unknown or already completed wake event.":
+        if raw.reply == "Unknown or already completed wake event.":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=result.reply,
+                detail=raw.reply,
             )
         if req.event_id is not None:
             runtime.wake_queue.complete(req.event_id)
-        return _to_response(result)
+        return _to_response(raw)
 
     @app.get("/models")
     def models() -> dict[str, list[str]]:
-        return {"models": runtime.list_models()}
+        raw = command_handler.call(
+            method="list_models",
+            http_path="/models",
+            http_method="GET",
+            requires_chat_id=False,
+            catch=False,
+        )
+        if isinstance(raw, list):
+            return {"models": raw}
+        return raw
 
     @app.post(
         "/switch-model", response_model=ChatResponse, dependencies=[Depends(_require_api_key)]
     )
     def switch_model(req: SwitchModelRequest) -> ChatResponse:
-        result = runtime.switch_model(req.chat_id, req.model)
-        return _to_response(result)
+        raw = command_handler.call(
+            method="switch_model",
+            chat_id=req.chat_id,
+            model=req.model,
+            catch=False,
+        )
+        return _to_response(raw)
 
     @app.post(
         "/new/{chat_id}", response_model=ChatResponse, dependencies=[Depends(_require_api_key)]
     )
     def new_session(chat_id: str) -> ChatResponse:
-        return _to_response(runtime.new_session(chat_id))
+        raw = command_handler.call(
+            method="new_session",
+            chat_id=chat_id,
+            http_path="/new/{chat_id}",
+            catch=False,
+        )
+        return _to_response(raw)
 
     @app.get("/sessions/{chat_id}")
     def sessions(chat_id: str) -> dict[str, Any]:
-        return runtime.list_sessions(chat_id)
+        return command_handler.call(
+            method="list_sessions",
+            chat_id=chat_id,
+            http_path="/sessions/{chat_id}",
+            http_method="GET",
+            catch=False,
+        )
 
     @app.post("/resume", response_model=ChatResponse, dependencies=[Depends(_require_api_key)])
     def resume(req: ResumeRequest) -> ChatResponse:
-        return _to_response(runtime.resume_session(req.chat_id, req.session_number))
+        raw = command_handler.call(
+            method="resume_session",
+            chat_id=req.chat_id,
+            session_number=req.session_number,
+            catch=False,
+        )
+        return _to_response(raw)
 
     @app.post("/branch", response_model=ChatResponse, dependencies=[Depends(_require_api_key)])
     def branch(req: BranchRequest) -> ChatResponse:
-        return _to_response(runtime.branch_session(req.chat_id, req.session_number))
+        raw = command_handler.call(
+            method="branch_session",
+            chat_id=req.chat_id,
+            session_number=req.session_number,
+            catch=False,
+        )
+        return _to_response(raw)
 
     @app.post("/stop", response_model=ChatResponse, dependencies=[Depends(_require_api_key)])
     def stop(req: StopRequest) -> ChatResponse:
-        return _to_response(runtime.stop(req.chat_id))
+        raw = command_handler.call(
+            method="stop",
+            chat_id=req.chat_id,
+            catch=False,
+        )
+        return _to_response(raw)
 
     @app.post("/restart", response_model=ChatResponse, dependencies=[Depends(_require_api_key)])
     def restart(req: RestartRequest) -> ChatResponse:
-        return _to_response(runtime.restart(req.chat_id))
+        raw = command_handler.call(
+            method="restart",
+            chat_id=req.chat_id,
+            catch=False,
+        )
+        return _to_response(raw)
 
     @app.post(
         "/graceful-restart",
@@ -475,13 +549,14 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
         dependencies=[Depends(_require_api_key)],
     )
     def graceful_restart(req: GracefulRestartRequest) -> ChatResponse:
-        return _to_response(
-            runtime.graceful_service_restart(
-                req.chat_id,
-                req.service,
-                reason=req.reason,
-            )
+        raw = command_handler.call(
+            method="graceful_service_restart",
+            chat_id=req.chat_id,
+            service=req.service,
+            reason=req.reason,
+            catch=False,
         )
+        return _to_response(raw)
 
     @app.post(
         "/subagent",
@@ -489,93 +564,211 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
         dependencies=[Depends(_require_api_key)],
     )
     def subagent(req: SubagentRequest) -> ChatResponse:
-        return _to_response(
-            runtime.subagent_start(
-                req.chat_id,
-                req.prompt,
-                context=req.context,
-                model=req.model,
-                cwd=Path(req.cwd) if req.cwd else None,
-                acp_timeout=req.acp_timeout,
-            )
+        raw = command_handler.call(
+            method="subagent_start",
+            chat_id=req.chat_id,
+            prompt=req.prompt,
+            context=req.context,
+            model=req.model,
+            cwd=Path(req.cwd) if req.cwd else None,
+            acp_timeout=req.acp_timeout,
+            catch=False,
         )
+        return _to_response(raw)
 
     @app.post("/state", response_model=ChatResponse, dependencies=[Depends(_require_api_key)])
     def state_event(req: StateEventRequest) -> ChatResponse:
-        return _to_response(
-            runtime.plugin_event(req.chat_id, req.plugin, event=req.event, **(req.params or {}))
+        raw = command_handler.call(
+            method="plugin_event",
+            chat_id=req.chat_id,
+            plugin=req.plugin,
+            event=req.event,
+            catch=False,
+            **(req.params or {}),
         )
+        return _to_response(raw)
 
     @app.get("/turn/{chat_id}")
     def turn_status(
         chat_id: str, wait: float = Query(0.0, ge=0, le=60, description="Long-poll wait in seconds")
     ) -> dict[str, Any]:
         """Return the partial state of an active turn for streaming clients."""
-        return runtime.turn_status(chat_id, wait=wait)
+        return command_handler.call(
+            method="turn_status",
+            chat_id=chat_id,
+            wait=wait,
+            http_path="/turn/{chat_id}",
+            http_method="GET",
+            catch=False,
+        )
 
     @app.get("/status/{chat_id}")
     def chat_status(chat_id: str) -> dict[str, object]:
-        return runtime.status(chat_id)
+        return command_handler.call(
+            method="status",
+            chat_id=chat_id,
+            http_path="/status/{chat_id}",
+            http_method="GET",
+            catch=False,
+        )
 
     @app.get("/metrics")
     def metrics() -> dict[str, Any]:
-        return runtime.get_metrics()
+        return command_handler.call(
+            method="get_metrics",
+            http_path="/metrics",
+            http_method="GET",
+            requires_chat_id=False,
+            catch=False,
+        )
 
     @app.get("/metrics/{chat_id}")
     def chat_metrics(chat_id: str) -> dict[str, Any]:
-        return runtime.get_metrics(chat_id)
+        return command_handler.call(
+            method="get_metrics",
+            chat_id=chat_id,
+            http_path="/metrics/{chat_id}",
+            http_method="GET",
+            catch=False,
+        )
 
     @app.get("/mcp/{chat_id}")
     def mcp_get(chat_id: str) -> ChatResponse:
-        return ChatResponse(reply=runtime.mcp_list(chat_id))
+        raw = command_handler.call(
+            method="mcp_list",
+            chat_id=chat_id,
+            http_path="/mcp/{chat_id}",
+            http_method="GET",
+            catch=False,
+        )
+        if isinstance(raw, dict):
+            return ChatResponse(reply=raw.get("reply", ""))
+        return ChatResponse(reply=raw)
 
     @app.post("/mcp", dependencies=[Depends(_require_api_key)])
     def mcp_post(req: McpCommandRequest) -> ChatResponse:
         if req.command == "list":
-            reply = runtime.mcp_list(req.chat_id)
+            raw = command_handler.call(
+                method="mcp_list",
+                chat_id=req.chat_id,
+                http_path="/mcp/{chat_id}",
+                http_method="GET",
+                catch=False,
+            )
         elif req.command == "enable" and req.name:
-            reply = runtime.mcp_enable(req.chat_id, req.name)
+            raw = command_handler.call(
+                method="mcp_enable",
+                chat_id=req.chat_id,
+                name=req.name,
+                catch=False,
+            )
         elif req.command == "disable" and req.name:
-            reply = runtime.mcp_disable(req.chat_id, req.name)
+            raw = command_handler.call(
+                method="mcp_disable",
+                chat_id=req.chat_id,
+                name=req.name,
+                catch=False,
+            )
         else:
-            reply = "Usage: command=list|enable|disable, name required for enable/disable"
-        return ChatResponse(reply=reply)
+            return ChatResponse(
+                reply="Usage: command=list|enable|disable, name required for enable/disable"
+            )
+        if isinstance(raw, ChatResult):
+            return _to_response(raw)
+        if isinstance(raw, dict):
+            return ChatResponse(reply=raw.get("reply", ""))
+        return ChatResponse(reply=str(raw))
 
     @app.get("/skill/{chat_id}")
     def skill_get(chat_id: str) -> ChatResponse:
-        return ChatResponse(reply=runtime.skill_list(chat_id))
+        raw = command_handler.call(
+            method="skill_list",
+            chat_id=chat_id,
+            http_path="/skill/{chat_id}",
+            http_method="GET",
+            catch=False,
+        )
+        if isinstance(raw, dict):
+            return ChatResponse(reply=raw.get("reply", ""))
+        return ChatResponse(reply=raw)
 
     @app.post("/skill", dependencies=[Depends(_require_api_key)])
     def skill_post(req: SkillCommandRequest) -> ChatResponse:
         if req.command == "list":
-            reply = runtime.skill_list(req.chat_id)
-        elif req.command == "enable" and req.name:
-            reply = runtime.skill_enable(req.chat_id, req.name)
-        elif req.command == "disable" and req.name:
-            reply = runtime.skill_disable(req.chat_id, req.name)
-        elif req.command == "create" and req.name and req.content:
-            reply = runtime.skill_create(req.chat_id, req.name, req.content)
-        else:
-            reply = (
-                "Usage: command=list|enable|disable|create, name and content required for create"
+            raw = command_handler.call(
+                method="skill_list",
+                chat_id=req.chat_id,
+                http_path="/skill/{chat_id}",
+                http_method="GET",
+                catch=False,
             )
-        return ChatResponse(reply=reply)
+        elif req.command == "enable" and req.name:
+            raw = command_handler.call(
+                method="skill_enable",
+                chat_id=req.chat_id,
+                name=req.name,
+                catch=False,
+            )
+        elif req.command == "disable" and req.name:
+            raw = command_handler.call(
+                method="skill_disable",
+                chat_id=req.chat_id,
+                name=req.name,
+                catch=False,
+            )
+        elif req.command == "create" and req.name and req.content:
+            raw = command_handler.call(
+                method="skill_create",
+                chat_id=req.chat_id,
+                name=req.name,
+                content=req.content,
+                catch=False,
+            )
+        else:
+            return ChatResponse(
+                reply="Usage: command=list|enable|disable|create, name and content required for create"
+            )
+        if isinstance(raw, ChatResult):
+            return _to_response(raw)
+        if isinstance(raw, dict):
+            return ChatResponse(reply=raw.get("reply", ""))
+        return ChatResponse(reply=str(raw))
 
     @app.get("/plugins/{chat_id}", response_model=PluginListResponse)
     def plugin_list(chat_id: str) -> PluginListResponse:
-        return PluginListResponse(plugins=runtime.plugin_list(chat_id))
+        raw = command_handler.call(
+            method="plugin_list",
+            chat_id=chat_id,
+            http_path="/plugins/{chat_id}",
+            http_method="GET",
+            catch=False,
+        )
+        return PluginListResponse(plugins=raw if isinstance(raw, list) else [])
 
     @app.post(
         "/plugin/enable", response_model=ChatResponse, dependencies=[Depends(_require_api_key)]
     )
     def plugin_enable(req: PluginEnableRequest) -> ChatResponse:
-        return _to_response(runtime.plugin_set_enabled(req.chat_id, req.name, req.enabled))
+        raw = command_handler.call(
+            method="plugin_set_enabled",
+            chat_id=req.chat_id,
+            name=req.name,
+            enabled=req.enabled,
+            catch=False,
+        )
+        return _to_response(raw)
 
     @app.post(
         "/plugin/reload", response_model=ChatResponse, dependencies=[Depends(_require_api_key)]
     )
     def plugin_reload(req: PluginCommandRequest) -> ChatResponse:
-        return _to_response(runtime.plugin_reload(req.chat_id, req.name))
+        raw = command_handler.call(
+            method="plugin_reload",
+            chat_id=req.chat_id,
+            name=req.name,
+            catch=False,
+        )
+        return _to_response(raw)
 
     @app.post(
         "/plugins",
@@ -593,7 +786,13 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
                     status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
                 ) from exc
         try:
-            return _to_response(runtime.plugin_add(config))
+            raw = command_handler.call(
+                method="plugin_add",
+                config=config,
+                requires_chat_id=False,
+                catch=False,
+            )
+            return _to_response(raw)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -604,10 +803,16 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
     )
     def plugin_sandbox(req: PluginSandboxRequest) -> ChatResponse:
         try:
-            result = runtime.plugin_sandbox(req.module, req.plugin or {})
+            raw = command_handler.call(
+                method="plugin_sandbox",
+                module=req.module,
+                plugin=req.plugin or {},
+                requires_chat_id=False,
+                catch=False,
+            )
         except Exception as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-        return _to_response(ChatResult(reply=json.dumps(result, ensure_ascii=False)))
+        return _to_response(ChatResult(reply=json.dumps(raw, ensure_ascii=False)))
 
     @app.post(
         "/plugins/create",
@@ -616,15 +821,18 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
     )
     def plugin_create(req: PluginCreateRequest) -> ChatResponse:
         try:
-            result = runtime.plugin_create(
+            raw = command_handler.call(
+                method="plugin_create",
                 name=req.name,
                 module=req.module,
                 prompt_slot=req.prompt_slot,
                 state_file=req.state_file,
                 mcp_server=req.mcp_server,
                 config=req.config,
+                requires_chat_id=False,
+                catch=False,
             )
-            return _to_response(ChatResult(reply=json.dumps(result, ensure_ascii=False)))
+            return _to_response(ChatResult(reply=json.dumps(raw, ensure_ascii=False)))
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -635,7 +843,13 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
     )
     def plugin_remove(name: str) -> ChatResponse:
         try:
-            return _to_response(runtime.plugin_remove(name))
+            raw = command_handler.call(
+                method="plugin_remove",
+                name=name,
+                requires_chat_id=False,
+                catch=False,
+            )
+            return _to_response(raw)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -671,8 +885,18 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         # Merge via the existing update_plugins_config path, then reload.
         patch = {"plugins": [{"name": name, **req.plugin}]}
-        runtime.update_config(patch)
-        runtime.plugin_reload(name=name, chat_id="0")  # chat_id is ignored by reload for modules
+        command_handler.call(
+            method="update_config",
+            patch=patch,
+            requires_chat_id=False,
+            catch=False,
+        )
+        command_handler.call(
+            method="plugin_reload",
+            name=name,
+            chat_id="0",  # chat_id is ignored by reload for modules
+            catch=False,
+        )
         return _to_response(ChatResult(reply=f"Plugin {name} updated"))
 
     @app.post(
@@ -682,9 +906,14 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
     )
     def plugin_toggle(name: str, req: PluginToggleRequest) -> ChatResponse:
         try:
-            return _to_response(
-                runtime.plugin_toggle(name=name, enabled=req.enabled, chat_id=req.chat_id)
+            raw = command_handler.call(
+                method="plugin_toggle",
+                name=name,
+                enabled=req.enabled,
+                chat_id=req.chat_id,
+                catch=False,
             )
+            return _to_response(raw)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -695,7 +924,13 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
     )
     def config_rollback(req: PluginRollbackRequest) -> ChatResponse:
         try:
-            return _to_response(runtime.plugin_rollback(req.steps))
+            raw = command_handler.call(
+                method="plugin_rollback",
+                steps=req.steps,
+                requires_chat_id=False,
+                catch=False,
+            )
+            return _to_response(raw)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -705,7 +940,12 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
         dependencies=[Depends(_require_api_key)],
     )
     def plugin_incidents() -> PluginIncidentListResponse:
-        return PluginIncidentListResponse(incidents=runtime.incidents())
+        raw = command_handler.call(
+            method="incidents",
+            requires_chat_id=False,
+            catch=False,
+        )
+        return PluginIncidentListResponse(incidents=raw if isinstance(raw, list) else [])
 
     @app.get(
         "/plugin-incidents/{plugin_name}",
@@ -732,27 +972,63 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
 
     @app.get("/memory/{chat_id}")
     def memory(chat_id: str) -> dict[str, object]:
-        return {"chat_id": chat_id, "memory": runtime.memory(chat_id)}
+        raw = command_handler.call(
+            method="memory",
+            chat_id=chat_id,
+            http_path="/memory/{chat_id}",
+            http_method="GET",
+            catch=False,
+        )
+        if isinstance(raw, str):
+            return {"chat_id": chat_id, "memory": raw}
+        if isinstance(raw, dict):
+            return {"chat_id": chat_id, "memory": raw.get("memory", "")}
+        return {"chat_id": chat_id, "memory": ""}
 
     @app.post("/summarize/{chat_id}", dependencies=[Depends(_require_api_key)])
     def summarize(chat_id: str) -> ChatResponse:
-        return _to_response(runtime.summarize(chat_id))
+        raw = command_handler.call(
+            method="summarize",
+            chat_id=chat_id,
+            http_path="/summarize/{chat_id}",
+            catch=False,
+        )
+        return _to_response(raw)
 
     @app.post("/recall", dependencies=[Depends(_require_api_key)])
     def recall(req: RecallRequest) -> ChatResponse:
-        return _to_response(
-            runtime.recall(req.chat_id, req.query, tags=req.tags, max_tokens=req.max_tokens)
+        raw = command_handler.call(
+            method="recall",
+            chat_id=req.chat_id,
+            query=req.query,
+            tags=req.tags,
+            max_tokens=req.max_tokens,
+            catch=False,
         )
+        return _to_response(raw)
 
     @app.post("/retain", dependencies=[Depends(_require_api_key)])
     def retain(req: RetainRequest) -> ChatResponse:
-        return _to_response(
-            runtime.retain(req.chat_id, req.content, tags=req.tags, context=req.context)
+        raw = command_handler.call(
+            method="retain",
+            chat_id=req.chat_id,
+            content=req.content,
+            tags=req.tags,
+            context=req.context,
+            catch=False,
         )
+        return _to_response(raw)
 
     @app.post("/promote", dependencies=[Depends(_require_api_key)])
     def promote(req: ChatRequest) -> ChatResponse:
-        return _to_response(runtime.promote(req.chat_id, req.message))
+        raw = command_handler.call(
+            method="promote",
+            chat_id=req.chat_id,
+            fact=req.message,
+            http_body={"message": req.message},
+            catch=False,
+        )
+        return _to_response(raw)
 
     @app.post("/webhook")
     async def telegram_webhook(request: Request) -> dict[str, object]:
@@ -794,79 +1070,105 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
             task_data["chat_id"] = req.chat_id
             tasks.append(Task.model_validate(task_data))
         try:
-            plan = runtime.plan_create(
-                req.name,
+            raw = command_handler.call(
+                method="plan_create",
+                name=req.name,
                 description=req.description,
                 chat_id=req.chat_id,
                 tasks=tasks,
+                catch=False,
             )
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=str(exc),
             ) from exc
-        return _plan_to_response(plan)
+        return _plan_to_response(raw)
 
     @app.post(
         "/plan/task/start", response_model=TaskResponse, dependencies=[Depends(_require_api_key)]
     )
     def plan_task_start(req: PlanTaskStartRequest) -> TaskResponse:
         try:
-            task = runtime.plan_task_start(req.plan_id, req.task_id)
+            raw = command_handler.call(
+                method="plan_task_start",
+                plan_id=req.plan_id,
+                task_id=req.task_id,
+                requires_chat_id=False,
+                catch=False,
+            )
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=str(exc),
             ) from exc
-        return _task_to_response(task)
+        return _task_to_response(raw)
 
     @app.post(
         "/plan/task/done", response_model=TaskResponse, dependencies=[Depends(_require_api_key)]
     )
     def plan_task_done(req: PlanTaskDoneRequest) -> TaskResponse:
         try:
-            task = runtime.plan_task_done(
-                req.plan_id,
-                req.task_id,
+            raw = command_handler.call(
+                method="plan_task_done",
+                plan_id=req.plan_id,
+                task_id=req.task_id,
                 result=req.result,
                 log=req.log,
+                requires_chat_id=False,
+                catch=False,
             )
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=str(exc),
             ) from exc
-        return _task_to_response(task)
+        return _task_to_response(raw)
 
     @app.get("/plan/list", response_model=list[PlanResponse])
     def plan_list() -> list[PlanResponse]:
-        if hasattr(runtime, "plan_list"):
-            plans = runtime.plan_list()
-        else:
-            plans = []
+        try:
+            raw = command_handler.call(
+                method="plan_list",
+                requires_chat_id=False,
+                catch=False,
+            )
+        except AttributeError:
+            raw = []
+        plans = raw if isinstance(raw, list) else []
         return [_plan_to_response(p) for p in plans]
 
     @app.get("/plan/{plan_id}", response_model=PlanResponse)
     def plan_get(plan_id: str) -> PlanResponse:
-        if not hasattr(runtime, "plan_get"):
+        try:
+            raw = command_handler.call(
+                method="plan_get",
+                plan_id=plan_id,
+                requires_chat_id=False,
+                catch=False,
+            )
+        except AttributeError:
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="Plan retrieval not supported",
             )
-        plan = runtime.plan_get(plan_id)
-        if plan is None:
+        if raw is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Plan {plan_id} not found",
             )
-        return _plan_to_response(plan)
+        return _plan_to_response(raw)
 
     @app.post(
         "/runtime/start",
         dependencies=[Depends(_require_api_key)],
     )
     def runtime_start() -> dict[str, bool]:
-        runtime.start()
+        command_handler.call(
+            method="start",
+            requires_chat_id=False,
+            catch=False,
+        )
         return {"ok": True}
 
     @app.post(
@@ -874,17 +1176,29 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
         dependencies=[Depends(_require_api_key)],
     )
     def runtime_stop() -> dict[str, bool]:
-        runtime.shutdown()
+        command_handler.call(
+            method="shutdown",
+            requires_chat_id=False,
+            catch=False,
+        )
         return {"ok": True}
 
     @app.get("/runtime/status", response_model=RuntimeStatusResponse)
     def runtime_status() -> RuntimeStatus:
-        return runtime.get_status()
+        return command_handler.call(
+            method="get_status",
+            requires_chat_id=False,
+            catch=False,
+        )
 
     @app.get("/config")
     def config_get() -> dict[str, Any]:
         """Return the current live runtime configuration (excluding secrets)."""
-        return runtime.get_config()
+        return command_handler.call(
+            method="get_config",
+            requires_chat_id=False,
+            catch=False,
+        )
 
     @app.patch(
         "/config",
@@ -893,7 +1207,12 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
     def config_update(patch: dict[str, Any]) -> dict[str, Any]:
         """Apply a partial live update to Telegram and/or plugin configuration."""
         try:
-            return runtime.update_config(patch)
+            return command_handler.call(
+                method="update_config",
+                patch=patch,
+                requires_chat_id=False,
+                catch=False,
+            )
         except ConfigPersistenceError as exc:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -906,7 +1225,11 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
         dependencies=[Depends(_require_api_key)],
     )
     def task_config_get() -> TaskConfig:
-        return runtime.get_task_config()
+        return command_handler.call(
+            method="get_task_config",
+            requires_chat_id=False,
+            catch=False,
+        )
 
     @app.post(
         "/task/config",
@@ -915,13 +1238,22 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
     )
     def task_config_update(req: TaskConfig) -> TaskConfig:
         try:
-            runtime.update_task_config(req)
+            command_handler.call(
+                method="update_task_config",
+                task_config=req,
+                requires_chat_id=False,
+                catch=False,
+            )
         except ConfigPersistenceError as exc:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=str(exc),
             ) from exc
-        return runtime.get_task_config()
+        return command_handler.call(
+            method="get_task_config",
+            requires_chat_id=False,
+            catch=False,
+        )
 
     @app.get(
         "/waker/config",
@@ -929,7 +1261,11 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
         dependencies=[Depends(_require_api_key)],
     )
     def waker_config_get() -> WakerConfig:
-        return runtime.get_waker_config()
+        return command_handler.call(
+            method="get_waker_config",
+            requires_chat_id=False,
+            catch=False,
+        )
 
     @app.post(
         "/waker/config",
@@ -938,13 +1274,22 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
     )
     def waker_config_update(req: WakerConfig) -> WakerConfig:
         try:
-            runtime.update_waker_config(req)
+            command_handler.call(
+                method="update_waker_config",
+                waker_config=req,
+                requires_chat_id=False,
+                catch=False,
+            )
         except ConfigPersistenceError as exc:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=str(exc),
             ) from exc
-        return runtime.get_waker_config()
+        return command_handler.call(
+            method="get_waker_config",
+            requires_chat_id=False,
+            catch=False,
+        )
 
     @app.get(
         "/timer/config",
@@ -952,7 +1297,11 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
         dependencies=[Depends(_require_api_key)],
     )
     def timer_config_get() -> TimerConfig:
-        return runtime.get_timer_config()
+        return command_handler.call(
+            method="get_timer_config",
+            requires_chat_id=False,
+            catch=False,
+        )
 
     @app.post(
         "/timer/config",
@@ -961,13 +1310,22 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
     )
     def timer_config_update(req: TimerConfig) -> TimerConfig:
         try:
-            runtime.update_timer_config(req)
+            command_handler.call(
+                method="update_timer_config",
+                timer_config=req,
+                requires_chat_id=False,
+                catch=False,
+            )
         except ConfigPersistenceError as exc:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=str(exc),
             ) from exc
-        return runtime.get_timer_config()
+        return command_handler.call(
+            method="get_timer_config",
+            requires_chat_id=False,
+            catch=False,
+        )
 
     @app.get(
         "/notifications/config",
@@ -975,7 +1333,11 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
         dependencies=[Depends(_require_api_key)],
     )
     def notifications_config_get() -> NotificationsConfig:
-        return runtime.get_notifications_config()
+        return command_handler.call(
+            method="get_notifications_config",
+            requires_chat_id=False,
+            catch=False,
+        )
 
     @app.post(
         "/notifications/config",
@@ -984,13 +1346,22 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
     )
     def notifications_config_update(req: NotificationsConfig) -> NotificationsConfig:
         try:
-            runtime.update_notifications_config(req)
+            command_handler.call(
+                method="update_notifications_config",
+                notifications_config=req,
+                requires_chat_id=False,
+                catch=False,
+            )
         except ConfigPersistenceError as exc:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=str(exc),
             ) from exc
-        return runtime.get_notifications_config()
+        return command_handler.call(
+            method="get_notifications_config",
+            requires_chat_id=False,
+            catch=False,
+        )
 
     @app.post("/timer", dependencies=[Depends(_require_api_key)])
     def timer_create(req: TimerRequest) -> dict[str, str]:
