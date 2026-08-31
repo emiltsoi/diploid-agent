@@ -30,6 +30,16 @@ Where should the rule live?
 ```
 ````
 
+If the user should be able to cancel the prompt without sending a turn, add `"cancellable": true` and an optional `"cancel_label"` (default `"Cancel"`):
+
+````
+Should I continue?
+
+```ask
+{"question": "Should I continue?", "options": ["Yes", "No"], "cancellable": true, "cancel_label": "Cancel"}
+```
+````
+
 ## Memory tools
 
 The `diploid-memory` MCP server is always available. When you learn a fact, preference, decision, or anything that should survive this session, make it durable:

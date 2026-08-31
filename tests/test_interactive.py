@@ -51,6 +51,46 @@ def test_build_reply_keyboard() -> None:
     assert markup["keyboard"] == [[{"text": "A"}], [{"text": "B"}]]
 
 
+def test_build_reply_keyboard_with_cancel() -> None:
+    markup = build_reply_keyboard(["A", "B"], cancel="Cancel")
+    assert markup["keyboard"] == [
+        [{"text": "A"}],
+        [{"text": "B"}],
+        [{"text": "Cancel"}],
+    ]
+
+
+def test_build_reply_keyboard_skips_duplicate_cancel() -> None:
+    markup = build_reply_keyboard(["A", "Cancel"], cancel="Cancel")
+    assert markup["keyboard"] == [[{"text": "A"}], [{"text": "Cancel"}]]
+
+
+def test_extract_ask_block_cancellable() -> None:
+    text = (
+        "Should I continue?\n\n"
+        "```ask\n"
+        '{"question": "Should I continue?", "options": ["Yes", "No"], "cancellable": true}\n'
+        "```"
+    )
+    _visible, block = extract_ask_block(text)
+    assert block is not None
+    assert block.cancellable is True
+    assert block.cancel_label == "Cancel"
+
+
+def test_extract_ask_block_custom_cancel_label() -> None:
+    text = (
+        "Should I continue?\n\n"
+        "```ask\n"
+        '{"question": "Should I continue?", "options": ["Yes", "No"], "cancellable": true, "cancel_label": "Dismiss"}\n'
+        "```"
+    )
+    _visible, block = extract_ask_block(text)
+    assert block is not None
+    assert block.cancellable is True
+    assert block.cancel_label == "Dismiss"
+
+
 def test_build_keyboard_remove() -> None:
     markup = build_keyboard_remove()
     assert markup == {"remove_keyboard": True}

@@ -16,6 +16,7 @@ from diploid_agent.config import (
 )
 from diploid_agent.models import ChatResult
 from diploid_agent.telegram_poll import ChatInput, TelegramPoller, TurnWorker
+from diploid_agent.transport.interactive import AskBlock
 from diploid_agent.transport.telegram import DeliveryWorker, _format_thought
 
 
@@ -1744,6 +1745,37 @@ def test_send_text_extracts_ask_block_and_sends_keyboard(tmp_path: Path) -> None
     assert reply_markup["keyboard"] == [[{"text": "a.py"}], [{"text": "b.py"}]]
 
 
+def test_send_text_cancellable_ask_block(tmp_path: Path) -> None:
+    """A cancellable ask block appends a cancel row to the reply keyboard."""
+    poller = TelegramPoller(
+        token="dummy",
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(url: str, *, data: Any = None, **kwargs: Any) -> httpx.Response:
+        calls.append(data or {})
+        return _fake_response(200, {"ok": True, "result": {"message_id": 42}})
+
+    poller.client.post = fake_post  # type: ignore[method-assign]
+
+    text = (
+        "Which file?\n\n"
+        "```ask\n"
+        '{"question": "Which file?", "options": ["a.py", "b.py"], "cancellable": true}\n'
+        "```"
+    )
+    sent = poller._send_text(123, text)
+
+    assert sent == [42]
+    reply_markup = json.loads(calls[0].get("reply_markup", "{}"))
+    assert reply_markup["keyboard"] == [
+        [{"text": "a.py"}],
+        [{"text": "b.py"}],
+        [{"text": "Cancel"}],
+    ]
+
+
 def test_save_and_load_pending_question(tmp_path: Path) -> None:
     """Pending questions can be saved, loaded, and removed."""
     from diploid_agent.transport.interactive import AskBlock
@@ -1797,6 +1829,48 @@ def test_maybe_answer_pending_question(tmp_path: Path) -> None:
     unchanged = poller._maybe_answer_pending_question(chat_input)
     assert unchanged.text == "something else"
     assert poller._load_pending_question(123) is None
+
+
+def test_cancel_pending_question(tmp_path: Path) -> None:
+    """A cancellable question's cancel button is swallowed and removes the keyboard."""
+    poller = TelegramPoller(
+        token="dummy",
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+
+    sent: list[tuple[int, str, dict[str, Any] | None]] = []
+
+    def fake_send(
+        chat_id: int,
+        text: str,
+        *,
+        reply_to_message_id: int | None = None,
+        parse_mode: str | None = None,
+        reply_markup: dict[str, Any] | None = None,
+    ) -> int | None:
+        sent.append((chat_id, text, reply_markup))
+        return 100
+
+    poller._send_message = fake_send  # type: ignore[method-assign]
+
+    poller._save_pending_question(
+        123,
+        AskBlock(
+            question="Which file?",
+            options=["a.py", "b.py"],
+            cancellable=True,
+        ),
+        42,
+    )
+
+    chat_input = ChatInput(chat_id=123, message_id=2, text="Cancel")
+    result = poller._maybe_answer_pending_question(chat_input)
+    assert result is None
+    assert poller._load_pending_question(123) is None
+    assert len(sent) == 1
+    assert sent[0][0] == 123
+    assert sent[0][1] == "Cancelled."
+    assert sent[0][2] == {"remove_keyboard": True}
 
 
 def test_stream_turn_strips_ask_block(tmp_path: Path, monkeypatch: Any) -> None:

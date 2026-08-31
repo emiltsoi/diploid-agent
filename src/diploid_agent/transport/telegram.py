@@ -44,6 +44,7 @@ from diploid_agent.transport.base import (
 from diploid_agent.transport.command_handler import CommandHandler, _coerce_chat_result
 from diploid_agent.transport.interactive import (
     AskBlock,
+    build_keyboard_remove,
     build_reply_keyboard,
     extract_ask_block,
 )
@@ -1129,6 +1130,8 @@ class TelegramPoller:
                 "chat_id": chat_id,
                 "question": ask_block.question,
                 "options": ask_block.options,
+                "cancellable": ask_block.cancellable,
+                "cancel_label": ask_block.cancel_label,
                 "message_id": message_id,
             }
             self._pending_question_path(chat_id).write_text(json.dumps(payload))
@@ -1148,6 +1151,8 @@ class TelegramPoller:
             return {
                 "question": data.get("question", ""),
                 "options": [str(o) for o in options],
+                "cancellable": data.get("cancellable", False),
+                "cancel_label": data.get("cancel_label", "Cancel"),
                 "message_id": data.get("message_id"),
             }
         except (OSError, json.JSONDecodeError):
@@ -1160,11 +1165,34 @@ class TelegramPoller:
         except Exception:
             logger.exception("Failed to remove pending question for chat %s", chat_id)
 
-    def _maybe_answer_pending_question(self, chat_input: ChatInput) -> ChatInput:
-        """If the user is answering a pending question, rewrite the message."""
+    def _maybe_answer_pending_question(
+        self, chat_input: ChatInput
+    ) -> ChatInput | None:
+        """If the user is answering a pending question, rewrite the message.
+
+        If the question is cancellable and the user pressed the cancel button,
+        remove the keyboard, drop the question, and return ``None`` so no turn
+        is started.
+        """
         pending = self._load_pending_question(chat_input.chat_id)
         if pending is None:
             return chat_input
+
+        if pending.get("cancellable") and chat_input.text == pending.get(
+            "cancel_label", "Cancel"
+        ):
+            self._remove_pending_question(chat_input.chat_id)
+            try:
+                self._send_message(
+                    chat_input.chat_id,
+                    "Cancelled.",
+                    reply_markup=build_keyboard_remove(),
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to send cancel confirmation for chat %s", chat_input.chat_id
+                )
+            return None
 
         if chat_input.text not in pending["options"]:
             self._remove_pending_question(chat_input.chat_id)
@@ -1398,7 +1426,8 @@ class TelegramPoller:
 
             reply_markup: dict[str, Any] | None = None
             if ask_block is not None and i == 1 and total == 1:
-                reply_markup = build_reply_keyboard(ask_block.options)
+                cancel = ask_block.cancel_label if ask_block.cancellable else None
+                reply_markup = build_reply_keyboard(ask_block.options, cancel=cancel)
 
             if i == 1 and first_message_id is not None:
                 if self._edit_message_text(
@@ -2139,6 +2168,8 @@ class TelegramPoller:
             return
 
         chat_input = self._maybe_answer_pending_question(chat_input)
+        if chat_input is None:
+            return
 
         chat_id = chat_input.chat_id
         self._last_user_message_ids[chat_id] = chat_input.message_id

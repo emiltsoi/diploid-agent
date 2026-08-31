@@ -12,16 +12,27 @@ ASK_FENCE_RE = re.compile(r"^```ask\s*\n([\s\S]*?)\n```\s*$", re.MULTILINE)
 
 @dataclass(frozen=True)
 class AskBlock:
-    """A question and its selectable options."""
+    """A question, its selectable options, and an optional cancel button."""
 
     question: str
     options: list[str]
+    cancellable: bool = False
+    cancel_label: str = "Cancel"
 
 
-def build_reply_keyboard(options: list[str]) -> dict[str, Any]:
-    """Return a Telegram ReplyKeyboardMarkup for a list of option strings."""
+def build_reply_keyboard(
+    options: list[str], cancel: str | None = None
+) -> dict[str, Any]:
+    """Return a Telegram ReplyKeyboardMarkup for a list of option strings.
+
+    If ``cancel`` is provided and not already in ``options``, it is added as a
+    final row so the user can dismiss the prompt.
+    """
+    keyboard = [[{"text": opt}] for opt in options]
+    if cancel and cancel not in options:
+        keyboard.append([{"text": cancel}])
     return {
-        "keyboard": [[{"text": opt}] for opt in options],
+        "keyboard": keyboard,
         "resize_keyboard": True,
         "one_time_keyboard": True,
     }
@@ -60,5 +71,15 @@ def extract_ask_block(text: str) -> tuple[str, AskBlock | None]:
         if before:
             question = before.split("\n")[-1].strip() or before.strip()
 
+    cancellable = bool(data.get("cancellable", False))
+    cancel_label = data.get("cancel_label")
+    if not cancel_label:
+        cancel_label = "Cancel" if cancellable else ""
+
     visible = (text[: match.start()] + text[match.end() :]).strip()
-    return visible, AskBlock(question=question, options=[str(o) for o in options])
+    return visible, AskBlock(
+        question=question,
+        options=[str(o) for o in options],
+        cancellable=cancellable,
+        cancel_label=cancel_label,
+    )

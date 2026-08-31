@@ -105,6 +105,18 @@ Where should the rule live?
 ```
 ````
 
+If the user should be able to dismiss the prompt without waking the assistant, add `cancellable: true` and optionally a custom `cancel_label`:
+
+````
+Should I continue?
+
+```ask
+{"question": "Should I continue?", "options": ["Yes", "No"], "cancellable": true, "cancel_label": "Cancel"}
+```
+````
+
+The poller will append the cancel button, remove the keyboard when it is pressed, and **not** send a turn to the harness.
+
 ## Replying to messages
 
 If you reply to any earlier message in the Telegram chat, the poller extracts
