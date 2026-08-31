@@ -482,17 +482,35 @@ class PluginManager:
         slots: dict[str, list[str]],
         is_first: bool,
         rehydrated: bool = False,
+        last_blocks: dict[tuple[str, str], str | None] | None = None,
+        last_prompt_time: float | None = None,
     ) -> dict[str, list[str]]:
         for plugin in self._plugins_for(chat_id):
             if plugin.first_prompt_only and not is_first and not rehydrated:
                 continue
+
+            slot = plugin.prompt_slot
+            key = (plugin.name, slot)
+
+            if not is_first and last_blocks is not None:
+                changed = plugin.prompt_block_changed(last_prompt_time)
+                if changed is not None and not changed:
+                    continue
+
             try:
                 block = plugin.prompt_block(plugin.max_prompt_chars)
             except Exception:
                 logger.exception("prompt_block failed for plugin %s", plugin.name)
                 continue
+
+            if not is_first and last_blocks is not None:
+                if block == last_blocks.get(key):
+                    continue
+                last_blocks[key] = block
+            elif is_first and last_blocks is not None:
+                last_blocks[key] = block
+
             if block:
-                slot = plugin.prompt_slot
                 slots.setdefault(slot, []).append(block)
         return slots
 

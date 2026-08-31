@@ -32,6 +32,24 @@ class JsonStatePlugin(StatePlugin):
         except (json.JSONDecodeError, OSError):
             return {}
 
+    def _state_mtime(self) -> float | None:
+        path = self.state_path()
+        if path is None or not path.exists():
+            return None
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return None
+
+    def prompt_block_changed(self, since: float | None = None) -> bool | None:
+        mtime = self._state_mtime()
+        if mtime is None:
+            # No state file yet; let the harness decide by calling prompt_block.
+            return None
+        if since is None:
+            return True
+        return mtime > since
+
     def prompt_block(self, max_chars: int | None = None) -> str | None:
         template = self.config.prompt_template
         if not template:

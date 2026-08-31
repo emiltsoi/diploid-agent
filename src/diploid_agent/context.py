@@ -54,8 +54,35 @@ class ContextBuilder:
         self.active_skill_names = active_skill_names
         # Shared per-chat metrics store.  The harness sets this to its own dict.
         self.metrics: dict[str, dict[str, Any]] = {}
+        # Per-chat cache of the last injected plugin blocks and file mtimes. This
+        # lets follow-ups skip unchanged plugin slots, persona memory, and chat
+        # memory without re-reading them every turn.
+        self._last_blocks: dict[str, dict[tuple[str, str], str | None]] = {}
+        self._last_file_mtimes: dict[str, dict[str, float]] = {}
+        self._last_prompt_time: dict[str, float] = {}
 
     # ---------------------------------------------------------------- helpers
+
+    def _reset_cache(self, chat_id: str) -> None:
+        """Reset the follow-up change-detection cache for a chat."""
+        self._last_blocks[chat_id] = {}
+        self._last_file_mtimes[chat_id] = {}
+        self._last_prompt_time[chat_id] = 0.0
+
+    def _file_changed(self, chat_id: str, path: Path | None) -> bool:
+        """Return True if `path` has been modified since the last prompt."""
+        if path is None or not path.exists():
+            return False
+        last = self._last_file_mtimes.get(chat_id, {}).get(str(path))
+        return last is None or path.stat().st_mtime > last
+
+    def _record_file(self, chat_id: str, path: Path | None) -> None:
+        """Record the current mtime of `path` for future change checks."""
+        if path is None or not path.exists():
+            return
+        if chat_id not in self._last_file_mtimes:
+            self._last_file_mtimes[chat_id] = {}
+        self._last_file_mtimes[chat_id][str(path)] = path.stat().st_mtime
 
     def generate_label(self, chat_id: str, user_message: str) -> str:
         """Auto-generate a short label from the first user message."""
@@ -376,6 +403,9 @@ class ContextBuilder:
             other_instance_running=other_instance_running,
         )
 
+        # A new ACP session starts here; reset the follow-up change cache.
+        self._reset_cache(chat_id)
+
         build_ctx = PromptBuildContext(
             chat_id=chat_id,
             record=record,
@@ -447,7 +477,17 @@ class ContextBuilder:
         if chat_mem:
             slots["chat_memory"].append("## Chat memory (on disk)\n\n" + chat_mem)
 
-        self.plugin_manager.fill_prompt_slots(chat_id, slots, is_first=True)
+        # Record mtimes for the files we just loaded so follow-ups can tell if
+        # persona or chat memory has changed.
+        self._record_file(chat_id, persona.memory_path)
+        self._record_file(chat_id, mgr.chat_memory_path)
+
+        self.plugin_manager.fill_prompt_slots(
+            chat_id,
+            slots,
+            is_first=True,
+            last_blocks=self._last_blocks[chat_id],
+        )
 
         metrics_context = self.metrics_context_for_prompt(chat_id)
         if metrics_context:
@@ -459,6 +499,10 @@ class ContextBuilder:
         skill_context = self._skill_context(chat_id, skill_names)
         if skill_context:
             slots["skills"].append(skill_context)
+
+        # Remember when this prompt was built so plugins can use mtime-based
+        # change detection on the next follow-up.
+        self._last_prompt_time[chat_id] = time.time()
 
         parts: list[str] = []
         # Slots are rendered in this order.  The former `persona_state` slot
@@ -515,7 +559,8 @@ class ContextBuilder:
 
         The ACP session already holds the full persona and prior conversation, so
         follow-ups only need a linked identity anchor and the user message. Long-
-        term recall is skipped on follow-ups unless `recall_on_follow_up` is true.
+        term recall, persona memory, chat memory, and plugin blocks are only
+        re-injected when they have changed since the last prompt.
         """
         build_ctx = PromptBuildContext(
             chat_id=chat_id,
@@ -549,7 +594,22 @@ class ContextBuilder:
                 total=0,
             )
         chat_status = mgr.chat_memory_status()
-        pm = mgr.persona_memory(self.config.harness.memory.max_persona_memory_chars)
+
+        # Only load persona memory if the file has changed since the last prompt.
+        persona_memory_path = mgr.persona_memory_path
+        if self._file_changed(chat_id, persona_memory_path):
+            pm = mgr.persona_memory(self.config.harness.memory.max_persona_memory_chars)
+            self._record_file(chat_id, persona_memory_path)
+        else:
+            pm = {
+                "text": "",
+                "truncated": False,
+                "path": persona_memory_path,
+                "limit": 0,
+                "loaded": 0,
+                "total": 0,
+            }
+
         persona = PersonaPrompt(
             text=anchor,
             memory_text=pm["text"],
@@ -560,6 +620,12 @@ class ContextBuilder:
             total=pm["total"],
         )
         notice = self.build_system_notice(persona, recall, chat_status)
+
+        # Ensure the change-detection cache exists. A resumed ACP session may
+        # start with an empty cache, in which case we re-inject changed blocks
+        # once and then cache them.
+        if chat_id not in self._last_blocks:
+            self._reset_cache(chat_id)
 
         slots: dict[str, list[str]] = {
             "identity": [persona.text],
@@ -597,11 +663,25 @@ class ContextBuilder:
         if recall.text:
             slots["recall"].append("## Chat memory\n\n" + recall.text)
 
-        chat_mem = self.memory_factory(chat_id).chat_memory_block()
+        # Only load the on-disk chat memory if it has changed.
+        chat_mem = None
+        chat_memory_path = mgr.chat_memory_path
+        if self._file_changed(chat_id, chat_memory_path):
+            chat_mem = mgr.chat_memory_block()
+            self._record_file(chat_id, chat_memory_path)
         if chat_mem:
             slots["chat_memory"].append("## Chat memory (on disk)\n\n" + chat_mem)
 
-        self.plugin_manager.fill_prompt_slots(chat_id, slots, is_first=False, rehydrated=build_ctx.rehydrated)
+        self.plugin_manager.fill_prompt_slots(
+            chat_id,
+            slots,
+            is_first=False,
+            rehydrated=build_ctx.rehydrated,
+            last_blocks=self._last_blocks[chat_id],
+            last_prompt_time=self._last_prompt_time.get(chat_id),
+        )
+
+        self._last_prompt_time[chat_id] = time.time()
 
         if build_ctx.continuation_anchor:
             slots["continuation"].append(build_ctx.continuation_anchor)

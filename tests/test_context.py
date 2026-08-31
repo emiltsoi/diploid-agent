@@ -1,9 +1,11 @@
 """Tests for the ContextBuilder prompt-assembly module."""
 
+import json
+import os
 import time
 from pathlib import Path
 
-from diploid_agent.config import Config, DiploidConfig, HarnessConfig, PersonaConfig
+from diploid_agent.config import Config, DiploidConfig, HarnessConfig, PersonaConfig, PluginConfig
 from diploid_agent.context import ContextBuilder
 from diploid_agent.dispatch import DispatchStore
 from diploid_agent.engine.fake import FakeAgentEngine
@@ -15,6 +17,69 @@ from diploid_agent.skills import SkillManager
 
 def _fixture_root() -> Path:
     return Path(__file__).parent / "fixtures" / "test-pilot"
+
+
+def _make_builder_with_plugins(tmp_path: Path, plugin_configs: list[PluginConfig]) -> ContextBuilder:
+    """Return a ContextBuilder with additional plugin configs."""
+    config = _make_config(tmp_path)
+    if plugin_configs:
+        config.harness.plugins.extend(plugin_configs)
+    sessions_root = tmp_path / "sessions"
+    plugin_manager = PluginManager(
+        plugins=list(config.harness.plugins),
+        sessions_root=sessions_root,
+        instance_id="test-instance",
+        instance_started_at=time.time(),
+        dispatch_store=DispatchStore(tmp_path / "dispatch.jsonl"),
+    )
+    engine = FakeAgentEngine()
+
+    def memory_factory(chat_id: str) -> MemoryManager:
+        return MemoryManager(
+            config=config.harness.memory,
+            persona=config.persona,
+            sessions_root=sessions_root,
+            chat_id=chat_id,
+            devin_client=engine,
+        )
+
+    return ContextBuilder(config, plugin_manager, memory_factory)
+
+
+def _make_builder_with_profile_root(tmp_path: Path, profile_root: Path) -> ContextBuilder:
+    """Return a ContextBuilder that uses a custom persona profile root."""
+    config = Config(
+        diploid=DiploidConfig(bin="/bin/echo", model="swe-1-7"),
+        persona=PersonaConfig(
+            name="test-pilot",
+            profile_root=profile_root,
+        ),
+        harness=HarnessConfig(
+            sessions_root=tmp_path / "sessions",
+            session_store_path=tmp_path / "sessions.jsonl",
+            memory={"backend": "file"},  # type: ignore[arg-type]
+        ),
+    )
+    sessions_root = tmp_path / "sessions"
+    plugin_manager = PluginManager(
+        plugins=list(config.harness.plugins),
+        sessions_root=sessions_root,
+        instance_id="test-instance",
+        instance_started_at=time.time(),
+        dispatch_store=DispatchStore(tmp_path / "dispatch.jsonl"),
+    )
+    engine = FakeAgentEngine()
+
+    def memory_factory(chat_id: str) -> MemoryManager:
+        return MemoryManager(
+            config=config.harness.memory,
+            persona=config.persona,
+            sessions_root=sessions_root,
+            chat_id=chat_id,
+            devin_client=engine,
+        )
+
+    return ContextBuilder(config, plugin_manager, memory_factory)
 
 
 def _make_config(tmp_path: Path) -> Config:
@@ -268,7 +333,7 @@ def test_build_first_includes_chat_memory_block(tmp_path: Path) -> None:
 
 
 def test_build_follow_up_includes_chat_memory_anchor(tmp_path: Path) -> None:
-    """A follow-up prompt loads the full chat memory."""
+    """A follow-up prompt loads the on-disk chat memory."""
     builder = _make_builder(tmp_path)
     mgr = builder.memory_factory("chat-1")
     fb = mgr._file_backend
@@ -277,3 +342,104 @@ def test_build_follow_up_includes_chat_memory_anchor(tmp_path: Path) -> None:
     pctx = builder.build_follow_up("chat-1", "what next?", record=None)
     assert "## Chat memory (on disk)" in pctx.prompt
     assert "Postgres" in pctx.prompt
+
+
+def test_build_follow_up_skips_unchanged_chat_memory(tmp_path: Path) -> None:
+    """A follow-up prompt skips the on-disk chat memory block if it has not changed."""
+    builder = _make_builder(tmp_path)
+    mgr = builder.memory_factory("chat-1")
+    fb = mgr._file_backend
+    assert fb is not None
+    fb.retain([MemoryItem(content="We agreed on Postgres.", tags=["memory"])])
+
+    pctx_first = builder.build_first("chat-1", "hello", record=None)
+    assert "Postgres" in pctx_first.prompt
+
+    pctx_follow = builder.build_follow_up("chat-1", "what next?", record=None)
+    assert "## Chat memory (on disk)" not in pctx_follow.prompt
+    assert "Postgres" not in pctx_follow.prompt
+
+
+def test_build_follow_up_includes_changed_chat_memory(tmp_path: Path) -> None:
+    """A follow-up prompt re-injects on-disk chat memory when it changes."""
+    builder = _make_builder(tmp_path)
+    mgr = builder.memory_factory("chat-1")
+    fb = mgr._file_backend
+    assert fb is not None
+    fb.retain([MemoryItem(content="We agreed on Postgres.", tags=["memory"])])
+
+    pctx_first = builder.build_first("chat-1", "hello", record=None)
+    assert "Postgres" in pctx_first.prompt
+
+    fb.retain([MemoryItem(content="We agreed on SQLite.", tags=["memory"])])
+    chat_path = mgr.chat_memory_path
+    assert chat_path is not None
+    last = builder._last_file_mtimes["chat-1"][str(chat_path)]
+    os.utime(chat_path, (last + 1, last + 1))
+
+    pctx_follow = builder.build_follow_up("chat-1", "what next?", record=None)
+    assert "SQLite" in pctx_follow.prompt
+    assert "Postgres" in pctx_follow.prompt
+
+
+def test_build_follow_up_skips_unchanged_json_state_plugin(tmp_path: Path) -> None:
+    """A follow-up prompt skips an unchanged JsonStatePlugin block."""
+    cfg = PluginConfig(
+        name="mood",
+        enabled=True,
+        state_file="mood.json",
+        prompt_slot="body",
+        prompt_template="Mood: {mood}",
+    )
+    builder = _make_builder_with_plugins(tmp_path, [cfg])
+    chat_dir = tmp_path / "sessions" / "chat-1"
+    chat_dir.mkdir(parents=True, exist_ok=True)
+    (chat_dir / "mood.json").write_text(json.dumps({"mood": "calm"}))
+
+    pctx_first = builder.build_first("chat-1", "hello", record=None)
+    assert "Mood: calm" in pctx_first.prompt
+
+    pctx_follow = builder.build_follow_up("chat-1", "how are you?", record=None)
+    assert "Mood: calm" not in pctx_follow.prompt
+
+
+def test_build_follow_up_includes_changed_json_state_plugin(tmp_path: Path) -> None:
+    """A follow-up prompt re-injects a JsonStatePlugin block when its state file changes."""
+    cfg = PluginConfig(
+        name="mood",
+        enabled=True,
+        state_file="mood.json",
+        prompt_slot="body",
+        prompt_template="Mood: {mood}",
+    )
+    builder = _make_builder_with_plugins(tmp_path, [cfg])
+    chat_dir = tmp_path / "sessions" / "chat-1"
+    chat_dir.mkdir(parents=True, exist_ok=True)
+    (chat_dir / "mood.json").write_text(json.dumps({"mood": "calm"}))
+
+    pctx_first = builder.build_first("chat-1", "hello", record=None)
+    assert "Mood: calm" in pctx_first.prompt
+
+    (chat_dir / "mood.json").write_text(json.dumps({"mood": "happy"}))
+    mood_path = chat_dir / "mood.json"
+    last = mood_path.stat().st_mtime
+    os.utime(mood_path, (last + 1, last + 1))
+
+    pctx_follow = builder.build_follow_up("chat-1", "how are you?", record=None)
+    assert "Mood: happy" in pctx_follow.prompt
+
+
+def test_build_follow_up_skips_unchanged_persona_memory(tmp_path: Path) -> None:
+    """A follow-up prompt skips the persona MEMORY.md if it has not changed."""
+    profile_root = tmp_path / "profile"
+    profile_root.mkdir()
+    (profile_root / "SOUL.md").write_text("# SOUL")
+    (profile_root / "AGENTS.md").write_text("# AGENTS")
+    (profile_root / "MEMORY.md").write_text("We value kindness.")
+
+    builder = _make_builder_with_profile_root(tmp_path, profile_root)
+    pctx_first = builder.build_first("chat-1", "hello", record=None)
+    assert "We value kindness." in pctx_first.prompt
+
+    pctx_follow = builder.build_follow_up("chat-1", "how are you?", record=None)
+    assert "We value kindness." not in pctx_follow.prompt

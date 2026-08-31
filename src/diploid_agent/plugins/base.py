@@ -138,6 +138,15 @@ class StatePlugin(abc.ABC):
         """Return a prompt block for the current chat, or None to skip."""
         return None
 
+    def prompt_block_changed(self, since: float | None = None) -> bool | None:
+        """Return True if the prompt block has changed since `since`.
+
+        Returning None tells the harness to call `prompt_block()` and compare
+        the result to its own cache. Plugins with expensive or non-deterministic
+        blocks should implement this hook.
+        """
+        return None
+
     def event(
         self,
         *,
