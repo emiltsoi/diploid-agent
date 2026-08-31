@@ -2049,6 +2049,7 @@ class AgentRuntime(RuntimeAPI):
             logger.warning("Failed to load memory stats for %s: %s", chat_id, exc)
 
         context_usage = self._context_usage(record)
+        background_tasks = self.subagent_status(chat_id)
 
         with self._lock:
             record = self._active_record(chat_id)
@@ -2072,6 +2073,7 @@ class AgentRuntime(RuntimeAPI):
                 "enabled_mcp_servers": record.enabled_mcp_servers,
                 "enabled_skills": record.enabled_skills,
                 "disabled_skills": record.disabled_skills,
+                "background_tasks": background_tasks,
             }
 
     def list_sessions(self, chat_id: str) -> dict[str, Any]:
@@ -2639,8 +2641,13 @@ class AgentRuntime(RuntimeAPI):
             return ChatResult(reply="No active session for this chat.")
 
         use_model = model or self._model(record)
+        started_at = time.time()
         dispatch = self.dispatch_store.add(
-            chat_id, record.session_id, context=context or prompt[:200]
+            chat_id,
+            record.session_id,
+            context=context or prompt[:200],
+            dispatch_type="subagent",
+            started_at=started_at,
         )
         task = Task(
             name="subagent",
@@ -2697,7 +2704,13 @@ class AgentRuntime(RuntimeAPI):
         result = task.result or "(no result)"
         if task.status == TaskStatus.FAILED:
             result = task.log or "(subagent failed)"
-        self.dispatch_store.set_result(task.dispatch_id, result)
+        summary = self._extract_summary(result, max_chars=240)
+        self.dispatch_store.set_result(
+            task.dispatch_id,
+            result,
+            summary=summary,
+            finished_at=time.time(),
+        )
 
         wake_id = f"wake-{task.dispatch_id}"
         try:
@@ -2707,6 +2720,74 @@ class AgentRuntime(RuntimeAPI):
             self.wake_queue.ready(wake_id, now=time.time())
         except Exception:
             logger.exception("Failed to mark subagent wake %s ready", wake_id)
+
+    @staticmethod
+    def _extract_summary(text: str, max_chars: int = 240) -> str:
+        """Return a short, one-line summary of a subagent result.
+
+        Prefers the first markdown heading if present, otherwise the first
+        block of text up to ``max_chars``.
+        """
+        if not text:
+            return ""
+        text = text.strip()
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            return ""
+        first = lines[0]
+        if first.startswith("#"):
+            return first.lstrip("#").strip()[:max_chars]
+        return text[:max_chars]
+
+    def _subagent_status_name(self, task: Task, dispatch: Dispatch | None) -> str:
+        """Map a subagent task/dispatch to a simple status string."""
+        if task.status == TaskStatus.RUNNING:
+            return "running"
+        if task.status == TaskStatus.DONE:
+            return "completed"
+        if task.status == TaskStatus.FAILED:
+            return "failed"
+        if task.status in (TaskStatus.PENDING, TaskStatus.READY, TaskStatus.BLOCKED):
+            return "pending"
+        return "unknown"
+
+    def _subagent_summary(self, task: Task, dispatch: Dispatch | None) -> str | None:
+        """Return the best available summary for a subagent task."""
+        if dispatch and dispatch.summary:
+            return dispatch.summary
+        text = task.log if task.status == TaskStatus.FAILED else task.result
+        if text:
+            return self._extract_summary(text, max_chars=240)
+        return None
+
+    def subagent_status(self, chat_id: str) -> dict[str, Any]:
+        """Return the status of all background subagents for a chat."""
+        plans = self.plan_manager.list_plans(chat_id=chat_id)
+        subagents: list[dict[str, Any]] = []
+        for plan in plans:
+            for task in plan.tasks:
+                if task.type != TaskType.SUBAGENT:
+                    continue
+                dispatch = self.dispatch_store.get(task.dispatch_id) if task.dispatch_id else None
+                status = self._subagent_status_name(task, dispatch)
+                summary = self._subagent_summary(task, dispatch)
+                started_at = task.started_at or (dispatch.started_at if dispatch else None)
+                finished_at = task.completed_at or (dispatch.finished_at if dispatch else None)
+                subagents.append(
+                    {
+                        "plan_id": plan.id,
+                        "task_id": task.id,
+                        "dispatch_id": task.dispatch_id,
+                        "name": plan.name,
+                        "status": status,
+                        "continued": dispatch.status == DispatchStatus.COMPLETED if dispatch else False,
+                        "started_at": started_at,
+                        "finished_at": finished_at,
+                        "summary": summary,
+                        "prompt_snippet": (task.prompt or "")[:200],
+                    }
+                )
+        return {"chat_id": chat_id, "subagents": subagents}
 
     def plan_list(self) -> list[Plan]:
         """List all plans."""

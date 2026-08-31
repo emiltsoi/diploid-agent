@@ -180,6 +180,10 @@ class RuntimeAPI(abc.ABC):
         """Start a background ACP subagent and return a dispatch id."""
 
     @abc.abstractmethod
+    def subagent_status(self, chat_id: str) -> Any:
+        """Return the status of background subagents for a chat."""
+
+    @abc.abstractmethod
     def get_task_config(self) -> TaskConfig:
         """Return the current live task configuration."""
 

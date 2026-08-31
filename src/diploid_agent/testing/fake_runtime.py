@@ -181,6 +181,9 @@ class FakePluginRuntime:
     ) -> ChatResult:
         return ChatResult(reply="subagent started", dispatch_id="dispatch-test")
 
+    def subagent_status(self, chat_id: str) -> dict[str, Any]:
+        return {"chat_id": chat_id, "subagents": []}
+
     def _active_record(self, chat_id: str) -> SessionRecord | None:
         return None
 

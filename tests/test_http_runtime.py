@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -470,3 +471,29 @@ def test_task_config_update_rejects_zero_acp_timeout(client: TestClient) -> None
         },
     )
     assert resp.status_code == 422
+
+
+def test_subagents_endpoint_returns_status(client: TestClient, monkeypatch) -> None:
+    def fake_subagent_status(chat_id: str) -> dict[str, Any]:
+        return {
+            "chat_id": chat_id,
+            "subagents": [
+                {
+                    "dispatch_id": "dispatch-1",
+                    "status": "running",
+                    "summary": "Working on it",
+                    "started_at": 0.0,
+                    "finished_at": None,
+                }
+            ],
+        }
+
+    monkeypatch.setattr(client.app.state.runtime, "subagent_status", fake_subagent_status)
+
+    resp = client.get("/subagents/chat-1")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["chat_id"] == "chat-1"
+    assert len(body["subagents"]) == 1
+    assert body["subagents"][0]["dispatch_id"] == "dispatch-1"
+    assert body["subagents"][0]["status"] == "running"

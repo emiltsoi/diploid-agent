@@ -505,6 +505,16 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
             catch=False,
         )
 
+    @app.get("/subagents/{chat_id}")
+    def subagents(chat_id: str) -> dict[str, Any]:
+        return command_handler.call(
+            method="subagent_status",
+            chat_id=chat_id,
+            http_path="/subagents/{chat_id}",
+            http_method="GET",
+            catch=False,
+        )
+
     @app.post("/resume", response_model=ChatResponse, dependencies=[Depends(_require_api_key)])
     def resume(req: ResumeRequest) -> ChatResponse:
         raw = command_handler.call(

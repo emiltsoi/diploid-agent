@@ -1857,3 +1857,96 @@ def test_stream_turn_strips_ask_block(tmp_path: Path, monkeypatch: Any) -> None:
     assert "```ask" not in edited[0]
     assert "a.py" not in edited[0]
     assert "Which file?" in edited[0]
+
+
+class _FailingClient:
+    def get(self, *args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("boom")
+
+    def post(self, *args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("boom")
+
+
+def test_harness_subagent_status_with_subagents() -> None:
+    poller = TelegramPoller(token="dummy", harness_url="http://localhost")
+    poller._local.client = _FakeClient(
+        {
+            "http://localhost/subagents/12345": {
+                "chat_id": "12345",
+                "subagents": [
+                    {
+                        "dispatch_id": "d-1",
+                        "status": "running",
+                        "summary": "Working on it",
+                        "started_at": 0.0,
+                        "finished_at": None,
+                    },
+                    {
+                        "dispatch_id": "d-2",
+                        "status": "completed",
+                        "summary": "Done",
+                        "started_at": 0.0,
+                        "finished_at": 1.0,
+                    },
+                ],
+            },
+        }
+    )
+    result = poller._harness_subagent_status(12345)
+    assert "running: d-1" in result
+    assert "completed: d-2" in result
+    assert "Working on it" in result
+    assert "Done" in result
+    assert "00:00:00" in result
+
+
+def test_harness_subagent_status_empty() -> None:
+    poller = TelegramPoller(token="dummy", harness_url="http://localhost")
+    poller._local.client = _FakeClient(
+        {
+            "http://localhost/subagents/12345": {
+                "chat_id": "12345",
+                "subagents": [],
+            },
+        }
+    )
+    result = poller._harness_subagent_status(12345)
+    assert result == "No background subagents for this chat."
+
+
+def test_harness_subagent_status_error() -> None:
+    poller = TelegramPoller(token="dummy", harness_url="http://localhost")
+    poller._local.client = _FailingClient()
+    result = poller._harness_subagent_status(12345)
+    assert "Sorry" in result
+
+
+def test_handle_update_routes_subagents_command(tmp_path: Path) -> None:
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    sent: list[tuple[int, str, int | None]] = []
+
+    def fake_send(
+        chat_id: int,
+        text: str,
+        *,
+        reply_to_message_id: int | None = None,
+        first_message_id: int | None = None,
+    ) -> None:
+        sent.append((chat_id, text, reply_to_message_id))
+
+    poller._send_text = fake_send
+    poller._harness_subagent_status = lambda chat_id: "Subagent status"
+    update = _update(
+        message={
+            "message_id": 1,
+            "chat": {"id": 12345, "type": "private"},
+            "from": {"id": 1, "is_bot": False},
+            "text": "/subagents",
+        }
+    )
+    poller._handle_update(update)
+    assert sent == [(12345, "Subagent status", 1)]

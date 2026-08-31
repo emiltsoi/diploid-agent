@@ -98,6 +98,67 @@ def test_subagent_start_creates_dispatch_and_plan(tmp_path: Path) -> None:
     runtime.shutdown()
 
 
+def test_subagent_status_reports_running_and_completed(tmp_path: Path) -> None:
+    runtime = AgentRuntime(_make_config(tmp_path))
+    runtime.start()
+    fake = FakeAgentEngine()
+    fake.replies = ["parent reply"]
+    runtime.engine = fake
+    runtime.task_engine.engine = fake
+
+    # Create an active session.
+    result = runtime.process("chat-1", "hello")
+    assert result.reply == "parent reply"
+
+    fake.replies = ["# Summary\n\nsubagent result"]
+    result = runtime.subagent_start("chat-1", "do the thing")
+    assert "subagent started" in result.reply.lower()
+    assert result.dispatch_id is not None
+    dispatch_id = result.dispatch_id
+
+    # The status should show a running subagent.
+    status = runtime.subagent_status("chat-1")
+    assert status["chat_id"] == "chat-1"
+    assert len(status["subagents"]) == 1
+    assert status["subagents"][0]["status"] == "running"
+    assert status["subagents"][0]["dispatch_id"] == dispatch_id
+    assert status["subagents"][0]["prompt_snippet"] == "do the thing"
+    assert not status["subagents"][0]["continued"]
+
+    # Wait for the task to complete and the dispatch to record summary.
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        dispatch = runtime.dispatch_store.get(dispatch_id)
+        if dispatch and dispatch.finished_at is not None:
+            break
+        time.sleep(0.05)
+    assert dispatch is not None
+    assert dispatch.finished_at is not None
+    assert dispatch.summary == "Summary"
+
+    status = runtime.subagent_status("chat-1")
+    assert status["subagents"][0]["status"] == "completed"
+    assert status["subagents"][0]["summary"] == "Summary"
+    assert not status["subagents"][0]["continued"]
+
+    # Simulate the TimerService waking the chat and completing the dispatch.
+    wake = runtime.wake_queue.get(f"wake-{dispatch_id}")
+    assert wake is not None
+    result = runtime.wake("chat-1", event_id=wake.id)
+    assert result.turn_number is not None
+
+    status = runtime.subagent_status("chat-1")
+    assert status["subagents"][0]["status"] == "completed"
+    assert status["subagents"][0]["continued"]
+
+    # Chat status should include background tasks.
+    chat_status = runtime.status("chat-1")
+    assert "background_tasks" in chat_status
+    assert chat_status["background_tasks"]["subagents"][0]["dispatch_id"] == dispatch_id
+
+    runtime.shutdown()
+
+
 def test_agent_runtime_has_engine_and_turn_controller(tmp_path: Path) -> None:
     runtime = AgentRuntime(_make_config(tmp_path))
     assert runtime.engine is not None
@@ -126,6 +187,7 @@ def test_agent_runtime_non_turn_public_api(tmp_path: Path) -> None:
         "list_models",
         "get_model",
         "status",
+        "subagent_status",
         "list_sessions",
         "memory",
         "summarize",

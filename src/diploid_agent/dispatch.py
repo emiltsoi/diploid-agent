@@ -26,6 +26,10 @@ class Dispatch:
     result: str | None = None
     context: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    type: str = "dispatch"
+    started_at: float | None = None
+    finished_at: float | None = None
+    summary: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -42,6 +46,10 @@ class Dispatch:
             result=data.get("result"),
             context=data.get("context"),
             metadata=data.get("metadata", {}),
+            type=data.get("type", "dispatch"),
+            started_at=data.get("started_at"),
+            finished_at=data.get("finished_at"),
+            summary=data.get("summary"),
         )
 
 
@@ -83,13 +91,23 @@ class DispatchStore:
         tmp_path.write_text("".join(lines))
         tmp_path.replace(self._path)
 
-    def add(self, chat_id: str, session_id: str, context: str | None = None) -> Dispatch:
+    def add(
+        self,
+        chat_id: str,
+        session_id: str,
+        context: str | None = None,
+        *,
+        dispatch_type: str = "dispatch",
+        started_at: float | None = None,
+    ) -> Dispatch:
         dispatch = Dispatch(
             id=f"dispatch-{uuid.uuid4().hex[:12]}",
             chat_id=chat_id,
             session_id=session_id,
             status=DispatchStatus.PENDING,
             context=context,
+            type=dispatch_type,
+            started_at=started_at,
         )
         with self._lock:
             self._dispatches[dispatch.id] = dispatch
@@ -100,13 +118,24 @@ class DispatchStore:
         with self._lock:
             return self._dispatches.get(dispatch_id)
 
-    def set_result(self, dispatch_id: str, result: str) -> Dispatch | None:
+    def set_result(
+        self,
+        dispatch_id: str,
+        result: str,
+        *,
+        summary: str | None = None,
+        finished_at: float | None = None,
+    ) -> Dispatch | None:
         with self._lock:
             dispatch = self._dispatches.get(dispatch_id)
             if dispatch is None:
                 return None
             if dispatch.status == DispatchStatus.PENDING:
                 dispatch.result = result
+                if summary is not None:
+                    dispatch.summary = summary
+                if finished_at is not None:
+                    dispatch.finished_at = finished_at
             self._save()
             return dispatch
 

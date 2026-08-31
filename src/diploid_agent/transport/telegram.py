@@ -100,6 +100,13 @@ def _format_elapsed(seconds: float) -> str:
     return f"{secs}s"
 
 
+def _format_subagent_time(ts: float | None) -> str:
+    """Return a concise UTC time string for a subagent started/finished time."""
+    if ts is None:
+        return "—"
+    return time.strftime("%H:%M:%S", time.gmtime(ts))
+
+
 def _build_heartbeat_text(base: str, elapsed: float, limit: int = 4096) -> str:
     """Return ``base`` with a small liveness suffix, truncating if needed."""
     suffix = f"\n\n(still working, {_format_elapsed(elapsed)})"
@@ -130,6 +137,7 @@ _TELEGRAM_HELP = """Available commands:
 /restart - kill the ACP child and start a fresh transport
 /graceful-restart [service] - schedule a graceful restart of the named service
 /subagent <prompt> - start a background subagent and continue when it finishes
+/subagents - list background subagents for this chat
 /continue - resume the previous turn after a partial reply or timeout
 /sessions - list numbered sessions for this chat
 /resume <n> - resume session n as the active session
@@ -1945,6 +1953,44 @@ class TelegramPoller:
     def _harness_subagent(self, chat_id: int, prompt: str) -> ChatResult:
         return self.command_handler.handle("/subagent", chat_id=chat_id, arg=prompt)
 
+    def _harness_subagent_status(self, chat_id: int) -> str:
+        raw = self.command_handler.call(
+            method="subagent_status",
+            chat_id=chat_id,
+            http_path="/subagents/{chat_id}",
+            http_method="GET",
+        )
+        if not isinstance(raw, dict) or "error" in raw:
+            return "Sorry, I could not fetch subagent status."
+
+        subagents = raw.get("subagents", [])
+        if not subagents:
+            return "No background subagents for this chat."
+
+        lines: list[str] = []
+        for sa in subagents:
+            status = sa.get("status", "unknown")
+            dispatch_id = sa.get("dispatch_id") or sa.get("task_id") or "?"
+            summary = sa.get("summary")
+            started_at = sa.get("started_at")
+            finished_at = sa.get("finished_at")
+
+            parts = [f"{status}: {dispatch_id}"]
+            if summary:
+                parts.append(f"— {summary}")
+
+            started = _format_subagent_time(started_at)
+            finished = _format_subagent_time(finished_at)
+            if started_at is not None and finished_at is not None:
+                parts.append(f"(started {started}, finished {finished})")
+            elif started_at is not None:
+                parts.append(f"(started {started})")
+            else:
+                parts.append("(not started)")
+
+            lines.append(" ".join(parts))
+        return "\n".join(lines)
+
     def _harness_help(self, chat_id: int) -> str:
         return _TELEGRAM_HELP
 
@@ -2128,6 +2174,9 @@ class TelegramPoller:
             else:
                 result = self._harness_branch(chat_id, int(arg))
                 self._send_result(chat_id, result, reply_to_message_id=chat_input.message_id)
+        elif command == "/subagents":
+            reply = self._harness_subagent_status(chat_id)
+            self._send_text(chat_id, reply, reply_to_message_id=chat_input.message_id)
         elif command == "/subagent":
             if not arg:
                 reply = "Usage: /subagent <prompt>"
