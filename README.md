@@ -21,7 +21,7 @@ retention to a Hindsight memory server.
 - Exposes both a FastAPI HTTP ingress and a Telegram long-polling bot.
 - Splits long or pausing Telegram replies into separate intermediate messages so
   tool-call gaps do not mash into one confusing block.
-- Supports background dispatches that continue the conversation when they complete (`/dispatch`, `/continue`).
+- Supports background dispatches that continue the conversation when they complete (`/dispatch`, `/continue`) and harness-native background subagents (`/subagent`, `harness_subagent` MCP tool) that survive the parent turn being stopped.
 - Supports live runtime configuration of task, waker, timer, notifications, and Telegram settings via HTTP and Telegram without restarting.
 - Supports state plugins with a rich lifecycle hook surface: plugins can intercept turns, sessions, dispatches, memory transitions, skill/MCP commands, retain/promote, and shutdown.
 - Hardens the ACP transport with typed error classification, restart backoff, and stale-session recovery that attempts ACP `session/resume` (falling back to `session/load`) before prompt rehydration.
@@ -92,6 +92,7 @@ curl -X POST http://127.0.0.1:4003/switch-model \
 - `/stop` — cancel the current turn and return a partial reply.
 - `/restart` — kill the ACP child and start a fresh transport.
 - `/graceful-restart [service]` — schedule a graceful systemd restart of the named service (default: the current persona's `.service` unit).
+- `/subagent <prompt>` — start a background ACP subagent and continue the chat with its result when it finishes.
 - `/continue` — resume the previous turn after a partial reply or timeout.
 - `/sessions` — list numbered sessions.
 - `/resume <n>` — resume session `n`.

@@ -147,6 +147,7 @@ message, so the conversation thread is visible.
 | `/stop` | Cancel the current turn and return a partial reply. |
 | `/restart` | Kill the ACP child and start a fresh transport. |
 | `/graceful-restart [service]` | Schedule a graceful `systemd-run` restart of the named service. Defaults to the current persona's `.service` unit. |
+| `/subagent <prompt>` | Start a background ACP subagent. The harness continues the chat with the result when it finishes. |
 | `/continue` | Resume the previous turn after a partial reply or timeout. |
 | `/stream_thoughts on\|off` | Toggle the optional real-time thought stream. |
 | `/sessions` | List numbered sessions for this chat. |

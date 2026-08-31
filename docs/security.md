@@ -80,3 +80,7 @@ tool calls including shell execution. This would let the agent run
   before the service goes down.
 - Restart requests are rate-limited and suppress `auto_continue` wakes so a single
   "restart now" thought cannot loop the service.
+- Long-running background work is started through `harness_subagent` (the
+  `diploid-harness` MCP tool), which runs in a fresh AcpEngine via the TaskEngine.
+  The parent turn can be stopped while the subagent continues, and the harness
+  starts a new turn with the result.

@@ -680,6 +680,32 @@ Response:
 }
 ```
 
+## `POST /subagent`
+
+Start a background ACP subagent for a chat. The subagent runs in a fresh
+AcpEngine, so it survives the parent turn being stopped or killed. When it
+finishes, the harness continues the chat and sends the result.
+
+```bash
+curl -X POST http://127.0.0.1:4003/subagent \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $HARNESS_API_KEY" \
+  -d '{
+    "chat_id": "test-1",
+    "prompt": "Research the latest Python release notes and summarize them",
+    "context": "Python release research"
+  }'
+```
+
+Response:
+
+```json
+{
+  "reply": "Subagent started. I'll report back when it finishes.",
+  "dispatch_id": "dispatch-abc123"
+}
+```
+
 ## `POST /webhook`
 
 Telegram webhook. Expects a Telegram `Update` JSON payload and returns

@@ -234,7 +234,7 @@ class TaskConfig(BaseModel):
 
     workers: int = Field(default=4, ge=1, le=64)
     shell_timeout: float = Field(default=60.0, gt=0, le=86400)
-    enabled_types: list[str] = Field(default_factory=lambda: ["shell", "noop", "acp"])
+    enabled_types: list[str] = Field(default_factory=lambda: ["shell", "noop", "acp", "subagent"])
     acp_timeout: float | None = Field(default=None, gt=0, le=86400)
     acp_model: str | None = Field(default=None, min_length=1)
 

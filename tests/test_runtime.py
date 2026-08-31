@@ -19,7 +19,9 @@ from diploid_agent.config import (
     PlanConfig,
     Secrets,
 )
+from diploid_agent.dispatch import DispatchStatus
 from diploid_agent.engine.base import AgentEngine, TurnRequest, TurnResult
+from diploid_agent.engine.fake import FakeAgentEngine
 from diploid_agent.harness import ConversationHarness
 from diploid_agent.runtime import AgentRuntime, TurnController
 from diploid_agent.transport.base import RuntimeAPI
@@ -47,6 +49,53 @@ def _make_config(tmp_path: Path) -> Config:
 def test_agent_runtime_implements_runtime_api(tmp_path: Path) -> None:
     runtime = AgentRuntime(_make_config(tmp_path))
     assert isinstance(runtime, RuntimeAPI)
+
+
+def test_subagent_start_creates_dispatch_and_plan(tmp_path: Path) -> None:
+    runtime = AgentRuntime(_make_config(tmp_path))
+    runtime.start()
+    fake = FakeAgentEngine()
+    fake.replies = ["parent reply"]
+    runtime.engine = fake
+    runtime.task_engine.engine = fake
+
+    # Create an active session.
+    result = runtime.process("chat-1", "hello")
+    assert result.reply == "parent reply"
+
+    fake.replies = ["subagent result"]
+    result = runtime.subagent_start("chat-1", "do the thing")
+    assert "subagent started" in result.reply.lower()
+    assert result.dispatch_id is not None
+
+    # The dispatch and wake should exist.
+    dispatch = runtime.dispatch_store.get(result.dispatch_id)
+    assert dispatch is not None
+    assert dispatch.status == DispatchStatus.PENDING
+    wake = runtime.wake_queue.get(f"wake-{result.dispatch_id}")
+    assert wake is not None
+    assert wake.reason == "dispatch"
+    assert not wake.ready
+
+    # Wait for the task to complete and the wake to become ready.
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        wake = runtime.wake_queue.get(f"wake-{result.dispatch_id}")
+        if wake and wake.ready:
+            break
+        time.sleep(0.05)
+    assert wake.ready
+
+    # Simulate the TimerService waking the chat.
+    result = runtime.wake("chat-1", event_id=wake.id)
+    assert result.reply == "ok"
+    assert result.turn_number is not None
+
+    dispatch = runtime.dispatch_store.get(result.dispatch_id or dispatch.id)
+    assert dispatch.status == DispatchStatus.COMPLETED
+    assert "subagent result" in (dispatch.result or "")
+
+    runtime.shutdown()
 
 
 def test_agent_runtime_has_engine_and_turn_controller(tmp_path: Path) -> None:

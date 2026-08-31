@@ -100,6 +100,16 @@ class DispatchStore:
         with self._lock:
             return self._dispatches.get(dispatch_id)
 
+    def set_result(self, dispatch_id: str, result: str) -> Dispatch | None:
+        with self._lock:
+            dispatch = self._dispatches.get(dispatch_id)
+            if dispatch is None:
+                return None
+            if dispatch.status == DispatchStatus.PENDING:
+                dispatch.result = result
+            self._save()
+            return dispatch
+
     def complete(self, dispatch_id: str, result: str) -> Dispatch | None:
         with self._lock:
             dispatch = self._dispatches.get(dispatch_id)

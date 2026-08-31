@@ -34,11 +34,13 @@ from diploid_agent.config import (
     WakerConfig,
 )
 from diploid_agent.metrics import MetricsCollector
+from diploid_agent.models import ChatResult
 from diploid_agent.transport.base import (
     OutboundMessage,
     RuntimeAPI,
     Transport,
 )
+from diploid_agent.transport.command_handler import CommandHandler
 from diploid_agent.transport.interactive import (
     AskBlock,
     build_reply_keyboard,
@@ -607,6 +609,12 @@ class TelegramPoller:
         self._method_backoff_until: dict[str, float] = {}
         self._chat_last_telegram_api_call: dict[int, float] = {}
         self._stop = threading.Event()
+        self.command_handler = CommandHandler(
+            runtime=runtime,
+            harness_url=harness_url,
+            api_key=api_key,
+            client_provider=lambda: self.client,
+        )
 
     @property
     def client(self) -> httpx.Client:
@@ -1392,15 +1400,19 @@ class TelegramPoller:
     def _send_result(
         self,
         chat_id: int,
-        result: dict[str, Any],
+        result: ChatResult | dict[str, Any],
         *,
         reply_to_message_id: int | None = None,
     ) -> None:
         """Send the reply and any system notice, splitting long output if needed."""
-        reply = result.get("reply", "")
+        if isinstance(result, ChatResult):
+            reply = result.reply or ""
+            notice = result.notice
+        else:
+            reply = result.get("reply", "")
+            notice = result.get("notice")
         self._send_text(chat_id, reply, reply_to_message_id=reply_to_message_id)
 
-        notice = result.get("notice")
         if notice:
             self._send_text(chat_id, f"System: {notice}")
 
@@ -2001,35 +2013,8 @@ class TelegramPoller:
                 "notice": None,
             }
 
-    def _harness_subagent(self, chat_id: int, prompt: str) -> dict[str, Any]:
-        if self.runtime is not None:
-            try:
-                result = self.runtime.subagent_start(str(chat_id), prompt)
-                return {
-                    "reply": getattr(result, "reply", ""),
-                    "notice": getattr(result, "notice", None),
-                }
-            except Exception:
-                logger.exception("Runtime subagent_start failed")
-                return {
-                    "reply": "Sorry, I could not start the subagent.",
-                    "notice": None,
-                }
-
-        try:
-            resp = self.client.post(
-                f"{self.harness_url}/subagent",
-                json={"chat_id": str(chat_id), "prompt": prompt},
-                timeout=60.0,
-            )
-            resp.raise_for_status()
-            return resp.json()
-        except Exception:
-            logger.exception("Harness /subagent failed")
-            return {
-                "reply": "Sorry, I could not start the subagent.",
-                "notice": None,
-            }
+    def _harness_subagent(self, chat_id: int, prompt: str) -> ChatResult:
+        return self.command_handler.handle("/subagent", chat_id=chat_id, arg=prompt)
 
     def _harness_help(self, chat_id: int) -> str:
         return _TELEGRAM_HELP

@@ -263,6 +263,23 @@ def test_acp_task_without_engine_fails(tmp_path: Path) -> None:
     bus.stop()
 
 
+def test_subagent_task_runs_engine_and_completes(tmp_path: Path) -> None:
+    engine, mgr, bus, fake = _acp_fixture_engine(tmp_path)
+    fake.replies = ["subagent result"]
+    plan = mgr.create_plan(
+        "subagent",
+        tasks=[Task(name="ask", type=TaskType.SUBAGENT, prompt="do the thing")],
+    )
+
+    task = engine.start_task(plan.id)
+    finished = _wait_for_task(mgr, plan.id, task.id)
+
+    assert finished.status == TaskStatus.DONE
+    assert (finished.result or "").strip() == "subagent result"
+    engine.shutdown()
+    bus.stop()
+
+
 def test_worker_pool_resizes_at_runtime() -> None:
     pool = WorkerPool(max_workers=2)
     assert pool.max_workers == 2

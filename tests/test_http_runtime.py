@@ -130,7 +130,7 @@ def test_task_config_get_and_update(client: TestClient) -> None:
     body = resp.json()
     assert body["workers"] == 4
     assert body["shell_timeout"] == 60.0
-    assert body["enabled_types"] == ["shell", "noop", "acp"]
+    assert body["enabled_types"] == ["shell", "noop", "acp", "subagent"]
 
     # Update workers and enabled types.
     resp = client.post(
@@ -179,7 +179,7 @@ def test_task_config_persistence_is_optional(tmp_path: Path) -> None:
     fresh = AgentRuntime(config)
     fresh.engine = FakeEngine()
     assert fresh.get_task_config().workers == 4
-    assert fresh.get_task_config().enabled_types == ["shell", "noop", "acp"]
+    assert fresh.get_task_config().enabled_types == ["shell", "noop", "acp", "subagent"]
 
 
 @pytest.mark.parametrize(
@@ -197,7 +197,7 @@ def test_task_config_persistence_skips_malformed_overrides(tmp_path: Path, conte
     fresh = AgentRuntime(config)
     fresh.engine = FakeEngine()
     assert fresh.get_task_config().workers == 4
-    assert fresh.get_task_config().enabled_types == ["shell", "noop", "acp"]
+    assert fresh.get_task_config().enabled_types == ["shell", "noop", "acp", "subagent"]
 
 
 def test_task_config_update_rejects_invalid_workers(client: TestClient) -> None:

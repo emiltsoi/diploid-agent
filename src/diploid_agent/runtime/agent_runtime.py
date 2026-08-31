@@ -2350,8 +2350,11 @@ class AgentRuntime(RuntimeAPI):
 
             if reason == "dispatch" and "dispatch_id" in payload:
                 dispatch = self.dispatch_store.get(payload["dispatch_id"])
-                if dispatch and dispatch.status == DispatchStatus.COMPLETED:
-                    return self.continue_turn(dispatch.id, dispatch.result or "")
+                if dispatch and dispatch.status == DispatchStatus.PENDING:
+                    return self.continue_turn(
+                        payload["dispatch_id"],
+                        payload.get("result", dispatch.result or ""),
+                    )
 
             return self.turn_controller.process(
                 chat_id,
@@ -2679,10 +2682,11 @@ class AgentRuntime(RuntimeAPI):
         )
 
     def _complete_subagent_task(self, task: Task) -> None:
-        """Finish the dispatch for a subagent task and make the wake ready.
+        """Store the subagent result and make the wake ready.
 
-        The TimerService will pick up the wake and call `continue_turn`, which
-        starts a real new turn and sends a Telegram message.
+        The dispatch is kept PENDING so `continue_turn` can consume it.  The
+        TimerService will pick up the wake and call `continue_turn`, which
+        completes the dispatch and starts a real new turn.
         """
         if task.dispatch_id is None or task.chat_id is None:
             return
@@ -2693,10 +2697,13 @@ class AgentRuntime(RuntimeAPI):
         result = task.result or "(no result)"
         if task.status == TaskStatus.FAILED:
             result = task.log or "(subagent failed)"
-        self.dispatch_store.complete(task.dispatch_id, result)
+        self.dispatch_store.set_result(task.dispatch_id, result)
 
         wake_id = f"wake-{task.dispatch_id}"
         try:
+            wake = self.wake_queue.get(wake_id)
+            if wake is not None and wake.payload is not None:
+                wake.payload["result"] = result
             self.wake_queue.ready(wake_id, now=time.time())
         except Exception:
             logger.exception("Failed to mark subagent wake %s ready", wake_id)

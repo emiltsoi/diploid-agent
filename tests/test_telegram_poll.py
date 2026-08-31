@@ -1134,7 +1134,7 @@ def test_harness_config_http_posts_to_endpoint() -> None:
             "http://localhost/task/config": {
                 "workers": 2,
                 "shell_timeout": 120.0,
-                "enabled_types": ["shell", "noop", "acp"],
+                "enabled_types": ["shell", "noop", "acp", "subagent"],
             },
         }
     )
