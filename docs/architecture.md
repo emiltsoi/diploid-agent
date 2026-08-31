@@ -4,15 +4,16 @@
 
 ```
 ┌─────────────────┐     ┌──────────────────────┐
-│ Telegram bot    │────▶│ telegram_poll.py     │
+│ Telegram bot    │────▶│ transport/telegram.py│
 │ (user messages) │     │ (long-polling loop)  │
 └─────────────────┘     └──────────┬───────────┘
                                    │ HTTP
                                    ▼
-┌─────────────────────────────────────────────────┐
-│ telegram_ingress.py (FastAPI)                           │
-│  /chat /turn /stop /switch-model /status /memory ...     │
-└────────┬────────────────────────────────────────┘
+┌────────────────────────────────────────────────────┐
+│ transport/http.py (FastAPI)                         │
+│  /chat /turn /stop /switch-model /status /memory ...│
+│  /subagent                                          │
+└────────┬───────────────────────────────────────────┘
          │
          ▼
 ┌─────────────────────────────────────────────────┐
@@ -106,13 +107,18 @@ and capped by `MemoryManager` during prompt assembly. Optional reference docs
 such as `references/*.md` are loaded by the plugin or skill that needs them, not
 by the composer.
 
-### `telegram_ingress.py` and `telegram_poll.py`
+### `transport/http.py`, `transport/telegram.py`, and `transport/command_handler.py`
 
-- `telegram_ingress.py` is the FastAPI service.
-- `telegram_poll.py` is a long-polling Telegram client that calls the ingress
-  endpoints and sends replies back. Each active chat gets a `TurnWorker` thread
-  that starts a turn, polls `GET /turn/{chat_id}`, and edits the reply
-  placeholder in place.
+- `transport/http.py` is the FastAPI service.
+- `transport/telegram.py` is the long-polling Telegram client. It can connect
+  either to a local `RuntimeAPI` or to the HTTP harness.
+- `transport/command_handler.py` is the single dispatch layer used by the
+  Telegram poller's slash-command handlers. It calls `RuntimeAPI` methods when
+  the poller has a direct runtime, otherwise it calls the matching HTTP
+  endpoint, so command implementation no longer duplicates the
+  `if self.runtime is not None` / HTTP branching logic.
+- Each active chat gets a `TurnWorker` thread that starts a turn, polls
+  `GET /turn/{chat_id}`, and edits the reply placeholder in place.
 - If `intermediate_messages` is enabled, the worker commits the currently
   streamed text as a real message when it pauses after a complete sentence, then
   starts a fresh placeholder below it. This keeps tool-call gaps from mashing
@@ -182,6 +188,27 @@ for details on `/new`, `/resume`, `/branch`, `/sessions`, and auto-recovery.
    - Updates `sessions.jsonl` with the new `session_id` and `model`.
    - Records the switch as a turn in the transcript/memory.
 3. The agent acknowledges the new model.
+
+## Data flow for a background subagent
+
+1. User calls `POST /subagent` or Telegram `/subagent <prompt>`, or the ACP
+   child invokes the `harness_subagent` MCP tool.
+2. `AgentRuntime.subagent_start(chat_id, prompt, ...)`:
+   - Creates a `Dispatch` record in `dispatch_store.jsonl`.
+   - Creates a one-task `Plan` with `TaskType.SUBAGENT`.
+   - Enqueues a `dispatch` wake with the `dispatch_id`.
+   - Starts the task via `TaskEngine.start_task`.
+3. `TaskEngine` runs the `SUBAGENT` task on a fresh `AcpEngine` built by
+   `build_engine`. Because the subagent has its own engine, it survives the
+   parent turn being stopped or the transport being killed.
+4. When the subagent finishes, `AgentRuntime._complete_subagent_task` stores
+   the result in the dispatch and marks the wake ready.
+5. The `TimerService` picks up the ready wake and calls
+   `AgentRuntime.wake(chat_id, event_id)`.
+6. `wake` sees a `dispatch` wake with a completed result and calls
+   `continue_turn(dispatch_id, result)`. The harness builds a follow-up prompt
+   with the subagent result as a continuation anchor and starts a real new turn
+   for the chat, so Telegram receives the subagent output as a normal message.
 
 ## Files and directories
 

@@ -2,6 +2,11 @@
 
 Base URL: `http://127.0.0.1:4003` (configurable).
 
+These HTTP endpoints mirror the methods on `RuntimeAPI` and are also used by the
+Telegram poller's `CommandHandler` when the poller does not have a direct
+runtime reference. Endpoints that return `ChatResponse` are implemented by
+calling the matching `RuntimeAPI` method and serializing the `ChatResult`.
+
 ## `GET /health`
 
 Health check.

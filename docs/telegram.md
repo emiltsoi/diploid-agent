@@ -161,6 +161,12 @@ message, so the conversation thread is visible.
 
 Anything else is treated as a normal chat message.
 
+The Telegram poller uses the same `transport/command_handler.py` dispatch layer
+as the HTTP endpoints. When the poller is connected directly to a `RuntimeAPI`
+it calls the runtime methods; when it is configured with a `harness_url` it
+calls the matching HTTP endpoints. The formatting and command-specific parsing
+live in `transport/telegram.py`.
+
 ### Live runtime configuration
 
 You can adjust the harness's live runtime configuration directly from Telegram without restarting the service:
