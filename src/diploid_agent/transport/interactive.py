@@ -12,14 +12,32 @@ ASK_FENCE_RE = re.compile(r"^```ask\s*\n([\s\S]*?)\n```\s*$", re.MULTILINE)
 ASK_CALLBACK_PREFIX = "ask_"
 ASK_CANCEL_CALLBACK_DATA = f"{ASK_CALLBACK_PREFIX}cancel"
 
+# Normalised forms of the old open-ended "Other (please specify)" escape option.
+# These are removed from the option list because every ask dialog now has a
+# default cancel button instead.
+_OTHER_ESCAPE_FORMS = frozenset({
+    "otherpleasespecify",
+    "otherspleasespecify",
+    "otherandspecify",
+    "othersandspecify",
+    "otherspecify",
+    "othersspecify",
+})
+
+
+def _is_open_ended_escape(option: str) -> bool:
+    """Return True if the option is the old 'Other (please specify)' escape hatch."""
+    normalized = re.sub(r"[^a-z0-9]", "", option.lower())
+    return normalized in _OTHER_ESCAPE_FORMS
+
 
 @dataclass(frozen=True)
 class AskBlock:
-    """A question, its selectable options, and an optional cancel button."""
+    """A question, its selectable options, and a cancel button (shown by default)."""
 
     question: str
     options: list[str]
-    cancellable: bool = False
+    cancellable: bool = True
     cancel_label: str = "Cancel"
 
 
@@ -54,11 +72,16 @@ def build_inline_keyboard(
     Each option gets a short, deterministic ``callback_data`` value so the
     option text can be long without exceeding Telegram's 64-byte limit.
     If ``cancel`` is provided, a final row with a dedicated cancel callback is
-    added.
+    added. If one of ``options`` matches the cancel label, that option is
+    treated as the cancel and gets the cancel callback instead of an index.
     """
-    keyboard: list[list[dict[str, Any]]] = [
-        [{"text": opt, "callback_data": f"{prefix}{i}"}] for i, opt in enumerate(options)
-    ]
+    keyboard: list[list[dict[str, Any]]] = []
+    for i, opt in enumerate(options):
+        if cancel and opt == cancel:
+            callback = f"{prefix}cancel"
+        else:
+            callback = f"{prefix}{i}"
+        keyboard.append([{"text": opt, "callback_data": callback}])
     if cancel and cancel not in options:
         keyboard.append([{"text": cancel, "callback_data": f"{prefix}cancel"}])
     return {"inline_keyboard": keyboard}
@@ -107,9 +130,10 @@ def extract_ask_block(text: str) -> tuple[str, AskBlock | None]:
     except json.JSONDecodeError:
         return text, None
 
-    options = data.get("options") or []
-    if not options or not isinstance(options, list):
+    raw_options = data.get("options")
+    if not isinstance(raw_options, list) or not raw_options:
         return text, None
+    options = [str(o) for o in raw_options]
 
     question = data.get("question") or ""
     if not question:
@@ -117,7 +141,23 @@ def extract_ask_block(text: str) -> tuple[str, AskBlock | None]:
         if before:
             question = before.split("\n")[-1].strip() or before.strip()
 
-    cancellable = bool(data.get("cancellable", False))
+    # Ask blocks are cancellable by default. An explicit `cancellable: false`
+    # disables the cancel button for forced-choice prompts.
+    cancellable = bool(data.get("cancellable", True))
+
+    # Remove the old open-ended "Other (please specify)" escape option. The
+    # default cancel button is the canonical way to dismiss a prompt.
+    filtered_options: list[str] = []
+    for opt in options:
+        if _is_open_ended_escape(opt):
+            cancellable = True
+        else:
+            filtered_options.append(opt)
+    options = filtered_options
+
+    if not options:
+        return text, None
+
     cancel_label = data.get("cancel_label")
     if not cancel_label:
         cancel_label = "Cancel" if cancellable else ""
@@ -125,7 +165,7 @@ def extract_ask_block(text: str) -> tuple[str, AskBlock | None]:
     visible = (text[: match.start()] + text[match.end() :]).strip()
     return visible, AskBlock(
         question=question,
-        options=[str(o) for o in options],
+        options=options,
         cancellable=cancellable,
         cancel_label=cancel_label,
     )

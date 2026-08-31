@@ -16,27 +16,29 @@ Which file should I edit?
 ```
 ````
 
-For an approval question, use options like `["Approve", "Decline", "Cancel"]`.
+For an approval question, use options like `["Approve", "Decline"]`. The default cancel button lets the user dismiss the prompt.
 
 Keep the question short. The options are what the user will see as buttons. Do not explain that you are inserting a special block; just include it exactly as shown.
 
-If the list needs an open-ended escape option, include `"Other (please specify)"` as the final option. The user can select it to give a custom answer.
+Every ask block has a default cancel button, so the user can dismiss the prompt without starting a turn. Do not include a `"Cancel"` option unless you want the user to send it as an explicit answer, and do not include `"Other (please specify)"` — the cancel button is the escape hatch.
+
+If you need a genuinely open-ended answer, ask the user directly in a follow-up after they cancel, or set `"cancellable": false` and make "Other" one of the regular options.
+
+If the user should be able to cancel the prompt without sending a turn, the default is already on. Set `"cancellable": false` to make a forced-choice prompt with no cancel button, or provide an optional `"cancel_label"` (default `"Cancel"):
 
 ````
-Where should the rule live?
+Should I continue? (forced choice)
 
 ```ask
-{"question": "Where should the rule live?", "options": ["Shared AGENTS.md", "Private AGENTS.md", "Both", "Other (please specify)"]}
+{"question": "Should I continue?", "options": ["Yes", "No"], "cancellable": false}
 ```
 ````
 
-If the user should be able to cancel the prompt without sending a turn, add `"cancellable": true` and an optional `"cancel_label"` (default `"Cancel"`):
-
 ````
-Should I continue?
+Should I continue? (custom cancel label)
 
 ```ask
-{"question": "Should I continue?", "options": ["Yes", "No"], "cancellable": true, "cancel_label": "Cancel"}
+{"question": "Should I continue?", "options": ["Yes", "No"], "cancel_label": "Never mind"}
 ```
 ````
 

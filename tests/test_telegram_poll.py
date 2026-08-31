@@ -1745,6 +1745,7 @@ def test_send_text_extracts_ask_block_and_sends_keyboard(tmp_path: Path) -> None
     assert reply_markup["inline_keyboard"] == [
         [{"text": "a.py", "callback_data": "ask_0"}],
         [{"text": "b.py", "callback_data": "ask_1"}],
+        [{"text": "Cancel", "callback_data": "ask_cancel"}],
     ]
 
 

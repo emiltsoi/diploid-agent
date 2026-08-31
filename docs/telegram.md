@@ -137,31 +137,31 @@ For a simple approval dialog:
 Should I continue?
 
 ```ask
-{"question": "Should I continue?", "options": ["Approve", "Decline", "Cancel"]}
+{"question": "Should I continue?", "options": ["Approve", "Decline"]}
 ```
 ````
 
-If the list needs an open-ended escape option, include `"Other (please specify)"` as the final option:
+Every ask block has a default cancel button, so the user can dismiss the prompt without waking the assistant and **no** turn is sent to the harness. When the user presses it, the question is edited to `Cancelled.` and the keyboard is removed.
+
+Do not include `"Other (please specify)"` as an option. If the options are not exhaustive, the cancel button is the escape hatch. If you truly need a custom open-ended answer, ask the user directly in a follow-up after they cancel, or set `cancellable: false` and make "Other" a regular option.
+
+If the user should be able to cancel the prompt without sending a turn, the default is already on. Set `cancellable: false` to make a forced-choice prompt with no cancel button, or provide an optional `cancel_label` (default `"Cancel"):
 
 ````
-Where should the rule live?
+Should I continue? (forced choice)
 
 ```ask
-{"question": "Where should the rule live?", "options": ["Shared AGENTS.md", "Private AGENTS.md", "Both", "Other (please specify)"]}
+{"question": "Should I continue?", "options": ["Yes", "No"], "cancellable": false}
 ```
 ````
 
-If the user should be able to dismiss the prompt without waking the assistant, add `cancellable: true` and optionally a custom `cancel_label`:
-
 ````
-Should I continue?
+Should I continue? (custom cancel label)
 
 ```ask
-{"question": "Should I continue?", "options": ["Yes", "No"], "cancellable": true, "cancel_label": "Cancel"}
+{"question": "Should I continue?", "options": ["Yes", "No"], "cancel_label": "Never mind"}
 ```
 ````
-
-The poller will append the cancel button to the inline keyboard. When you press it, the question is edited to `Cancelled.` and the keyboard is removed, and **no** turn is sent to the harness.
 
 ## Replying to messages
 
