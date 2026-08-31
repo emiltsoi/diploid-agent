@@ -1192,6 +1192,9 @@ class TelegramPoller:
                 logger.exception(
                     "Failed to send cancel confirmation for chat %s", chat_input.chat_id
                 )
+            # In a private chat the bot can delete the user's button-press
+            # message, so the cancel looks like it was swallowed rather than sent.
+            self._delete_message(chat_input.chat_id, chat_input.message_id)
             return None
 
         if chat_input.text not in pending["options"]:

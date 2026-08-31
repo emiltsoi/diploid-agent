@@ -1839,6 +1839,7 @@ def test_cancel_pending_question(tmp_path: Path) -> None:
     )
 
     sent: list[tuple[int, str, dict[str, Any] | None]] = []
+    deleted: list[tuple[int, int]] = []
 
     def fake_send(
         chat_id: int,
@@ -1851,7 +1852,11 @@ def test_cancel_pending_question(tmp_path: Path) -> None:
         sent.append((chat_id, text, reply_markup))
         return 100
 
+    def fake_delete(chat_id: int, message_id: int) -> None:
+        deleted.append((chat_id, message_id))
+
     poller._send_message = fake_send  # type: ignore[method-assign]
+    poller._delete_message = fake_delete  # type: ignore[method-assign]
 
     poller._save_pending_question(
         123,
@@ -1871,6 +1876,7 @@ def test_cancel_pending_question(tmp_path: Path) -> None:
     assert sent[0][0] == 123
     assert sent[0][1] == "Cancelled."
     assert sent[0][2] == {"remove_keyboard": True}
+    assert deleted == [(123, 2)]
 
 
 def test_stream_turn_strips_ask_block(tmp_path: Path, monkeypatch: Any) -> None:
