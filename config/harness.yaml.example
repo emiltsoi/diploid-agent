@@ -54,6 +54,7 @@ harness:
       - shell
       - noop
       - acp
+      - subagent
   plugin_paths:
     - ~/.devin/plugins
   plugins:
