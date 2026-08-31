@@ -14,8 +14,9 @@ from diploid_agent.config import (
     TimerConfig,
     WakerConfig,
 )
+from diploid_agent.models import ChatResult
 from diploid_agent.telegram_poll import ChatInput, TelegramPoller, TurnWorker
-from diploid_agent.transport.telegram import _format_thought
+from diploid_agent.transport.telegram import DeliveryWorker, _format_thought
 
 
 def _update(**kwargs) -> dict:
@@ -1950,3 +1951,212 @@ def test_handle_update_routes_subagents_command(tmp_path: Path) -> None:
     )
     poller._handle_update(update)
     assert sent == [(12345, "Subagent status", 1)]
+
+
+class _FakeDeliveryRuntime:
+    """Runtime stub for delivery and queue tests."""
+
+    def __init__(self, outbox: list[ChatResult] | None = None) -> None:
+        self._outbox = outbox or []
+        self.outbox_calls: list[tuple[str, float]] = []
+        self.process_calls: list[ChatInput] = []
+        self.config = _FakeConfigRuntime()
+
+    def get_config(self) -> dict[str, Any]:
+        return {
+            "harness": {
+                "notifications": {"enabled": True, "outbox_delivery": True},
+                "telegram": self.config.telegram.model_dump(mode="json"),
+            }
+        }
+
+    def outbox_pop(self, chat_id: str | None = None, wait: float = 0.0) -> ChatResult | None:
+        self.outbox_calls.append((chat_id or "", wait))
+        if self._outbox:
+            return self._outbox.pop(0)
+        return None
+
+    def process(
+        self,
+        chat_id: str,
+        message: str,
+        *,
+        reply_to: str | None = None,
+        reply_to_is_bot: bool | None = None,
+        reply_to_message_id: int | None = None,
+        notify: bool = False,
+    ) -> ChatResult:
+        self.process_calls.append(
+            ChatInput(
+                chat_id=int(chat_id),
+                message_id=0,
+                text=message,
+                reply_to=reply_to,
+                reply_to_is_bot=reply_to_is_bot,
+                reply_to_message_id=reply_to_message_id,
+            )
+        )
+        return ChatResult(reply=f"reply: {message}", turn_number=1)
+
+    def stop(self, chat_id: str) -> None:
+        pass
+
+
+def test_delivery_worker_sends_outbox_result(tmp_path: Path) -> None:
+    """A DeliveryWorker long-polls the outbox and sends new results."""
+    runtime = _FakeDeliveryRuntime(
+        outbox=[
+            ChatResult(reply="outbox reply", turn_number=1),
+        ]
+    )
+    poller = TelegramPoller(
+        token="dummy",
+        runtime=runtime,  # type: ignore[arg-type]
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    sent: list[tuple[int, str, int | None]] = []
+
+    def fake_send(
+        chat_id: int,
+        text: str,
+        *,
+        reply_to_message_id: int | None = None,
+        first_message_id: int | None = None,
+    ) -> list[int]:
+        sent.append((chat_id, text, reply_to_message_id))
+        return [100]
+
+    poller._send_text = fake_send  # type: ignore[method-assign]
+    poller._last_user_message_ids[12345] = 50
+
+    worker = DeliveryWorker(poller, 12345)
+    worker.start()
+    time.sleep(0.2)
+    worker.stop()
+    worker.join(timeout=2.0)
+
+    assert sent == [(12345, "outbox reply", 50)]
+
+
+def test_turn_worker_queued_input_is_processed(tmp_path: Path) -> None:
+    """A second message sent while a turn is running is queued and processed next."""
+    slow_runtime = _FakeDeliveryRuntime()
+    slow_calls: list[str] = []
+
+    def slow_process(chat_id: str, message: str, **kwargs: Any) -> ChatResult:
+        slow_calls.append(message)
+        time.sleep(0.2)
+        return ChatResult(reply=f"reply: {message}", turn_number=1)
+
+    slow_runtime.process = slow_process  # type: ignore[method-assign]
+    slow_poller = TelegramPoller(
+        token="dummy",
+        runtime=slow_runtime,  # type: ignore[arg-type]
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    sent: list[str] = []
+
+    def fake_send(
+        chat_id: int,
+        text: str,
+        *,
+        reply_to_message_id: int | None = None,
+        first_message_id: int | None = None,
+    ) -> list[int]:
+        sent.append(text)
+        return [100]
+
+    slow_poller._send_text = fake_send  # type: ignore[method-assign]
+    slow_poller._send_message = lambda *args, **kwargs: 100  # type: ignore[method-assign]
+    slow_poller._edit_message_text = lambda *args, **kwargs: None  # type: ignore[method-assign]
+    slow_poller._delete_message = lambda *args, **kwargs: None  # type: ignore[method-assign]
+    slow_poller._register_message_ids = lambda *args, **kwargs: None  # type: ignore[method-assign]
+
+    TurnWorker._harness_turn_status = (  # type: ignore[method-assign]
+        lambda self, *args, **kwargs: {"status": "idle"}
+    )
+
+    worker = TurnWorker(slow_poller, ChatInput(chat_id=123, message_id=1, text="first"))
+    worker.start()
+    time.sleep(0.05)
+
+    # Queue a second message while the first is running.
+    second = ChatInput(chat_id=123, message_id=2, text="second")
+    worker.steer(second)
+
+    worker.join(timeout=2.0)
+
+    assert slow_calls == ["first", "second"]
+
+
+def test_handle_update_starts_worker_and_queues_messages(tmp_path: Path) -> None:
+    """Two messages arriving in quick succession are queued and processed in order."""
+    runtime = _FakeDeliveryRuntime()
+    poller = TelegramPoller(
+        token="dummy",
+        runtime=runtime,  # type: ignore[arg-type]
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    sent: list[str] = []
+
+    def fake_send(
+        chat_id: int,
+        text: str,
+        *,
+        reply_to_message_id: int | None = None,
+        first_message_id: int | None = None,
+    ) -> list[int]:
+        sent.append(text)
+        return [100]
+
+    poller._send_text = fake_send  # type: ignore[method-assign]
+    poller._send_message = lambda *args, **kwargs: 100  # type: ignore[method-assign]
+    poller._edit_message_text = lambda *args, **kwargs: None  # type: ignore[method-assign]
+    poller._delete_message = lambda *args, **kwargs: None  # type: ignore[method-assign]
+    poller._register_message_ids = lambda *args, **kwargs: None  # type: ignore[method-assign]
+
+    # Patch the worker harness to be deterministic and fast.
+    def fake_harness_chat(self: TurnWorker, chat_input: ChatInput) -> dict[str, Any]:
+        time.sleep(0.05)
+        return {"reply": f"reply: {chat_input.text}", "turn_number": 1}
+
+    def fake_harness_turn_status(self: TurnWorker, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"status": "idle"}
+
+    TurnWorker._harness_turn_status = fake_harness_turn_status  # type: ignore[method-assign]
+    TurnWorker._harness_chat = fake_harness_chat  # type: ignore[method-assign]
+
+    poller._handle_update(
+        _update(
+            message={
+                "message_id": 1,
+                "chat": {"id": 123, "type": "private"},
+                "from": {"id": 1, "is_bot": False},
+                "text": "first",
+            }
+        )
+    )
+
+    # Give the worker a chance to start, then send a second message.
+    time.sleep(0.02)
+    poller._handle_update(
+        _update(
+            message={
+                "message_id": 2,
+                "chat": {"id": 123, "type": "private"},
+                "from": {"id": 1, "is_bot": False},
+                "text": "second",
+            }
+        )
+    )
+
+    # Wait for both to be processed and the worker to finish.
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        with poller._worker_lock:
+            if not poller._active_workers.get(123) and not poller._pending_inputs.get(123):
+                break
+        time.sleep(0.05)
+
+    assert "reply: first" in sent
+    assert "reply: second" in sent

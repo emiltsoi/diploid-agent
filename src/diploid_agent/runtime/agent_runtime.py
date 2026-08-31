@@ -423,7 +423,9 @@ class AgentRuntime(RuntimeAPI):
             while True:
                 for i, (cid, result) in enumerate(self._outbox):
                     if chat_id is None or cid == chat_id:
-                        return self._outbox.pop(i)[1]
+                        popped = self._outbox[i]
+                        del self._outbox[i]
+                        return popped[1]
                 if wait <= 0:
                     return None
                 remaining = deadline - time.monotonic()

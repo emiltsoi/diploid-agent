@@ -15,6 +15,7 @@ from diploid_agent.config import (
     Config,
     DiploidConfig,
     HarnessConfig,
+    NotificationsConfig,
     PersonaConfig,
     PlanConfig,
     Secrets,
@@ -47,6 +48,14 @@ def _make_config(tmp_path: Path) -> Config:
         ),
         secrets=Secrets(WINDSURF_API_KEY="test-key"),
     )
+
+
+def _make_config_with_outbox(tmp_path: Path) -> Config:
+    config = _make_config(tmp_path)
+    config.harness.notifications = NotificationsConfig(
+        enabled=True, outbox_delivery=True
+    )
+    return config
 
 
 def test_agent_runtime_implements_runtime_api(tmp_path: Path) -> None:
@@ -494,3 +503,102 @@ def test_complete_subagent_task_timeout_notifies_and_marks_status(tmp_path: Path
         assert runtime._subagent_status_name(task, dispatch) == "timeout"
     finally:
         runtime.shutdown()
+
+
+def test_outbox_pop_returns_enqueued_result(tmp_path: Path) -> None:
+    runtime = AgentRuntime(_make_config_with_outbox(tmp_path))
+    runtime.start()
+    fake = FakeAgentEngine()
+    fake.replies = ["parent reply"]
+    runtime.engine = fake
+    runtime.task_engine.engine = fake
+
+    result = runtime.process("chat-1", "hello")
+    assert result.reply == "parent reply"
+
+    popped = runtime.outbox_pop("chat-1", wait=2.0)
+    assert popped is not None
+    assert popped.reply == "parent reply"
+    assert popped.turn_number is not None
+
+    runtime.shutdown()
+
+
+def test_subagent_timeout_with_outbox_enqueues_notification(tmp_path: Path) -> None:
+    runtime = AgentRuntime(_make_config_with_outbox(tmp_path))
+
+    try:
+        dispatch = runtime.dispatch_store.add("chat-1", "session-1", context="timeout test")
+        _enqueue_dispatch_wake(runtime, dispatch.id)
+
+        task = Task(
+            name="subagent",
+            type=TaskType.SUBAGENT,
+            chat_id="chat-1",
+            dispatch_id=dispatch.id,
+            status=TaskStatus.DONE,
+            result="partial result",
+            log="Subagent stopped early: timed out",
+            stop_reason="timeout",
+            timed_out=True,
+            partial=True,
+            started_at=time.time() - 60,
+            completed_at=time.time(),
+        )
+        runtime._complete_subagent_task(task)
+
+        notification = runtime.outbox_pop("chat-1", wait=2.0)
+        assert notification is not None
+        assert "timed out" in notification.reply
+        assert "Partial summary" in notification.reply
+        assert notification.dispatch_id == dispatch.id
+
+        wake = runtime.wake_queue.get(f"wake-{dispatch.id}")
+        assert wake is not None
+        assert wake.ready
+    finally:
+        runtime.shutdown()
+
+
+def test_dispatch_failed_wake_continues_and_updates_status(tmp_path: Path) -> None:
+    runtime = AgentRuntime(_make_config_with_outbox(tmp_path))
+    runtime.start()
+    fake = FakeAgentEngine()
+    fake.replies = ["parent reply", "failed subagent note"]
+    runtime.engine = fake
+    runtime.task_engine.engine = fake
+
+    runtime.process("chat-1", "hello")
+
+    active = runtime._active_record("chat-1")
+    assert active is not None
+    dispatch = runtime.dispatch_store.add("chat-1", active.session_id)
+    _enqueue_dispatch_wake(runtime, dispatch.id)
+
+    task = Task(
+        name="subagent",
+        type=TaskType.SUBAGENT,
+        chat_id="chat-1",
+        dispatch_id=dispatch.id,
+        status=TaskStatus.FAILED,
+        result="",
+        log="Subagent failed",
+        partial=False,
+        started_at=time.time() - 30,
+        completed_at=time.time(),
+    )
+    runtime._complete_subagent_task(task)
+
+    dispatch = runtime.dispatch_store.get(dispatch.id)
+    assert dispatch is not None
+    assert dispatch.status == DispatchStatus.FAILED
+
+    wake = runtime.wake_queue.get(f"wake-{dispatch.id}")
+    assert wake is not None
+    assert wake.ready
+
+    result = runtime.wake("chat-1", event_id=wake.id)
+    assert result.turn_number is not None
+    assert "failed" in result.reply.lower() or "subagent" in result.reply.lower()
+
+    runtime.shutdown()

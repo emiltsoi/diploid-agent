@@ -175,7 +175,7 @@ class TurnWorker(threading.Thread):
         self.poller = poller
         self.chat_input = chat_input
         self.chat_id = chat_input.chat_id
-        self._stop = threading.Event()
+        self._should_stop = threading.Event()
 
     def steer(self, chat_input: ChatInput) -> None:
         """Queue the new input and ask the worker to cancel the current turn."""
@@ -186,11 +186,11 @@ class TurnWorker(threading.Thread):
 
     def stop(self) -> None:
         """Cancel the current turn and stop the worker."""
-        self._stop.set()
+        self._should_stop.set()
         self.poller._harness_stop(self.chat_id)
 
     def _take_next_message(self) -> ChatInput | None:
-        if self._stop.is_set():
+        if self._should_stop.is_set():
             return None
         with self.poller._worker_lock:
             queue = self.poller._pending_inputs.get(self.chat_id)
@@ -576,10 +576,10 @@ class DeliveryWorker(threading.Thread):
         super().__init__(daemon=True, name=f"delivery-{chat_id}")
         self.poller = poller
         self.chat_id = chat_id
-        self._stop = threading.Event()
+        self._should_stop = threading.Event()
 
     def stop(self) -> None:
-        self._stop.set()
+        self._should_stop.set()
 
     def _fetch_outbox(self) -> ChatResult | None:
         raw = self.poller.command_handler.call(
@@ -606,7 +606,7 @@ class DeliveryWorker(threading.Thread):
         return _coerce_chat_result(raw)
 
     def run(self) -> None:
-        while not self._stop.is_set() and not self.poller._stop.is_set():
+        while not self._should_stop.is_set() and not self.poller._stop.is_set():
             try:
                 chat_result = self._fetch_outbox()
                 if chat_result is None:
@@ -1867,7 +1867,7 @@ class TelegramPoller:
                 "reply": "Sorry, I could not summarize the conversation.",
                 "notice": None,
             }
-        return _coerce_chat_result(raw).model_dump()
+        return _coerce_chat_result(raw).to_dict()
 
     def _harness_recall(self, chat_id: int, query: str, tags: list[str] | None = None) -> str:
         raw = self.command_handler.call(
@@ -1894,7 +1894,7 @@ class TelegramPoller:
                 "reply": "Sorry, I could not promote that to persona memory.",
                 "notice": None,
             }
-        return _coerce_chat_result(raw).model_dump()
+        return _coerce_chat_result(raw).to_dict()
 
     def _harness_models(self) -> str:
         raw = self.command_handler.call(
@@ -1928,7 +1928,7 @@ class TelegramPoller:
                 "reply": f"Sorry, I could not switch to model `{model}`.",
                 "notice": None,
             }
-        return _coerce_chat_result(raw).model_dump()
+        return _coerce_chat_result(raw).to_dict()
 
     def _harness_new(self, chat_id: int) -> dict[str, Any]:
         raw = self.command_handler.call(
@@ -1941,7 +1941,7 @@ class TelegramPoller:
                 "reply": "Sorry, I could not start a new session.",
                 "notice": None,
             }
-        return _coerce_chat_result(raw).model_dump()
+        return _coerce_chat_result(raw).to_dict()
 
     def _harness_stop(self, chat_id: int) -> dict[str, Any]:
         raw = self.command_handler.call(
@@ -1954,7 +1954,7 @@ class TelegramPoller:
                 "reply": "Sorry, I could not stop the current turn.",
                 "notice": None,
             }
-        return _coerce_chat_result(raw).model_dump()
+        return _coerce_chat_result(raw).to_dict()
 
     def _harness_restart(self, chat_id: int) -> dict[str, Any]:
         raw = self.command_handler.call(
@@ -1967,7 +1967,7 @@ class TelegramPoller:
                 "reply": "Sorry, I could not restart the ACP transport.",
                 "notice": None,
             }
-        return _coerce_chat_result(raw).model_dump()
+        return _coerce_chat_result(raw).to_dict()
 
     def _harness_graceful_restart(
         self,
@@ -1986,7 +1986,7 @@ class TelegramPoller:
                 "reply": "Sorry, I could not schedule a graceful restart.",
                 "notice": None,
             }
-        return _coerce_chat_result(raw).model_dump()
+        return _coerce_chat_result(raw).to_dict()
 
     def _harness_state_event(
         self,
@@ -2043,7 +2043,7 @@ class TelegramPoller:
                 "reply": "Sorry, I could not resume that session.",
                 "notice": None,
             }
-        return _coerce_chat_result(raw).model_dump()
+        return _coerce_chat_result(raw).to_dict()
 
     def _harness_branch(self, chat_id: int, session_number: int) -> dict[str, Any]:
         raw = self.command_handler.call(
@@ -2057,7 +2057,7 @@ class TelegramPoller:
                 "reply": "Sorry, I could not branch that session.",
                 "notice": None,
             }
-        return _coerce_chat_result(raw).model_dump()
+        return _coerce_chat_result(raw).to_dict()
 
     def _harness_subagent(self, chat_id: int, prompt: str) -> ChatResult:
         return self.command_handler.handle("/subagent", chat_id=chat_id, arg=prompt)

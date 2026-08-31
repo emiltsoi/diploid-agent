@@ -237,6 +237,60 @@ def test_task_config_update_rejects_invalid_types(client: TestClient) -> None:
     assert resp.status_code == 422
 
 
+def _make_config_with_outbox(tmp_path: Path) -> Config:
+    config = _make_config(tmp_path)
+    config.harness.notifications = NotificationsConfig(
+        enabled=True, outbox_delivery=True
+    )
+    return config
+
+
+@pytest.fixture
+def outbox_client(tmp_path: Path):
+    config = _make_config_with_outbox(tmp_path)
+    runtime = AgentRuntime(config)
+    runtime.engine = FakeEngine()
+    with TestClient(create_app(config, runtime)) as client:
+        yield client
+
+
+def test_outbox_endpoint_long_polls_result(outbox_client: TestClient) -> None:
+    runtime = outbox_client.app.state.runtime
+    runtime._enqueue_outbox("chat-1", ChatResult(reply="outbox reply", turn_number=1))
+
+    resp = outbox_client.get("/outbox/chat-1", params={"wait": 2.0})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["chat_id"] == "chat-1"
+    assert data["result"] is not None
+    assert data["result"]["reply"] == "outbox reply"
+
+
+def test_outbox_endpoint_returns_null_when_empty(outbox_client: TestClient) -> None:
+    resp = outbox_client.get("/outbox/chat-1", params={"wait": 0.1})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["chat_id"] == "chat-1"
+    assert data["result"] is None
+
+
+def test_outbox_endpoint_enqueues_during_long_poll(outbox_client: TestClient) -> None:
+    import threading
+
+    runtime = outbox_client.app.state.runtime
+
+    def _enqueue_later() -> None:
+        time.sleep(0.1)
+        runtime._enqueue_outbox("chat-1", ChatResult(reply="delayed reply", turn_number=2))
+
+    threading.Thread(target=_enqueue_later, daemon=True).start()
+
+    resp = outbox_client.get("/outbox/chat-1", params={"wait": 2.0})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["result"]["reply"] == "delayed reply"
+
+
 def test_agent_runtime_update_task_config_validates_in_place(client: TestClient) -> None:
     runtime = client.app.state.runtime
     cfg = runtime.get_task_config()

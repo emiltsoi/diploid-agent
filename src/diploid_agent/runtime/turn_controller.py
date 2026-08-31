@@ -935,7 +935,7 @@ class TurnController:
                 else:
                     notifier_stream.finish(ChatResult(reply=""))
 
-        if notify and "chat_result" in vars():
+        if notify and "chat_result" in vars() and self.runtime._outbox_delivery_enabled:
             self.runtime._deliver_chat_result(chat_id, chat_result)
 
         return chat_result
