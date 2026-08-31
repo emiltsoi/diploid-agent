@@ -2185,10 +2185,16 @@ class AgentRuntime(RuntimeAPI):
         context_usage = self._context_usage(record)
         background_tasks = self.subagent_status(chat_id)
 
+        active_turn = self.turn_status(chat_id, wait=0.0)
+
         with self._lock:
             record = self._active_record(chat_id)
             if not record:
                 return {"chat_id": chat_id, "active": False}
+
+            if context_usage and record.last_stop_reason:
+                context_usage["last_turn"]["stop_reason"] = record.last_stop_reason
+
             return {
                 "chat_id": chat_id,
                 "active": True,
@@ -2208,6 +2214,7 @@ class AgentRuntime(RuntimeAPI):
                 "enabled_skills": record.enabled_skills,
                 "disabled_skills": record.disabled_skills,
                 "background_tasks": background_tasks,
+                "active_turn": active_turn,
             }
 
     def list_sessions(self, chat_id: str) -> dict[str, Any]:

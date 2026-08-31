@@ -1547,6 +1547,8 @@ class TurnController:
             "message_text": active.message_text,
             "thought_text": active.thought_text,
             "stopped": active.stopped,
+            "start_time": active.start_time,
+            "elapsed_seconds": round(time.time() - active.start_time, 1),
         }
 
     def turn_status(self, chat_id: str, wait: float = 0.0) -> dict[str, Any]:

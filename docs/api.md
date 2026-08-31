@@ -420,9 +420,22 @@ Response:
     "cumulative": {...},
     "memory_budgets": {...},
     "memory_exceeded": {...}
+  },
+  "active_turn": {
+    "chat_id": "test-1",
+    "status": "running",
+    "session_id": "nickel-tango",
+    "user_message": "hello",
+    "message_text": "",
+    "thought_text": "",
+    "stopped": false,
+    "start_time": 1788201234.5,
+    "elapsed_seconds": 12.3
   }
 }
 ```
+
+When no turn is running, `active_turn.status` is `idle`. The `last_turn` block also includes `stop_reason` when the previous turn stopped with a non-empty reason (e.g. `timeout`).
 
 ## `GET /memory/{chat_id}`
 

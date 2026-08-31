@@ -1975,16 +1975,28 @@ class TelegramPoller:
             f"Session: {data.get('session_id')}",
             f"Working directory: {data.get('cwd')}",
         ]
+        active_turn = data.get("active_turn") or {}
+        if active_turn.get("status") == "running":
+            elapsed = active_turn.get("elapsed_seconds", 0)
+            user_message = active_turn.get("user_message", "")
+            lines.append(
+                f"Turn: running for {elapsed}s on \"{user_message}\""
+            )
+        else:
+            lines.append("Turn: idle")
+
         ctx = data.get("context_usage") or {}
         context_window = ctx.get("context_window")
         if context_window:
             lines.append(f"Context window: {context_window} tokens")
             last_turn = ctx.get("last_turn") or {}
             if last_turn.get("input_percent") is not None:
+                stop_reason = last_turn.get("stop_reason")
+                stop_note = f" (stopped: {stop_reason})" if stop_reason else ""
                 lines.append(
                     f"Last turn: {last_turn['input_percent']}% input, "
                     f"{last_turn.get('total_percent', 0)}% total "
-                    f"({last_turn.get('available_tokens', 0)} available)"
+                    f"({last_turn.get('available_tokens', 0)} available){stop_note}"
                 )
             cumulative = ctx.get("cumulative") or {}
             if cumulative.get("turns") is not None:
