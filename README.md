@@ -25,6 +25,7 @@ retention to a Hindsight memory server.
 - Supports live runtime configuration of task, waker, timer, notifications, and Telegram settings via HTTP and Telegram without restarting.
 - Supports state plugins with a rich lifecycle hook surface: plugins can intercept turns, sessions, dispatches, memory transitions, skill/MCP commands, retain/promote, and shutdown.
 - Hardens the ACP transport with typed error classification, restart backoff, and stale-session recovery that attempts ACP `session/resume` (falling back to `session/load`) before prompt rehydration.
+- Sandboxes the ACP child so it cannot run raw `systemctl`, `reboot`, or `shutdown` against the host; restart requests from the agent are routed through the harness and scheduled gracefully with `systemd-run`.
 - Queues incoming user messages as high-priority wake events when a chat is busy instead of dropping them.
 - Runs a `diploid-memory` MCP server with `memory_recall`, `memory_retain`, and
   `memory_promote` tools, plus a shared `memory` skill that lets the agent use them.
@@ -89,6 +90,8 @@ curl -X POST http://127.0.0.1:4003/switch-model \
 - `/model <name>` — switch this chat to a new model.
 - `/new` — start a fresh session.
 - `/stop` — cancel the current turn and return a partial reply.
+- `/restart` — kill the ACP child and start a fresh transport.
+- `/graceful-restart [service]` — schedule a graceful systemd restart of the named service (default: the current persona's `.service` unit).
 - `/continue` — resume the previous turn after a partial reply or timeout.
 - `/sessions` — list numbered sessions.
 - `/resume <n>` — resume session `n`.

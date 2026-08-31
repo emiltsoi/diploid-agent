@@ -69,3 +69,18 @@ Other engines may use a different key or credential source.
 The systemd unit runs as your user and loads `config/secrets.env` via
 `EnvironmentFile`. If you sign in through Devin Desktop or `devin auth login` on
 the same account, the credentials file is found automatically.
+
+## Graceful self-restart
+
+The agent (or a user) can request a service restart through the harness instead
+of killing the unit directly:
+
+- Telegram: `/graceful-restart [service]`
+- HTTP: `POST /graceful-restart` with `{"chat_id": "...", "service": "..."}`
+- ACP child (in `permission_mode: dangerous`): the child can run
+  `systemctl --user restart <service>` and the harness intercepts it.
+
+In all cases the harness sends an acknowledgement, then schedules the actual
+restart with `systemd-run --user --on-active=5s` (or `10s` for child-initiated
+restarts). This gives the HTTP/Telegram response time to be delivered before the
+service goes down.

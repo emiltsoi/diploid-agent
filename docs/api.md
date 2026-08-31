@@ -110,6 +110,52 @@ Response:
 }
 ```
 
+## `POST /restart`
+
+Kill the ACP child transport for a chat and start a fresh one. This does **not**
+restart the systemd service; it only restarts the `devin acp` process.
+
+```bash
+curl -X POST http://127.0.0.1:4003/restart \
+  -H "Content-Type: application/json" \
+  -d '{"chat_id": "test-1"}'
+```
+
+Response:
+
+```json
+{
+  "reply": "ACP transport restarted.",
+  "notice": "The next message will start a fresh Devin session."
+}
+```
+
+## `POST /graceful-restart`
+
+Schedule a graceful systemd restart of a service. The harness sends an
+acknowledgement first, then uses `systemd-run` to restart the unit after a short
+delay so the HTTP response can be delivered before the process goes down. If
+`service` is omitted, it defaults to the current persona's `.service` unit.
+
+```bash
+curl -X POST http://127.0.0.1:4003/graceful-restart \
+  -H "Content-Type: application/json" \
+  -d '{
+    "chat_id": "test-1",
+    "service": "diploid-agent.service",
+    "reason": "user-requested"
+  }'
+```
+
+Response:
+
+```json
+{
+  "reply": "Restarting diploid-agent.service. I'll be back in a moment.",
+  "notice": "The service will restart in a few seconds."
+}
+```
+
 ## `GET /turn/{chat_id}`
 
 Return the partial state of an active turn. Polling clients (like the Telegram

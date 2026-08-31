@@ -58,6 +58,9 @@ Synchronous wrapper around the configured ACP v1 JSON-RPC agent binary.
 - `list_models()` returns the model options advertised by the ACP server.
 - Spawns one long-lived ACP agent subprocess and multiplexes all chats
   through it.
+- Sandboxes the ACP child with a private `XDG_RUNTIME_DIR`, no D-Bus, and a fake
+  `systemctl` wrapper; restart requests from the child are routed through a
+  control socket to the harness.
 
 ### `MemoryManager`
 

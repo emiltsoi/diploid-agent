@@ -145,6 +145,8 @@ message, so the conversation thread is visible.
 | `/model <name>` | Switch this chat to a new model. |
 | `/new` | Start a fresh Devin session for this chat while keeping chat memory. |
 | `/stop` | Cancel the current turn and return a partial reply. |
+| `/restart` | Kill the ACP child and start a fresh transport. |
+| `/graceful-restart [service]` | Schedule a graceful `systemd-run` restart of the named service. Defaults to the current persona's `.service` unit. |
 | `/continue` | Resume the previous turn after a partial reply or timeout. |
 | `/stream_thoughts on\|off` | Toggle the optional real-time thought stream. |
 | `/sessions` | List numbered sessions for this chat. |
