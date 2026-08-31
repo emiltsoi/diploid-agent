@@ -63,6 +63,15 @@ class RuntimeAPI(abc.ABC):
         """Kill the ACP child and start a fresh transport for this chat."""
 
     @abc.abstractmethod
+    def graceful_service_restart(
+        self,
+        chat_id: str,
+        service: str,
+        reason: str = "",
+    ) -> Any:
+        """Schedule a graceful systemd restart of the named service."""
+
+    @abc.abstractmethod
     def turn_status(self, chat_id: str, wait: float = 0.0) -> Any:
         """Return the current streaming state."""
 

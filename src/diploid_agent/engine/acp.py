@@ -58,6 +58,8 @@ class AcpEngine(AgentEngine):
         *,
         api_key: str | None = None,
         metrics: Any | None = None,
+        service_name: str | None = None,
+        on_service_restart: Callable[[str, str], None] | None = None,
     ) -> None:
         self.config = config
         self.metrics = metrics
@@ -87,6 +89,8 @@ class AcpEngine(AgentEngine):
             start_args=start_args,
             api_key=api_key,
             metrics=metrics,
+            service_name=service_name,
+            on_service_restart=on_service_restart,
         )
 
     def _to_result(self, result: AcpPromptResult) -> TurnResult:

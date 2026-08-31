@@ -2,6 +2,8 @@
 
 import asyncio
 import concurrent.futures
+import os
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -435,6 +437,51 @@ def test_watchdog_kills_stuck_process() -> None:
     assert client._proc.returncode == -9
     assert client._transport_healthy is False
     assert client._initialized is False
+
+
+def test_sandbox_systemctl_wrapper_routes_to_harness(monkeypatch, tmp_path: Path) -> None:
+    """The fake systemctl wrapper should send restart requests to the harness socket."""
+    monkeypatch.setenv("WINDSURF_API_KEY", "test-key")
+    monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS", raising=False)
+    monkeypatch.delenv("DBUS_SYSTEM_BUS_ADDRESS", raising=False)
+
+    called: dict[str, Any] = {}
+    event = threading.Event()
+
+    def _on_restart(service: str, reason: str) -> None:
+        called["service"] = service
+        called["reason"] = reason
+        event.set()
+
+    client = AcpClient(agent_bin="/bin/true", api_key="test-key", on_service_restart=_on_restart)
+    try:
+        client._prepare_devin_home()
+        assert client._devin_home is not None
+
+        wrapper = client._devin_home / ".local" / "bin" / "systemctl"
+        assert wrapper.exists() and os.access(wrapper, os.X_OK)
+
+        env = os.environ.copy()
+        env["DIPLOID_CONTROL_SOCKET"] = str(client._control_socket_path)
+        env["PATH"] = f"{client._devin_home / '.local' / 'bin'}{os.pathsep}{env.get('PATH', '')}"
+        env.pop("DBUS_SESSION_BUS_ADDRESS", None)
+        env.pop("DBUS_SYSTEM_BUS_ADDRESS", None)
+
+        result = subprocess.run(
+            [str(wrapper), "--user", "restart", "vesper.service"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "scheduled via harness" in result.stdout
+
+        assert event.wait(timeout=5), "on_service_restart callback was not called"
+        assert called["service"] == "vesper.service"
+    finally:
+        client.close()
 
 
 def test_watchdog_kills_stuck_control_call() -> None:

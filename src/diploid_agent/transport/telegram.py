@@ -126,6 +126,7 @@ _TELEGRAM_HELP = """Available commands:
 /new - start a fresh Devin session while keeping chat memory
 /stop - cancel the current turn and return a partial reply
 /restart - kill the ACP child and start a fresh transport
+/graceful-restart [service] - schedule a graceful restart of the named service
 /continue - resume the previous turn after a partial reply or timeout
 /sessions - list numbered sessions for this chat
 /resume <n> - resume session n as the active session
@@ -1882,6 +1883,46 @@ class TelegramPoller:
                 "notice": None,
             }
 
+    def _harness_graceful_restart(
+        self,
+        chat_id: int,
+        service: str,
+    ) -> dict[str, Any]:
+        if self.runtime is not None:
+            try:
+                result = self.runtime.graceful_service_restart(
+                    str(chat_id), service, reason="telegram command"
+                )
+                return {
+                    "reply": getattr(result, "reply", ""),
+                    "notice": getattr(result, "notice", None),
+                }
+            except Exception:
+                logger.exception("Runtime graceful restart failed")
+                return {
+                    "reply": "Sorry, I could not schedule a graceful restart.",
+                    "notice": None,
+                }
+
+        try:
+            resp = self.client.post(
+                f"{self.harness_url}/graceful-restart",
+                json={
+                    "chat_id": str(chat_id),
+                    "service": service,
+                    "reason": "telegram command",
+                },
+                timeout=60.0,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except Exception:
+            logger.exception("Harness /graceful-restart failed")
+            return {
+                "reply": "Sorry, I could not schedule a graceful restart.",
+                "notice": None,
+            }
+
     def _harness_state_event(
         self,
         chat_id: int,
@@ -2120,6 +2161,10 @@ class TelegramPoller:
                 worker.stop()
                 # The worker will finish its final partial; the restart confirmation is sent below.
             result = self._harness_restart(chat_id)
+            self._send_result(chat_id, result, reply_to_message_id=chat_input.message_id)
+        elif command == "/graceful-restart":
+            service = arg or f"{self.config.persona.name}.service"
+            result = self._harness_graceful_restart(chat_id, service)
             self._send_result(chat_id, result, reply_to_message_id=chat_input.message_id)
         elif command == "/sessions":
             reply = self._harness_sessions(chat_id)

@@ -163,6 +163,12 @@ class FakePluginRuntime:
     def promote(self, chat_id: str, fact: str) -> ChatResult:
         return ChatResult(reply="promoted")
 
+    def suppress_auto_continue(self, chat_id: str, seconds: float = 300.0) -> None:
+        return None
+
+    def is_auto_continue_suppressed(self, chat_id: str) -> bool:
+        return False
+
     def _active_record(self, chat_id: str) -> SessionRecord | None:
         return None
 

@@ -241,3 +241,33 @@ def test_agent_runtime_restarts_transport(tmp_path: Path) -> None:
     result = runtime.restart("chat-1")
     assert called
     assert "restarted" in result.reply.lower()
+
+
+def test_graceful_service_restart_schedules_systemd_run(tmp_path: Path, monkeypatch) -> None:
+    runtime = AgentRuntime(_make_config(tmp_path))
+    popen_calls: list[list[str]] = []
+
+    def fake_popen(cmd: list[str], **kwargs: Any) -> Any:
+        popen_calls.append(cmd)
+
+        class _Fake:
+            pass
+
+        return _Fake()
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+
+    result = runtime.graceful_service_restart("chat-1", "vesper.service", reason="test")
+    assert "restarting" in result.reply.lower()
+    assert len(popen_calls) == 1
+    assert popen_calls[0][0] == "systemd-run"
+    assert "vesper.service" in popen_calls[0]
+
+
+def test_auto_continue_suppression(tmp_path: Path) -> None:
+    runtime = AgentRuntime(_make_config(tmp_path))
+    assert runtime.is_auto_continue_suppressed("chat-1") is False
+    runtime.suppress_auto_continue("chat-1", seconds=10)
+    assert runtime.is_auto_continue_suppressed("chat-1") is True
+    runtime.suppress_auto_continue(seconds=10)
+    assert runtime.is_auto_continue_suppressed("chat-2") is True

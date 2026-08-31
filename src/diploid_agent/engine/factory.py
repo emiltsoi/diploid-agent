@@ -17,7 +17,11 @@ ENGINES: dict[str, type[AgentEngine]] = {
 
 
 def build_engine(
-    config: EngineConfig, *, api_key: str | None = None, metrics: Any | None = None
+    config: EngineConfig,
+    *,
+    api_key: str | None = None,
+    metrics: Any | None = None,
+    **kwargs: Any,
 ) -> AgentEngine:
     """Build an AgentEngine from the configured provider."""
     engine_cls = ENGINES.get(config.provider)
@@ -25,4 +29,4 @@ def build_engine(
         raise ValueError(f"unknown engine provider: {config.provider}")
     if engine_cls is FakeAgentEngine:
         return FakeAgentEngine()
-    return engine_cls(config, api_key=api_key, metrics=metrics)
+    return engine_cls(config, api_key=api_key, metrics=metrics, **kwargs)

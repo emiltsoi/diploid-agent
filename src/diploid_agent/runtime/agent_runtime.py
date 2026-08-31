@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -205,6 +206,14 @@ class AgentRuntime(RuntimeAPI):
         # Durable record of plugin incidents (sandbox, lifecycle, health, watchdog).
         self._incidents = PluginIncidentStore(self.store_path.parent / "plugin-incidents.jsonl")
 
+        # Rate-limit ACP-child-initiated service restarts.
+        self._last_service_restart_at: float = 0.0
+        self._service_restart_cooldown_seconds = 60.0
+
+        # Per-chat and global auto-continue suppression (e.g., before a restart).
+        self._auto_continue_suppressed: dict[str, float] = {}
+        self._auto_continue_globally_suppressed_until: float = 0.0
+
         # Plugins can declare MCP servers and skills; add them before McpManager.
         self._plugins = PluginManager(
             plugins=list(self.config.harness.plugins),
@@ -262,6 +271,8 @@ class AgentRuntime(RuntimeAPI):
             self.config.engine,
             api_key=api_key,
             metrics=metrics,
+            service_name=f"{self.config.persona.name}.service",
+            on_service_restart=self._on_service_restart,
         )
 
     @property
@@ -272,6 +283,95 @@ class AgentRuntime(RuntimeAPI):
     @client.setter
     def client(self, value: AgentEngine) -> None:
         self.engine = value
+
+    def _on_service_restart(self, service: str, reason: str) -> None:
+        """Handle a service restart request from the ACP child.
+
+        Instead of letting the child kill the harness directly, we schedule a
+        short-delayed `systemd-run` that restarts the service after the current
+        turn has a chance to finish and the final reply is delivered.
+        """
+        now = time.time()
+        if now - self._last_service_restart_at < self._service_restart_cooldown_seconds:
+            logger.warning(
+                "Ignoring repeat restart request for %s (cooldown active)",
+                service,
+            )
+            return
+        self._last_service_restart_at = now
+
+        logger.warning(
+            "ACP child requested restart of %s (reason: %s); scheduling graceful restart",
+            service,
+            reason,
+        )
+
+        # Cancel any pending auto-continue wakes so the restart does not loop.
+        if self.wake_queue is not None:
+            try:
+                self.wake_queue.cancel(reason="auto_continue")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to cancel auto-continue wakes before restart: %s", exc)
+
+        self.suppress_auto_continue()
+
+        # Record the incident for observability.
+        if self._incidents is not None:
+            try:
+                self._incidents.record(
+                    plugin="self_management",
+                    phase="graceful_restart",
+                    error=f"ACP child requested restart of {service}: {reason}",
+                    action="scheduled",
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to record restart incident: %s", exc)
+
+        # Schedule the actual service restart with a short delay so the in-flight
+        # reply can be sent before the process goes down.
+        def _do_restart() -> None:
+            try:
+                subprocess.Popen(
+                    [
+                        "systemd-run",
+                        "--user",
+                        "--on-active=10s",
+                        "--timer-property=AccuracySec=1s",
+                        "/usr/bin/systemctl",
+                        "--user",
+                        "restart",
+                        service,
+                    ],
+                    start_new_session=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                logger.info("Scheduled graceful restart of %s in 10s", service)
+            except Exception:
+                logger.exception("Failed to schedule graceful restart of %s", service)
+
+        # Run the scheduler in its own thread so the ACP control listener is not
+        # blocked.
+        threading.Thread(target=_do_restart, daemon=True).start()
+
+    def suppress_auto_continue(self, chat_id: str | None = None, seconds: float = 300.0) -> None:
+        """Suppress auto-continue for a chat or globally for a number of seconds."""
+        until = time.time() + seconds
+        if chat_id is None:
+            self._auto_continue_globally_suppressed_until = until
+        else:
+            self._auto_continue_suppressed[chat_id] = until
+
+    def is_auto_continue_suppressed(self, chat_id: str) -> bool:
+        """Return True if auto-continue should be suppressed for this chat."""
+        now = time.time()
+        if now < self._auto_continue_globally_suppressed_until:
+            return True
+        until = self._auto_continue_suppressed.get(chat_id, 0)
+        if now < until:
+            return True
+        self._auto_continue_suppressed.pop(chat_id, None)
+        return False
 
     def _create_notifier(self) -> Notifier:
         if not self.config.harness.notifications.enabled:
@@ -2385,6 +2485,69 @@ class AgentRuntime(RuntimeAPI):
 
     def restart(self, chat_id: str) -> ChatResult:
         return self.turn_controller.restart(chat_id)
+
+    def graceful_service_restart(
+        self,
+        chat_id: str,
+        service: str,
+        reason: str = "",
+    ) -> ChatResult:
+        """Public API for a graceful service restart (HTTP/Telegram/MCP)."""
+        now = time.time()
+        if now - self._last_service_restart_at < self._service_restart_cooldown_seconds:
+            return ChatResult(
+                reply=f"A restart for {service} is already scheduled.",
+                notice="Please wait for it to complete.",
+            )
+        self._last_service_restart_at = now
+
+        # Suppress auto-continue for this chat and cancel pending wakes.
+        self.suppress_auto_continue(chat_id=chat_id, seconds=300)
+        if self.wake_queue is not None:
+            try:
+                self.wake_queue.cancel(chat_id=chat_id, reason="auto_continue")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to cancel auto-continue wakes for %s: %s", chat_id, exc)
+
+        if self._incidents is not None:
+            try:
+                self._incidents.record(
+                    plugin="self_management",
+                    phase="graceful_restart",
+                    error=f"User requested restart of {service}: {reason}",
+                    action="scheduled",
+                    chat_id=chat_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to record restart incident for %s: %s", chat_id, exc)
+
+        def _do_restart() -> None:
+            try:
+                subprocess.Popen(
+                    [
+                        "systemd-run",
+                        "--user",
+                        "--on-active=5s",
+                        "--timer-property=AccuracySec=1s",
+                        "/usr/bin/systemctl",
+                        "--user",
+                        "restart",
+                        service,
+                    ],
+                    start_new_session=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                logger.info("Scheduled graceful restart of %s in 5s (from chat %s)", service, chat_id)
+            except Exception:
+                logger.exception("Failed to schedule graceful restart of %s", service)
+
+        threading.Thread(target=_do_restart, daemon=True).start()
+
+        return ChatResult(
+            reply=f"Restarting {service}. I'll be back in a moment.",
+            notice="The service will restart in a few seconds.",
+        )
 
     @_locked
     def switch_model(self, chat_id: str, model: str) -> ChatResult:

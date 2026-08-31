@@ -16,6 +16,7 @@ import logging
 import os
 import shutil
 import signal
+import socket
 import tempfile
 import threading
 import time
@@ -231,6 +232,8 @@ class AcpClient:
         start_args: list[str] | None = None,
         api_key: str | None = None,
         metrics: Any | None = None,
+        service_name: str | None = None,
+        on_service_restart: Callable[[str, str], None] | None = None,
     ):
         self.model = _normalize_model(model)
         self.acp_mode = _ACP_MODE_MAP.get(permission_mode, "bypass")
@@ -280,6 +283,16 @@ class AcpClient:
         self._devin_home: Path | None = None
         self._mcp_servers: list[dict[str, Any]] = []
 
+        # Service restart support: the child can request a controlled restart
+        # through a private Unix socket instead of killing the parent directly.
+        self._service_name = service_name
+        self._on_service_restart = on_service_restart
+        self._control_socket_dir = Path(tempfile.mkdtemp(prefix="acp-ctl-"))
+        self._control_socket_path = self._control_socket_dir / "control.sock"
+        self._control_listener_running = False
+        self._control_listener_thread: threading.Thread | None = None
+        self._start_control_listener()
+
         # Restart backoff: avoid an infinite kill/restart loop when the ACP child
         # cannot be made healthy.
         self._max_restarts = max(0, max_restarts)
@@ -287,6 +300,90 @@ class AcpClient:
         self._restart_history: list[float] = []
 
         atexit.register(self.close)
+
+    def _start_control_listener(self) -> None:
+        """Start a Unix socket listener for restart requests from the ACP child.
+
+        The socket is created and bound in the calling thread so the
+        `DIPLOID_CONTROL_SOCKET` path exists before `devin acp` starts. The
+        accept loop runs in a daemon thread.
+        """
+        if self._on_service_restart is None:
+            return
+        if self._control_listener_thread is not None and self._control_listener_thread.is_alive():
+            return
+        self._control_listener_running = True
+        sock = self._bind_control_socket()
+        if sock is None:
+            return
+        self._control_listener_thread = threading.Thread(
+            target=self._control_listener,
+            args=(sock,),
+            daemon=True,
+        )
+        self._control_listener_thread.start()
+
+    def _bind_control_socket(self) -> socket.socket | None:
+        """Create and bind the control socket used by the fake systemctl wrapper."""
+        try:
+            self._control_socket_path.parent.mkdir(parents=True, exist_ok=True)
+            if self._control_socket_path.exists():
+                self._control_socket_path.unlink()
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.bind(str(self._control_socket_path))
+            sock.listen(1)
+            sock.settimeout(1.0)
+            return sock
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to bind ACP control socket: %s", exc)
+            return None
+
+    def _control_listener(self, sock: socket.socket) -> None:
+        """Listen for restart requests from the fake systemctl wrapper."""
+        try:
+            while self._control_listener_running:
+                try:
+                    conn, _ = sock.accept()
+                except TimeoutError:
+                    continue
+                with conn:
+                    try:
+                        data = b""
+                        while True:
+                            chunk = conn.recv(4096)
+                            if not chunk:
+                                break
+                            data += chunk
+                            if len(chunk) < 4096:
+                                break
+                        if not data:
+                            continue
+                        msg = json.loads(data.decode("utf-8"))
+                        action = msg.get("action")
+                        service = msg.get("service") or self._service_name or "unknown.service"
+                        reason = msg.get("reason", "")
+                        if action == "restart_service" and self._on_service_restart is not None:
+                            self._on_service_restart(service, reason)
+                        conn.sendall(json.dumps({"status": "ok"}).encode("utf-8"))
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("ACP control socket request failed: %s", exc)
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
+            try:
+                if self._control_socket_path.exists():
+                    self._control_socket_path.unlink()
+            except OSError:
+                pass
+
+    def _stop_control_listener(self) -> None:
+        """Signal the control listener to stop and clean up its socket."""
+        self._control_listener_running = False
+        if self._control_listener_thread is not None and self._control_listener_thread.is_alive():
+            self._control_listener_thread.join(timeout=2.0)
+        self._control_listener_thread = None
 
     def _control_call_timeout(self) -> float:
         """Cap control-call waits at the watchdog threshold to keep stalls short."""
@@ -315,6 +412,12 @@ class AcpClient:
         config_dir.mkdir(parents=True, exist_ok=True)
         codeium_dir = self._devin_home / ".codeium" / "windsurf"
         codeium_dir.mkdir(parents=True, exist_ok=True)
+
+        # Sandbox the ACP child: create a private runtime dir and fake systemctl
+        # wrapper so the model cannot run raw `systemctl --user restart` from the
+        # child. Restart requests are routed through the harness control socket.
+        (self._devin_home / ".run").mkdir(parents=True, exist_ok=True)
+        self._write_sandbox_binaries()
 
         user_config = Path.home() / ".config" / "devin" / "config.json"
         if user_config.exists():
@@ -376,6 +479,132 @@ class AcpClient:
             (self._devin_home / ".codeium" / "windsurf" / "mcp_config.json").write_text(mcp_config)
         except OSError:
             logger.warning("Failed to write mcp_config.json")
+
+    def _write_sandbox_binaries(self) -> None:
+        """Install fake system control binaries into the isolated HOME.
+
+        The ACP child inherits the real host `PATH` and can run
+        `systemctl --user restart <service>` while in `bypass` mode. These
+        wrappers intercept those calls and forward them to the harness control
+        socket, where the restart can be scheduled gracefully.
+        """
+        if self._devin_home is None:
+            return
+
+        bin_dir = self._devin_home / ".local" / "bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+
+        wrapper = '''#!/usr/bin/env python3
+"""Sandboxed systemctl/reboot/shutdown wrapper for the ACP child."""
+import json
+import os
+import socket
+import sys
+
+DANGEROUS = {
+    "start", "stop", "restart", "reload", "reload-or-restart",
+    "try-restart", "poweroff", "reboot", "halt", "shutdown",
+    "suspend", "hibernate", "hybrid-sleep", "default", "rescue", "emergency",
+}
+
+DEFAULT_COMMANDS = {
+    "reboot": "reboot",
+    "poweroff": "poweroff",
+    "shutdown": "poweroff",
+    "halt": "halt",
+}
+
+
+def _send_request(command: str, unit: str, reason: str) -> int:
+    control_socket = os.environ.get("DIPLOID_CONTROL_SOCKET")
+    service_name = os.environ.get("DIPLOID_SERVICE_NAME", "unknown.service")
+    if not control_socket:
+        if command in DANGEROUS:
+            print(f"{os.path.basename(sys.argv[0])}: {command} {unit}: "
+                  "not permitted in ACP sandbox", file=sys.stderr)
+            return 1
+        print(f"{os.path.basename(sys.argv[0])}: no control socket available", file=sys.stderr)
+        return 0
+
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(10.0)
+            s.connect(control_socket)
+            payload = {
+                "action": "restart_service" if command in ("restart", "reboot", "poweroff", "halt", "shutdown") else "service_command",
+                "service": unit or service_name,
+                "command": command,
+                "reason": reason,
+            }
+            s.sendall(json.dumps(payload).encode("utf-8"))
+            data = b""
+            while True:
+                chunk = s.recv(1024)
+                if not chunk:
+                    break
+                data += chunk
+            ack = json.loads(data.decode("utf-8")) if data else {}
+            print(f"{command} {payload['service']} scheduled via harness ({ack.get('status', 'ok')}).")
+            return 0
+    except Exception as exc:
+        print(f"{os.path.basename(sys.argv[0])}: failed to contact harness: {exc}", file=sys.stderr)
+        return 1
+
+
+def _main() -> int:
+    exe = os.path.basename(sys.argv[0])
+    if exe in DEFAULT_COMMANDS:
+        unit = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("DIPLOID_SERVICE_NAME", "unknown.service")
+        return _send_request(DEFAULT_COMMANDS[exe], unit, " ".join(sys.argv[1:]))
+
+    # systemctl [OPTIONS] COMMAND [UNIT...]
+    args = sys.argv[1:]
+    command = None
+    units = []
+    for a in args:
+        if a.startswith("-"):
+            continue
+        if command is None:
+            command = a
+        else:
+            units.append(a)
+
+    if command in {"status", "is-active", "is-enabled", "is-failed", "show", "list-units", "cat"}:
+        print(f"systemctl: {command}: sandboxed (no real service manager)")
+        return 0
+
+    if command is None:
+        print("systemctl: no command given")
+        return 1
+
+    if command not in DANGEROUS:
+        print(f"systemctl: command '{command}' is not supported in the ACP sandbox")
+        return 1
+
+    unit = units[0] if units else os.environ.get("DIPLOID_SERVICE_NAME", "unknown.service")
+    return _send_request(command, unit, " ".join(sys.argv[1:]))
+
+
+if __name__ == "__main__":
+    sys.exit(_main())
+'''
+        wrapper_path = bin_dir / "systemctl"
+        wrapper_path.write_text(wrapper)
+        wrapper_path.chmod(0o755)
+
+        for name in ("reboot", "poweroff", "shutdown", "halt"):
+            target = bin_dir / name
+            if target.exists() or target.is_symlink():
+                try:
+                    target.unlink()
+                except OSError:
+                    pass
+            try:
+                os.link(str(wrapper_path), str(target))
+            except OSError:
+                # Fall back to a copy if hard-linking across devices fails.
+                target.write_text(wrapper)
+                target.chmod(0o755)
 
     def _normalize_mcp_servers(
         self,
@@ -655,6 +884,11 @@ class AcpClient:
                 self._reader_task = None
                 self._stderr_task = None
                 self._cleanup_devin_home()
+                self._stop_control_listener()
+                try:
+                    shutil.rmtree(self._control_socket_dir)
+                except OSError:
+                    pass
 
     def _check_restart_backoff(self) -> None:
         """Raise AcpTransportError if we have restarted too many times recently."""
@@ -895,6 +1129,10 @@ class AcpClient:
                 self._inflight_deadline = 0.0
 
     async def _start_transport(self) -> None:
+        # Make sure the control socket is bound and listening before the child
+        # starts; the child will fail to connect if the socket is not ready.
+        self._start_control_listener()
+
         env = os.environ.copy()
         env["WINDSURF_API_KEY"] = self._api_key
         env["ACP_API_KEY"] = self._api_key
@@ -918,6 +1156,19 @@ class AcpClient:
                 "XDG_CACHE_HOME",
                 str(Path.home() / ".cache"),
             )
+            # Isolate the child from the user's systemd/D-Bus session so it cannot
+            # run raw `systemctl --user restart ...` directly. Restarts go through
+            # the fake binaries in .local/bin and the harness control socket.
+            env["XDG_RUNTIME_DIR"] = str(self._devin_home / ".run")
+            env.pop("DBUS_SESSION_BUS_ADDRESS", None)
+            env.pop("DBUS_SYSTEM_BUS_ADDRESS", None)
+            env["DIPLOID_CONTROL_SOCKET"] = str(self._control_socket_path)
+            if self._service_name:
+                env["DIPLOID_SERVICE_NAME"] = self._service_name
+
+            # Prepend the fake binary directory to PATH.
+            fake_bin = str(self._devin_home / ".local" / "bin")
+            env["PATH"] = fake_bin + os.pathsep + env.get("PATH", "")
 
         self._proc = await asyncio.create_subprocess_exec(
             str(self.agent_bin),

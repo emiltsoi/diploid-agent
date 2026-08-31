@@ -55,6 +55,12 @@ class FakeRuntime:
     def promote(self, chat_id, fact):
         return ChatResult(reply="Promoted.")
 
+    def suppress_auto_continue(self, chat_id, seconds=300.0):
+        return None
+
+    def is_auto_continue_suppressed(self, chat_id):
+        return False
+
 
 class FakePlugin(StatePlugin):
     pass

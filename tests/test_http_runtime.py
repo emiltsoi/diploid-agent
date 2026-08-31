@@ -323,6 +323,28 @@ def test_restart_endpoint_calls_runtime_restart(client: TestClient, monkeypatch)
     assert called == ["12345"]
 
 
+def test_graceful_restart_endpoint_calls_runtime_graceful_restart(
+    client: TestClient, monkeypatch
+) -> None:
+    called: list[tuple[str, str, str]] = []
+
+    def fake_graceful_restart(chat_id: str, service: str, reason: str = "") -> ChatResult:
+        called.append((chat_id, service, reason))
+        return ChatResult(reply=f"Restarting {service}")
+
+    monkeypatch.setattr(
+        client.app.state.runtime, "graceful_service_restart", fake_graceful_restart
+    )
+
+    resp = client.post(
+        "/graceful-restart",
+        json={"chat_id": "12345", "service": "vesper.service", "reason": "telegram"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["reply"] == "Restarting vesper.service"
+    assert called == [("12345", "vesper.service", "telegram")]
+
+
 def test_waker_config_persists_and_reloads(tmp_path: Path) -> None:
     config = _make_config(tmp_path)
     runtime = AgentRuntime(config)

@@ -109,6 +109,12 @@ class RestartRequest(BaseModel):
     chat_id: str
 
 
+class GracefulRestartRequest(BaseModel):
+    chat_id: str
+    service: str
+    reason: str = ""
+
+
 class TimerRequest(BaseModel):
     chat_id: str
     reason: str
@@ -453,6 +459,20 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
     @app.post("/restart", response_model=ChatResponse, dependencies=[Depends(_require_api_key)])
     def restart(req: RestartRequest) -> ChatResponse:
         return _to_response(runtime.restart(req.chat_id))
+
+    @app.post(
+        "/graceful-restart",
+        response_model=ChatResponse,
+        dependencies=[Depends(_require_api_key)],
+    )
+    def graceful_restart(req: GracefulRestartRequest) -> ChatResponse:
+        return _to_response(
+            runtime.graceful_service_restart(
+                req.chat_id,
+                req.service,
+                reason=req.reason,
+            )
+        )
 
     @app.post("/state", response_model=ChatResponse, dependencies=[Depends(_require_api_key)])
     def state_event(req: StateEventRequest) -> ChatResponse:
