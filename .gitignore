@@ -23,6 +23,9 @@ wake_queue.jsonl.lock
 runtime-overrides.yaml
 /plans/
 /plans.jsonl
+plans-*/
+plans-*.jsonl
+plans-*.jsonl.lock
 plugin-incidents.jsonl
 
 # Probe output artifacts.
