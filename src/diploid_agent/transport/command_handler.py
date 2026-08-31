@@ -66,6 +66,8 @@ class CommandHandler:
         chat_id: str | int | None = None,
         http_path: str = "",
         http_method: str = "POST",
+        http_body: dict[str, Any] | None = None,
+        requires_chat_id: bool = True,
         **kwargs: Any,
     ) -> Any:
         """Call a runtime method or the matching HTTP endpoint.
@@ -78,7 +80,7 @@ class CommandHandler:
             try:
                 fn = getattr(self.runtime, method)
                 call_kwargs = dict(kwargs)
-                if chat_id is not None:
+                if requires_chat_id and chat_id is not None:
                     call_kwargs["chat_id"] = str(chat_id)
                 return fn(**call_kwargs)
             except Exception:
@@ -98,8 +100,11 @@ class CommandHandler:
                 path = http_path.format(chat_id=str(chat_id)) if "{chat_id}" in http_path else http_path
                 resp = client.get(f"{self.harness_url}{path}", headers=headers)
             else:
-                body = dict(kwargs)
-                if chat_id is not None:
+                if http_body is not None:
+                    body = dict(http_body)
+                else:
+                    body = dict(kwargs)
+                if requires_chat_id and chat_id is not None:
                     body["chat_id"] = str(chat_id)
                 resp = client.post(
                     f"{self.harness_url}{http_path}",
