@@ -117,7 +117,7 @@ class RestartRequest(BaseModel):
 
 class GracefulRestartRequest(BaseModel):
     chat_id: str
-    service: str
+    service: str | None = None
     reason: str = ""
 
 

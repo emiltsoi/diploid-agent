@@ -99,6 +99,12 @@ def _locked(method):
     return wrapper
 
 
+def _is_telegram_chat_id(chat_id: str) -> bool:
+    """Return True if ``chat_id`` looks like a real Telegram chat id."""
+    stripped = chat_id.lstrip("-")
+    return stripped.isdigit()
+
+
 def _run_unlocked(method: Callable[..., Any]) -> Callable[..., Any]:
     """Run a method while releasing the harness RLock during its execution.
 
@@ -1210,6 +1216,8 @@ class AgentRuntime(RuntimeAPI):
         chat_ids: list[str] = []
         with self._lock:
             for chat_id, state in self._store.items():
+                if not _is_telegram_chat_id(chat_id):
+                    continue
                 if not state.sessions:
                     continue
                 latest = max(state.sessions.values(), key=lambda r: r.updated_at)
@@ -2634,10 +2642,12 @@ class AgentRuntime(RuntimeAPI):
     def graceful_service_restart(
         self,
         chat_id: str,
-        service: str,
+        service: str | None = None,
         reason: str = "",
     ) -> ChatResult:
         """Public API for a graceful service restart (HTTP/Telegram/MCP)."""
+        if service is None:
+            service = f"{self.config.persona.name}.service"
         now = time.time()
         if now - self._last_service_restart_at < self._service_restart_cooldown_seconds:
             return ChatResult(

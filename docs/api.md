@@ -140,7 +140,8 @@ Response:
 Schedule a graceful systemd restart of a service. The harness sends an
 acknowledgement first, then uses `systemd-run` to restart the unit after a short
 delay so the HTTP response can be delivered before the process goes down. If
-`service` is omitted, it defaults to the current persona's `.service` unit.
+`service` is omitted, it defaults to the current persona's `.service` unit
+(self-service restart).
 
 ```bash
 curl -X POST http://127.0.0.1:4003/graceful-restart \
@@ -150,6 +151,14 @@ curl -X POST http://127.0.0.1:4003/graceful-restart \
     "service": "diploid-agent.service",
     "reason": "user-requested"
   }'
+```
+
+Self-service restart (omit `service`):
+
+```bash
+curl -X POST http://127.0.0.1:4003/graceful-restart \
+  -H "Content-Type: application/json" \
+  -d '{"chat_id": "test-1"}'
 ```
 
 Response:

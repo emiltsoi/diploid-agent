@@ -67,10 +67,14 @@ class RuntimeAPI(abc.ABC):
     def graceful_service_restart(
         self,
         chat_id: str,
-        service: str,
+        service: str | None = None,
         reason: str = "",
     ) -> Any:
-        """Schedule a graceful systemd restart of the named service."""
+        """Schedule a graceful systemd restart of the named service.
+
+        If ``service`` is not provided, the current persona's `.service` unit
+        is restarted.
+        """
 
     @abc.abstractmethod
     def turn_status(self, chat_id: str, wait: float = 0.0) -> Any:
