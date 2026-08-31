@@ -46,6 +46,15 @@ def _join_notices(*parts: str | None) -> str | None:
     return joined or None
 
 
+def _format_elapsed_short(seconds: float) -> str:
+    """Return a short, human-readable elapsed time."""
+    total = int(seconds)
+    mins, secs = divmod(total, 60)
+    if mins > 0:
+        return f"{mins}m {secs}s"
+    return f"{secs}s"
+
+
 def _locked(method):
     """Run a TurnController method under the runtime RLock."""
 
@@ -218,6 +227,72 @@ class _NotifyStream:
                 sent.append(notice_id)
 
         return sent
+
+
+class _OutboxHeartbeat:
+    """Send periodic liveness notices to the outbox for long non-streaming turns.
+
+    When a turn is driven by the wake queue (or another caller that does not
+    have its own streaming transport), the user gets no feedback while the model
+    is thinking. This heartbeat pushes a short ``ChatResult`` to the outbox
+    every so often so the user knows the agent is still alive and can decide
+    whether to wait or send ``/stop``.
+    """
+
+    def __init__(
+        self,
+        runtime: AgentRuntime,
+        chat_id: str,
+        active: ActiveTurn,
+        first_beat: float = 30.0,
+        beat_interval: float = 90.0,
+    ) -> None:
+        self.runtime = runtime
+        self.chat_id = chat_id
+        self.active = active
+        self.first_beat = first_beat
+        self.beat_interval = beat_interval
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(
+            target=self._run,
+            daemon=True,
+            name=f"outbox-heartbeat-{self.chat_id}",
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=1.0)
+
+    def _run(self) -> None:
+        if self._stop.wait(timeout=self.first_beat):
+            return
+        while not self._stop.is_set():
+            with self.runtime._lock:
+                current = self.runtime._active_turns.get(self.chat_id)
+            if current is not self.active or current is None or current.stopped:
+                break
+
+            # Only nudge when the model has not produced any visible reply yet.
+            # If it has produced partial text, the user can already see progress
+            # in the final message when it arrives.
+            if not self.active.message_text:
+                elapsed = time.time() - self.active.start_time
+                elapsed_str = _format_elapsed_short(elapsed)
+                chat_result = ChatResult(
+                    reply=f"⏳ Still thinking... ({elapsed_str})",
+                    notice="Send /stop to cancel this turn if you don't want to wait.",
+                )
+                self.runtime._enqueue_outbox(self.chat_id, chat_result)
+
+            if self._stop.wait(timeout=self.beat_interval):
+                break
 
 
 class TurnController:
@@ -550,6 +625,11 @@ class TurnController:
             wake_event=wake_event,
         )
         notifier_stream.start()
+
+        outbox_heartbeat: _OutboxHeartbeat | None = None
+        if notify and self.runtime._outbox_delivery_enabled:
+            outbox_heartbeat = _OutboxHeartbeat(self.runtime, chat_id, active)
+            outbox_heartbeat.start()
 
         def _maybe_emit_partial() -> None:
             a = self.runtime._active_turns.get(chat_id)
@@ -922,6 +1002,8 @@ class TurnController:
             )
             raise
         finally:
+            if outbox_heartbeat is not None:
+                outbox_heartbeat.stop()
             with self.runtime._lock:
                 active = self.runtime._active_turns.get(chat_id)
                 self.runtime._active_turns.pop(chat_id, None)

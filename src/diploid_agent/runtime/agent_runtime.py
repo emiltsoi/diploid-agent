@@ -1172,10 +1172,73 @@ class AgentRuntime(RuntimeAPI):
         if not self.event_bus.running:
             self.event_bus.start()
         self.event_bus.subscribe(self._on_event)
+
+        # Drop auto-continue wakes that were created by a previous process.
+        # Queued user messages and other system wakes are kept, and the
+        # conversation/session state used for resume is not touched.
+        if self.wake_queue is not None:
+            try:
+                count = self.wake_queue.cancel_older_than(
+                    self.instance_started_at,
+                    reason="auto_continue",
+                )
+                if count:
+                    logger.info(
+                        "Cancelled %d stale auto-continue wake(s) on startup",
+                        count,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to cancel stale auto-continue wakes: %s", exc)
+
         if self.config.harness.timer.enabled:
             self.timer_service.start()
         self.instance_manager.start_heartbeat()
         self._load_mesh_ingress()
+        self._send_restart_notices()
+
+    def _send_restart_notices(self) -> None:
+        """Notify recently active chats that the service has restarted.
+
+        The notice is sent through a direct notifier (not the outbox) when
+        outbox delivery is enabled, because the transport's DeliveryWorker may
+        not be running yet at startup.
+        """
+        if not self.config.harness.notifications.enabled:
+            return
+
+        recent_cutoff = time.time() - 86400.0
+        chat_ids: list[str] = []
+        with self._lock:
+            for chat_id, state in self._store.items():
+                if not state.sessions:
+                    continue
+                latest = max(state.sessions.values(), key=lambda r: r.updated_at)
+                if latest.updated_at >= recent_cutoff:
+                    chat_ids.append(chat_id)
+
+        if not chat_ids:
+            return
+
+        logger.info("Sending restart notice to %d recently active chat(s)", len(chat_ids))
+        text = "System: service was restarted. You can resume the conversation at any time."
+        notifier = self._create_direct_notifier()
+        if isinstance(notifier, NoopNotifier):
+            return
+
+        for chat_id in chat_ids:
+            try:
+                notifier.send(str(chat_id), text)
+            except Exception:
+                logger.exception("Failed to send restart notice for %s", chat_id)
+
+    def _create_direct_notifier(self) -> Notifier:
+        """Create a notifier that bypasses the outbox if possible."""
+        if self.config.harness.notifications.webhook_url:
+            return WebhookNotifier(self.config.harness.notifications.webhook_url)
+        token = self.config.harness.telegram.token
+        if token:
+            return TelegramNotifier(token, metrics=self.metrics)
+        return NoopNotifier()
 
     def shutdown(self) -> None:
         """Notify all plugins and stop background workers."""

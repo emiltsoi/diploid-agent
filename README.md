@@ -26,7 +26,9 @@ retention to a Hindsight memory server.
 - Supports state plugins with a rich lifecycle hook surface: plugins can intercept turns, sessions, dispatches, memory transitions, skill/MCP commands, retain/promote, and shutdown.
 - Hardens the ACP transport with typed error classification, restart backoff, and stale-session recovery that attempts ACP `session/resume` (falling back to `session/load`) before prompt rehydration.
 - Sandboxes the ACP child so it cannot run raw `systemctl`, `reboot`, or `shutdown` against the host; restart requests from the agent are routed through the harness and scheduled gracefully with `systemd-run`.
-- Queues incoming user messages as high-priority wake events when a chat is busy instead of dropping them.
+- Queues incoming user messages as high-priority wake events when a chat is busy instead of dropping them, and pushes the final result through a per-chat outbox consumed by the Telegram `DeliveryWorker` so background turns and subagent completions can still reach the user.
+- Sends a `System: service was restarted.` notice to recently active chats on startup and drops stale `auto_continue` wakes so a crash-restart does not immediately re-run an old continuation.
+- Edits the streaming placeholder with a `(still working, Xm)` liveness suffix, and sends `⏳ Still thinking...` outbox heartbeats for long wake-driven turns, so users know whether to wait or send `/stop`.
 - Runs a `diploid-memory` MCP server with `memory_recall`, `memory_retain`, and
   `memory_promote` tools, plus a shared `memory` skill that lets the agent use them.
 - Exposes a plugin framework for per-chat state plugins; the built-in state plugins

@@ -84,3 +84,9 @@ In all cases the harness sends an acknowledgement, then schedules the actual
 restart with `systemd-run --user --on-active=5s` (or `10s` for child-initiated
 restarts). This gives the HTTP/Telegram response time to be delivered before the
 service goes down.
+
+When the service comes back up, `AgentRuntime.start` sends a direct
+`System: service was restarted.` message to every chat whose latest session was
+updated in the last 24 hours, so users know the bot is back online. It also drops
+stale `auto_continue` wakes from the previous process to avoid immediately
+re-firing an old continuation.

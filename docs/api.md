@@ -193,6 +193,46 @@ Response when idle:
 }
 ```
 
+## `GET /outbox/{chat_id}`
+
+Long-poll the outbound message outbox for a chat. Used by the Telegram
+`DeliveryWorker` (and other outbox consumers) to pick up `ChatResult`s that were
+enqueued by background turns, wake events, or subagent completions.
+
+```bash
+curl "http://127.0.0.1:4003/outbox/test-1?wait=5.0"
+```
+
+- `wait` (float, 0–60 seconds, default `0.0`) — how long to block before
+  returning if the outbox is empty.
+
+Response when a result is available:
+
+```json
+{
+  "chat_id": "test-1",
+  "result": {
+    "reply": "The subagent finished.",
+    "notice": null,
+    "continuation": false,
+    "dispatch_id": "dispatch-abc123",
+    "session_id": null,
+    "session_number": null,
+    "turn_number": null,
+    "metrics": null
+  }
+}
+```
+
+Response when the outbox is empty (or the wait expired):
+
+```json
+{
+  "chat_id": "test-1",
+  "result": null
+}
+```
+
 ## `POST /new/{chat_id}`
 
 Archive the current active session and start a fresh Devin session with an
@@ -685,11 +725,37 @@ Response:
 }
 ```
 
+## `POST /wake`
+
+Trigger or re-trigger a wake for a chat. This is primarily used by the wake
+queue's `TimerService`; it can also be used to test a wake or force an
+`auto_continue`.
+
+```bash
+curl -X POST http://127.0.0.1:4003/wake \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $HARNESS_API_KEY" \
+  -d '{
+    "chat_id": "test-1",
+    "reason": "user_request",
+    "event_id": null,
+    "silent": false
+  }'
+```
+
 ## `POST /subagent`
 
 Start a background ACP subagent for a chat. The subagent runs in a fresh
 AcpEngine, so it survives the parent turn being stopped or killed. When it
 finishes, the harness continues the chat and sends the result.
+
+Optional fields:
+
+- `model` — ACP model for the subagent; defaults to the chat's current model.
+- `cwd` — working directory for the subagent; defaults to the chat's session
+  directory.
+- `acp_timeout` — hard prompt deadline in seconds for the subagent.
+- `context` — a short label stored in the dispatch record.
 
 ```bash
 curl -X POST http://127.0.0.1:4003/subagent \
@@ -708,6 +774,34 @@ Response:
 {
   "reply": "Subagent started. I'll report back when it finishes.",
   "dispatch_id": "dispatch-abc123"
+}
+```
+
+## `GET /subagents/{chat_id}`
+
+List the background subagent dispatches for a chat, including their status,
+ prompt snippet, duration, summary, and timestamps.
+
+```bash
+curl http://127.0.0.1:4003/subagents/test-1
+```
+
+Response:
+
+```json
+{
+  "chat_id": "test-1",
+  "subagents": [
+    {
+      "dispatch_id": "dispatch-abc123",
+      "status": "completed",
+      "type": "subagent",
+      "started_at": 1724000000.0,
+      "finished_at": 1724000300.0,
+      "summary": "Summary of the subagent result",
+      "prompt_snippet": "Research the latest Python release notes..."
+    }
+  ]
 }
 ```
 

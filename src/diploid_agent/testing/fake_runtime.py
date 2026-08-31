@@ -83,6 +83,14 @@ class FakeWakeQueue:
     def pop_due(self, now: float | None = None, lease_seconds: float = 300.0) -> list[Any]:
         return []
 
+    def cancel_older_than(
+        self,
+        before: float,
+        reason: str | None = None,
+        now: float | None = None,
+    ) -> int:
+        return 0
+
 
 class FakePluginRuntime:
     """Minimal, safe runtime surface for the plugin sandbox.

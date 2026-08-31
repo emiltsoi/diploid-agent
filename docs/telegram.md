@@ -36,6 +36,52 @@ The poller is intentionally simple: all business logic lives in the FastAPI
 ingress, so a `/webhook` endpoint could replace the poller without changing
 behavior.
 
+## Queued messages and outbox delivery
+
+When a user sends a message while the chat is already running a turn, the
+harness queues it as a high-priority `user_request` wake. The user immediately
+sees:
+
+```
+I'll get back to you in a moment.
+System: This chat is busy; your message was queued.
+```
+
+When the current turn finishes, the queued message is processed. If
+`harness.notifications.outbox_delivery` is `true` (the default in
+`runtime-overrides.yaml` for the shipped personas), the final `ChatResult` is
+pushed to the harness's per-chat outbox and a `DeliveryWorker` in the Telegram
+poller consumes it via `GET /outbox/{chat_id}`. This lets background turns,
+subagent completions, and wake continuations reach the user even when the
+harness process has no runtime-side notifier.
+
+While the turn is running, the `TurnWorker` edits the placeholder message every
+few seconds. If the model has produced no visible reply text yet, the
+placeholder is updated with a liveness suffix such as `(still working, 1m
+30s)`. For wake-driven (outbox) turns, the harness now also pushes a
+`⏳ Still thinking... (1m 30s)` result to the outbox after 30 seconds, and every
+90 seconds after that, so the user knows the agent is alive.
+
+## Service restart notice
+
+When the systemd service restarts, the harness sends a direct message to each
+recently active chat:
+
+```
+System: service was restarted. You can resume the conversation at any time.
+```
+
+This is sent directly through the Telegram Bot API (not the outbox), because the
+`DeliveryWorker` may not be running yet immediately after startup.
+
+## Stale-wake cleanup
+
+On startup the harness drops `auto_continue` wakes that were created before the
+current process started. This prevents a crash-restart loop from immediately
+re-firing a stale `Continue` turn. Queued user messages (`user_request` wakes),
+`dispatch`, `plan_task_update`, and `plan_completed` wakes are kept; the
+conversation and session state used for resume are not touched.
+
 ## Intermediate messages
 
 When the model pauses while writing a reply — typically while it is running a
@@ -83,7 +129,7 @@ Which file should I edit?
 ```
 ````
 
-The poller strips the block, sends the question as a Telegram message, and attaches a one-time reply keyboard with the options. When you tap a button, the poller rewrites your choice as an explicit answer and sends it to the harness.
+The poller strips the block, sends the question as a Telegram message, and attaches an inline keyboard with the options. When you tap a button, Telegram sends a callback query; the poller rewrites your choice as an explicit answer and sends it to the harness, so no user-facing message is created.
 
 For a simple approval dialog:
 
@@ -115,7 +161,7 @@ Should I continue?
 ```
 ````
 
-The poller will append the cancel button, remove the keyboard when it is pressed, and **not** send a turn to the harness.
+The poller will append the cancel button to the inline keyboard. When you press it, the question is edited to `Cancelled.` and the keyboard is removed, and **no** turn is sent to the harness.
 
 ## Replying to messages
 

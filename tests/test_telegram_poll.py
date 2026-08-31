@@ -1716,7 +1716,7 @@ def test_send_message_forwards_reply_markup(tmp_path: Path) -> None:
 
 
 def test_send_text_extracts_ask_block_and_sends_keyboard(tmp_path: Path) -> None:
-    """A reply with a ```ask block should be sent as a keyboard question."""
+    """A reply with a ```ask block should be sent as an inline keyboard question."""
     poller = TelegramPoller(
         token="dummy",
         state_dir=tmp_path / ".poller-placeholders",
@@ -1742,11 +1742,14 @@ def test_send_text_extracts_ask_block_and_sends_keyboard(tmp_path: Path) -> None
     assert "```ask" not in calls[0].get("text", "")
     assert "a.py" not in calls[0].get("text", "")
     reply_markup = json.loads(calls[0].get("reply_markup", "{}"))
-    assert reply_markup["keyboard"] == [[{"text": "a.py"}], [{"text": "b.py"}]]
+    assert reply_markup["inline_keyboard"] == [
+        [{"text": "a.py", "callback_data": "ask_0"}],
+        [{"text": "b.py", "callback_data": "ask_1"}],
+    ]
 
 
 def test_send_text_cancellable_ask_block(tmp_path: Path) -> None:
-    """A cancellable ask block appends a cancel row to the reply keyboard."""
+    """A cancellable ask block appends a cancel row to the inline keyboard."""
     poller = TelegramPoller(
         token="dummy",
         state_dir=tmp_path / ".poller-placeholders",
@@ -1769,10 +1772,10 @@ def test_send_text_cancellable_ask_block(tmp_path: Path) -> None:
 
     assert sent == [42]
     reply_markup = json.loads(calls[0].get("reply_markup", "{}"))
-    assert reply_markup["keyboard"] == [
-        [{"text": "a.py"}],
-        [{"text": "b.py"}],
-        [{"text": "Cancel"}],
+    assert reply_markup["inline_keyboard"] == [
+        [{"text": "a.py", "callback_data": "ask_0"}],
+        [{"text": "b.py", "callback_data": "ask_1"}],
+        [{"text": "Cancel", "callback_data": "ask_cancel"}],
     ]
 
 
@@ -1877,6 +1880,173 @@ def test_cancel_pending_question(tmp_path: Path) -> None:
     assert sent[0][1] == "Cancelled."
     assert sent[0][2] == {"remove_keyboard": True}
     assert deleted == [(123, 2)]
+
+
+def test_parse_update_callback_query() -> None:
+    """A callback query from an inline keyboard is parsed as a ChatInput."""
+    update = _update(
+        callback_query={
+            "id": "cq1",
+            "from": {"id": 1, "is_bot": False},
+            "message": {
+                "message_id": 42,
+                "chat": {"id": 12345, "type": "private"},
+                "text": "Which file?",
+            },
+            "data": "ask_0",
+        }
+    )
+    parsed = TelegramPoller._parse_update(update)
+    assert parsed is not None
+    assert parsed.chat_id == 12345
+    assert parsed.message_id == 42
+    assert parsed.text == "ask_0"
+    assert parsed.callback_query_id == "cq1"
+    assert parsed.reply_to == "Which file?"
+    assert parsed.reply_to_is_bot is True
+    assert parsed.reply_to_message_id == 42
+
+
+def test_parse_update_skips_bot_callback_query() -> None:
+    """Callback queries from other bots are ignored."""
+    update = _update(
+        callback_query={
+            "id": "cq1",
+            "from": {"id": 0, "is_bot": True},
+            "message": {
+                "message_id": 42,
+                "chat": {"id": 12345, "type": "private"},
+                "text": "Which file?",
+            },
+            "data": "ask_0",
+        }
+    )
+    assert TelegramPoller._parse_update(update) is None
+
+
+def test_answer_ask_callback(tmp_path: Path) -> None:
+    """A valid inline option callback is translated back to the option text."""
+    poller = TelegramPoller(
+        token="dummy",
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    answered: list[str] = []
+    cleared: list[tuple[int, int]] = []
+
+    def fake_answer(callback_query_id: str) -> None:
+        answered.append(callback_query_id)
+
+    def fake_clear(chat_id: int, message_id: int) -> None:
+        cleared.append((chat_id, message_id))
+
+    poller._answer_callback_query = fake_answer  # type: ignore[method-assign]
+    poller._clear_inline_keyboard = fake_clear  # type: ignore[method-assign]
+
+    poller._save_pending_question(
+        123,
+        AskBlock(question="Which file?", options=["a.py", "b.py"]),
+        42,
+    )
+
+    chat_input = ChatInput(
+        chat_id=123,
+        message_id=42,
+        text="ask_0",
+        callback_query_id="cq1",
+    )
+    result = poller._maybe_answer_pending_question(chat_input)
+
+    assert result is not None
+    assert "Which file?" in result.text
+    assert "a.py" in result.text
+    assert result.reply_to == "Which file?"
+    assert result.reply_to_message_id == 42
+    assert result.callback_query_id is None
+    assert poller._load_pending_question(123) is None
+    assert answered == ["cq1"]
+    assert cleared == [(123, 42)]
+
+
+def test_cancel_ask_callback(tmp_path: Path) -> None:
+    """A cancellable inline cancel callback edits the question and starts no turn."""
+    poller = TelegramPoller(
+        token="dummy",
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    answered: list[str] = []
+    cleared: list[tuple[int, int]] = []
+    edited: list[tuple[int, int, str]] = []
+
+    def fake_answer(callback_query_id: str) -> None:
+        answered.append(callback_query_id)
+
+    def fake_clear(chat_id: int, message_id: int) -> None:
+        cleared.append((chat_id, message_id))
+
+    def fake_edit(
+        chat_id: int, message_id: int, text: str, *, parse_mode: Any = None
+    ) -> bool:
+        edited.append((chat_id, message_id, text))
+        return True
+
+    poller._answer_callback_query = fake_answer  # type: ignore[method-assign]
+    poller._clear_inline_keyboard = fake_clear  # type: ignore[method-assign]
+    poller._edit_message_text = fake_edit  # type: ignore[method-assign]
+
+    poller._save_pending_question(
+        123,
+        AskBlock(
+            question="Which file?",
+            options=["a.py", "b.py"],
+            cancellable=True,
+        ),
+        42,
+    )
+
+    chat_input = ChatInput(
+        chat_id=123,
+        message_id=42,
+        text="ask_cancel",
+        callback_query_id="cq1",
+    )
+    result = poller._maybe_answer_pending_question(chat_input)
+
+    assert result is None
+    assert poller._load_pending_question(123) is None
+    assert answered == ["cq1"]
+    assert edited == [(123, 42, "Cancelled.")]
+    assert cleared == [(123, 42)]
+
+
+def test_stale_ask_callback_ignored(tmp_path: Path) -> None:
+    """A callback for an unknown question is ignored and the keyboard is cleared."""
+    poller = TelegramPoller(
+        token="dummy",
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    answered: list[str] = []
+    cleared: list[tuple[int, int]] = []
+
+    def fake_answer(callback_query_id: str) -> None:
+        answered.append(callback_query_id)
+
+    def fake_clear(chat_id: int, message_id: int) -> None:
+        cleared.append((chat_id, message_id))
+
+    poller._answer_callback_query = fake_answer  # type: ignore[method-assign]
+    poller._clear_inline_keyboard = fake_clear  # type: ignore[method-assign]
+
+    chat_input = ChatInput(
+        chat_id=123,
+        message_id=42,
+        text="ask_0",
+        callback_query_id="cq1",
+    )
+    result = poller._maybe_answer_pending_question(chat_input)
+
+    assert result is None
+    assert answered == ["cq1"]
+    assert cleared == [(123, 42)]
 
 
 def test_stream_turn_strips_ask_block(tmp_path: Path, monkeypatch: Any) -> None:

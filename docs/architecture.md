@@ -12,7 +12,7 @@
 ┌────────────────────────────────────────────────────┐
 │ transport/http.py (FastAPI)                         │
 │  /chat /turn /stop /switch-model /status /memory ...│
-│  /subagent                                          │
+│  /outbox /subagents /subagent                       │
 └────────┬───────────────────────────────────────────┘
          │
          ▼
@@ -20,6 +20,8 @@
 │ ConversationHarness                               │
 │  - sessions.jsonl (registry)                      │
 │  - sessions/<chat>/.archive/ (session history)    │
+│  - wake_queue.jsonl (pending wakes)               │
+│  - outbox (per-chat ChatResult queue)             │
 │  - AcpClient                                      │
 │  - MemoryManager                                  │
 │  - McpManager                                     │
@@ -109,7 +111,8 @@ by the composer.
 
 ### `transport/http.py`, `transport/telegram.py`, and `transport/command_handler.py`
 
-- `transport/http.py` is the FastAPI service.
+- `transport/http.py` is the FastAPI service. It exposes the long-poll
+  `GET /outbox/{chat_id}` endpoint for transport-side delivery workers.
 - `transport/telegram.py` is the long-polling Telegram client. It can connect
   either to a local `RuntimeAPI` or to the HTTP harness.
 - `transport/command_handler.py` is the single dispatch layer used by the
@@ -119,15 +122,32 @@ by the composer.
   `if self.runtime is not None` / HTTP branching logic.
 - Each active chat gets a `TurnWorker` thread that starts a turn, polls
   `GET /turn/{chat_id}`, and edits the reply placeholder in place.
+- When `harness.notifications.outbox_delivery` is enabled, a `DeliveryWorker`
+  per chat consumes `GET /outbox/{chat_id}` and delivers enqueued `ChatResult`s
+  (queue acknowledgements, background subagent completions, wake continuations,
+  and liveness heartbeats) to Telegram.
 - If `intermediate_messages` is enabled, the worker commits the currently
   streamed text as a real message when it pauses after a complete sentence, then
   starts a fresh placeholder below it. This keeps tool-call gaps from mashing
   the pre-tool and post-tool text into one message.
-- New messages while a turn is running cancel the active turn and start the next
-  one (steering).
+- New messages while a turn is running are queued as `user_request` wakes when
+  `outbox_delivery` is enabled, or cancel the active turn and start the next one
+  (steering) otherwise.
 - `/stream_thoughts on|off` toggles an optional second placeholder that edits
   with `agent_thought_chunk` text.
 - `systemd/diploid-agent-run.sh` starts both as a pair under one systemd unit.
+
+## Startup behavior
+
+On startup the harness:
+
+1. Loads the session registry and wake queue from disk.
+2. Drops `auto_continue` wakes whose `created_at` is older than the current
+   process start. Queued user messages and other system wakes are kept.
+3. Sends a direct `System: service was restarted.` notice to each chat whose
+   latest session was updated in the last 24 hours.
+4. Starts the `TimerService`, which consumes due wakes and routes them through
+   the appropriate `AgentRuntime.wake` handler.
 
 ## Session lifecycle
 
@@ -140,6 +160,10 @@ for details on `/new`, `/resume`, `/branch`, `/sessions`, and auto-recovery.
 
 1. Telegram/caller sends message for `chat_id`.
 2. `ConversationHarness.process(chat_id, message, reply_to=..., reply_to_is_bot=...)`:
+   - If a turn is already running for `chat_id`, the message is queued as a
+     high-priority `user_request` wake and the user sees an immediate
+     acknowledgement (`I'll get back to you in a moment.`). It runs when the
+     current turn finishes.
    - Loads the active record from `sessions.jsonl`.
    - Determines model.
    - If new, model changed, or the previous turn ended with a hard `timeout`:
@@ -165,7 +189,12 @@ for details on `/new`, `/resume`, `/branch`, `/sessions`, and auto-recovery.
      the (possibly partial) assistant reply to the transcript and includes `session_number`
      in the document ID and Hindsight tags.
    - Appends the updated record, including `last_stop_reason`, to `sessions.jsonl`.
-3. Reply and any system notice are returned to the caller.
+3. Reply and any system notice are returned to the caller. When
+   `harness.notifications.outbox_delivery` is enabled, the `ChatResult` is
+   pushed to the per-chat outbox and the transport's `DeliveryWorker` sends it.
+   For wake-driven and background turns, the harness also sends periodic
+   liveness heartbeats (`⏳ Still thinking...`) if the model is only thinking
+   and has produced no visible reply text.
 
 ## Data flow for `/stop`
 

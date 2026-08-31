@@ -202,3 +202,29 @@ class WakeQueue:
             for event_id in to_remove:
                 self._in_memory.pop(event_id)
             return len(to_remove)
+
+    def cancel_older_than(
+        self,
+        before: float,
+        reason: str | None = None,
+        now: float | None = None,
+    ) -> int:
+        """Remove ready events created before ``before`` and return the count.
+
+        Currently leased events are left alone so a wake that is being
+        processed is not cancelled mid-flight.
+        """
+        if now is None:
+            now = time.time()
+        with self._transaction():
+            to_remove = [
+                event_id
+                for event_id, event in self._in_memory.items()
+                if event.ready
+                and event.created_at < before
+                and (reason is None or event.reason == reason)
+                and (event.leased_until is None or event.leased_until <= now)
+            ]
+            for event_id in to_remove:
+                self._in_memory.pop(event_id)
+            return len(to_remove)

@@ -72,17 +72,24 @@ reports a result. The result is injected into the prompt as a system notice.
 
 ## Notification delivery
 
-The reply is delivered through a `Notifier`:
+The reply is delivered through a `Notifier` or through the per-chat outbox:
 
 - `NoopNotifier` — does nothing. This is the default when
   `harness.notifications.enabled` is `false`.
 - `TelegramNotifier` — calls `sendMessage` on the Telegram Bot API. Used when
-  `harness.telegram.token` is set and no webhook is configured.
+  `harness.telegram.token` is set and no webhook is configured, unless outbox
+  delivery is enabled.
 - `WebhookNotifier` — posts the chat id and text as JSON to the configured
   `harness.notifications.webhook_url`.
+- **Outbox delivery** — when `harness.notifications.outbox_delivery` is `true`,
+  the runtime enqueues `ChatResult`s in a per-chat outbox and the Telegram
+  `DeliveryWorker` consumes them via `GET /outbox/{chat_id}`. This is the default
+  for the shipped personas and is required for background turns, subagent
+  completions, and queued-user-message results to reach the user without a
+  runtime-side `notifier`.
 
 `harness.notifications.enabled` is the master switch. If it is off, every
-notifier becomes a no-op regardless of token or webhook settings.
+notifier and the outbox become no-ops.
 
 ## Memory
 

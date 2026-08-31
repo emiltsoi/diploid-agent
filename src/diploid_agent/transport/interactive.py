@@ -9,6 +9,9 @@ from typing import Any
 
 ASK_FENCE_RE = re.compile(r"^```ask\s*\n([\s\S]*?)\n```\s*$", re.MULTILINE)
 
+ASK_CALLBACK_PREFIX = "ask_"
+ASK_CANCEL_CALLBACK_DATA = f"{ASK_CALLBACK_PREFIX}cancel"
+
 
 @dataclass(frozen=True)
 class AskBlock:
@@ -41,6 +44,49 @@ def build_reply_keyboard(
 def build_keyboard_remove() -> dict[str, Any]:
     """Return a ReplyKeyboardRemove markup."""
     return {"remove_keyboard": True}
+
+
+def build_inline_keyboard(
+    options: list[str], cancel: str | None = None, *, prefix: str = ASK_CALLBACK_PREFIX
+) -> dict[str, Any]:
+    """Return a Telegram InlineKeyboardMarkup for a list of option strings.
+
+    Each option gets a short, deterministic ``callback_data`` value so the
+    option text can be long without exceeding Telegram's 64-byte limit.
+    If ``cancel`` is provided, a final row with a dedicated cancel callback is
+    added.
+    """
+    keyboard: list[list[dict[str, Any]]] = [
+        [{"text": opt, "callback_data": f"{prefix}{i}"}] for i, opt in enumerate(options)
+    ]
+    if cancel and cancel not in options:
+        keyboard.append([{"text": cancel, "callback_data": f"{prefix}cancel"}])
+    return {"inline_keyboard": keyboard}
+
+
+def build_empty_inline_keyboard() -> dict[str, Any]:
+    """Return an empty InlineKeyboardMarkup to remove an inline keyboard."""
+    return {"inline_keyboard": []}
+
+
+def is_ask_cancel_callback(data: str, *, prefix: str = ASK_CALLBACK_PREFIX) -> bool:
+    """Return True if ``data`` is the inline cancel callback."""
+    return data == f"{prefix}cancel"
+
+
+def parse_ask_callback_index(
+    data: str, *, prefix: str = ASK_CALLBACK_PREFIX
+) -> int | None:
+    """Parse a callback_data string into its option index, or None."""
+    if not data.startswith(prefix):
+        return None
+    tail = data[len(prefix) :]
+    if tail == "cancel":
+        return None
+    try:
+        return int(tail)
+    except ValueError:
+        return None
 
 
 def extract_ask_block(text: str) -> tuple[str, AskBlock | None]:

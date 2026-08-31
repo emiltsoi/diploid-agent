@@ -44,9 +44,12 @@ from diploid_agent.transport.base import (
 from diploid_agent.transport.command_handler import CommandHandler, _coerce_chat_result
 from diploid_agent.transport.interactive import (
     AskBlock,
+    build_empty_inline_keyboard,
+    build_inline_keyboard,
     build_keyboard_remove,
-    build_reply_keyboard,
     extract_ask_block,
+    is_ask_cancel_callback,
+    parse_ask_callback_index,
 )
 from diploid_agent.transport.telegram_format import (
     _prefix_within_utf16_limit,
@@ -162,6 +165,7 @@ class ChatInput:
     reply_to: str | None = None
     reply_to_is_bot: bool | None = None
     reply_to_message_id: int | None = None
+    callback_query_id: str | None = None
 
 
 class TurnWorker(threading.Thread):
@@ -1034,6 +1038,29 @@ class TelegramPoller:
         except Exception:
             logger.exception("Failed to delete Telegram message")
 
+    def _answer_callback_query(self, callback_query_id: str) -> None:
+        """Answer a Telegram callback query so the client stops showing a spinner."""
+        try:
+            self._api("answerCallbackQuery", callback_query_id=callback_query_id)
+        except Exception:
+            logger.exception("Failed to answer callback query")
+
+    def _clear_inline_keyboard(self, chat_id: int, message_id: int) -> None:
+        """Remove the inline keyboard from an existing message."""
+        try:
+            self._api(
+                "editMessageReplyMarkup",
+                chat_id=chat_id,
+                message_id=message_id,
+                reply_markup=json.dumps(build_empty_inline_keyboard()),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to clear inline keyboard in chat %s message %s",
+                chat_id,
+                message_id,
+            )
+
     def _chat_dir(self, chat_id: int) -> Path:
         """Return the per-chat session directory, mirroring the harness layout."""
         safe = str(chat_id).replace("/", "_")
@@ -1175,6 +1202,13 @@ class TelegramPoller:
         is started.
         """
         pending = self._load_pending_question(chat_input.chat_id)
+
+        # Callback queries come from inline keyboards. They have no user-facing
+        # message, so a cancel can be completely silent and a valid answer is
+        # translated back to the option text before being sent to the harness.
+        if chat_input.callback_query_id is not None:
+            return self._handle_ask_callback(chat_input, pending)
+
         if pending is None:
             return chat_input
 
@@ -1213,6 +1247,65 @@ class TelegramPoller:
             reply_to=pending["question"],
             reply_to_is_bot=True,
             reply_to_message_id=pending["message_id"],
+        )
+
+    def _handle_ask_callback(
+        self,
+        chat_input: ChatInput,
+        pending: dict[str, Any] | None,
+    ) -> ChatInput | None:
+        """Handle an inline-keyboard button press for a pending ask block.
+
+        Cancels are silent: the question is edited to ``Cancelled.`` and the
+        keyboard is removed. Valid answers are translated back to the option
+        text and sent to the harness. Unknown/stale callbacks are ignored.
+        """
+        data = chat_input.text
+        self._answer_callback_query(chat_input.callback_query_id)
+
+        if pending is None:
+            # Stale callback with no tracked question. Remove the keyboard so
+            # the user cannot press it again.
+            self._clear_inline_keyboard(chat_input.chat_id, chat_input.message_id)
+            return None
+
+        question_message_id = pending.get("message_id")
+
+        if pending.get("cancellable") and is_ask_cancel_callback(data):
+            self._remove_pending_question(chat_input.chat_id)
+            if question_message_id:
+                self._edit_message_text(
+                    chat_input.chat_id, question_message_id, "Cancelled."
+                )
+                self._clear_inline_keyboard(
+                    chat_input.chat_id, question_message_id
+                )
+            return None
+
+        index = parse_ask_callback_index(data)
+        if index is None or index < 0 or index >= len(pending["options"]):
+            self._remove_pending_question(chat_input.chat_id)
+            if question_message_id:
+                self._clear_inline_keyboard(
+                    chat_input.chat_id, question_message_id
+                )
+            return None
+
+        selected = pending["options"][index]
+        self._remove_pending_question(chat_input.chat_id)
+        if question_message_id:
+            self._clear_inline_keyboard(
+                chat_input.chat_id, question_message_id
+            )
+        return ChatInput(
+            chat_id=chat_input.chat_id,
+            message_id=chat_input.message_id,
+            text=f'The user answered the question "{pending["question"]}" '
+            f"by selecting: {selected}",
+            reply_to=pending["question"],
+            reply_to_is_bot=True,
+            reply_to_message_id=question_message_id,
+            callback_query_id=None,
         )
 
     def _cleanup_orphaned_placeholders(self) -> None:
@@ -1430,7 +1523,7 @@ class TelegramPoller:
             reply_markup: dict[str, Any] | None = None
             if ask_block is not None and i == 1 and total == 1:
                 cancel = ask_block.cancel_label if ask_block.cancellable else None
-                reply_markup = build_reply_keyboard(ask_block.options, cancel=cancel)
+                reply_markup = build_inline_keyboard(ask_block.options, cancel=cancel)
 
             if i == 1 and first_message_id is not None:
                 if self._edit_message_text(
@@ -1483,6 +1576,32 @@ class TelegramPoller:
     @staticmethod
     def _parse_update(update: dict) -> ChatInput | None:
         """Extract a normalized ChatInput from a Telegram update, or None."""
+        callback_query = update.get("callback_query")
+        if callback_query:
+            cq_id = callback_query.get("id")
+            from_user = callback_query.get("from", {})
+            if from_user.get("is_bot"):
+                return None
+            message = callback_query.get("message") or {}
+            chat = message.get("chat", {})
+            chat_id = chat.get("id")
+            message_id = message.get("message_id")
+            data = callback_query.get("data")
+            if not chat_id or not message_id or data is None:
+                return None
+            # The inline keyboard is attached to the bot's own question message,
+            # so the callback data is the user's answer and the original text is
+            # the reply-to context.
+            return ChatInput(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=data,
+                reply_to=message.get("text") or message.get("caption"),
+                reply_to_is_bot=True,
+                reply_to_message_id=message_id,
+                callback_query_id=cq_id,
+            )
+
         message = update.get("message") or update.get("edited_message") or {}
         chat = message.get("chat", {})
         chat_id = chat.get("id")
@@ -1515,6 +1634,7 @@ class TelegramPoller:
             reply_to=reply_to_text,
             reply_to_is_bot=reply_to_is_bot,
             reply_to_message_id=reply_to_message_id,
+            callback_query_id=None,
         )
 
     def _send_typing(self, chat_id: int) -> None:

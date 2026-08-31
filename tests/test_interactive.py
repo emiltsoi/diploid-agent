@@ -1,9 +1,13 @@
 """Tests for interactive question helpers."""
 
 from diploid_agent.transport.interactive import (
+    build_empty_inline_keyboard,
+    build_inline_keyboard,
     build_keyboard_remove,
     build_reply_keyboard,
     extract_ask_block,
+    is_ask_cancel_callback,
+    parse_ask_callback_index,
 )
 
 
@@ -94,3 +98,47 @@ def test_extract_ask_block_custom_cancel_label() -> None:
 def test_build_keyboard_remove() -> None:
     markup = build_keyboard_remove()
     assert markup == {"remove_keyboard": True}
+
+
+def test_build_inline_keyboard() -> None:
+    markup = build_inline_keyboard(["A", "B"])
+    assert markup["inline_keyboard"] == [
+        [{"text": "A", "callback_data": "ask_0"}],
+        [{"text": "B", "callback_data": "ask_1"}],
+    ]
+
+
+def test_build_inline_keyboard_with_cancel() -> None:
+    markup = build_inline_keyboard(["A", "B"], cancel="Cancel")
+    assert markup["inline_keyboard"] == [
+        [{"text": "A", "callback_data": "ask_0"}],
+        [{"text": "B", "callback_data": "ask_1"}],
+        [{"text": "Cancel", "callback_data": "ask_cancel"}],
+    ]
+
+
+def test_build_inline_keyboard_skips_duplicate_cancel() -> None:
+    markup = build_inline_keyboard(["A", "Cancel"], cancel="Cancel")
+    assert markup["inline_keyboard"] == [
+        [{"text": "A", "callback_data": "ask_0"}],
+        [{"text": "Cancel", "callback_data": "ask_1"}],
+    ]
+
+
+def test_build_empty_inline_keyboard() -> None:
+    markup = build_empty_inline_keyboard()
+    assert markup == {"inline_keyboard": []}
+
+
+def test_is_ask_cancel_callback() -> None:
+    assert is_ask_cancel_callback("ask_cancel") is True
+    assert is_ask_cancel_callback("ask_0") is False
+    assert is_ask_cancel_callback("other") is False
+
+
+def test_parse_ask_callback_index() -> None:
+    assert parse_ask_callback_index("ask_0") == 0
+    assert parse_ask_callback_index("ask_1") == 1
+    assert parse_ask_callback_index("ask_cancel") is None
+    assert parse_ask_callback_index("other_0") is None
+    assert parse_ask_callback_index("ask_not_a_number") is None
