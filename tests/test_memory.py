@@ -22,6 +22,14 @@ def test_file_backend_append_and_load_transcript(tmp_path: Path) -> None:
     assert entries[1] == {"role": "assistant", "content": "hi there"}
 
 
+def test_file_backend_append_system_note(tmp_path: Path) -> None:
+    backend = FileMemoryBackend(tmp_path, "chat-1")
+    backend.append_system_note("[mesh-dsn] delivered")
+    entries = backend.load_transcript()
+    assert len(entries) == 1
+    assert entries[0] == {"role": "system", "content": "[mesh-dsn] delivered"}
+
+
 def test_file_backend_retain_appends_to_memory(tmp_path: Path) -> None:
     backend = FileMemoryBackend(tmp_path, "chat-1")
     item = MemoryItem(content="a promoted fact", tags=["memory"])

@@ -32,6 +32,19 @@ def test_agent_runtime_has_wake_queue_and_instance_manager(tmp_path: Path) -> No
     assert runtime.instance_manager is not None
 
 
+def test_record_mesh_message_persists_without_turn(tmp_path: Path) -> None:
+    runtime = AgentRuntime(_make_config(tmp_path))
+    runtime.record_mesh_message(
+        "mesh:hermes",
+        "[hermes] delivery status",
+        {"sender": "hermes", "reply": "no", "message_id": "m-1"},
+    )
+    assert "mesh:hermes" not in runtime._active_turns
+    mm = runtime._memory_manager("mesh:hermes")
+    transcript = mm._load_transcript()
+    assert any("[hermes] delivery status" in e.get("content", "") for e in transcript)
+
+
 def test_wake_silent_does_not_notify(tmp_path: Path, monkeypatch) -> None:
     runtime = AgentRuntime(_make_config(tmp_path))
     sent = []

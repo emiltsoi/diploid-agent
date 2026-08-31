@@ -103,6 +103,13 @@ class MemoryBackend(abc.ABC):
     def stats(self) -> dict[str, Any]:
         """Return backend statistics."""
 
+    def append_system_note(self, text: str) -> None:
+        """Append a system/mesh note to the transcript with no assistant reply.
+
+        Backends that do not support direct transcript notes may leave this as a
+        no-op; FileMemoryBackend and HindsightMemoryBackend override it.
+        """
+
     def close(self) -> None:
         """Release any resources held by the backend."""
 
@@ -194,6 +201,12 @@ class FileMemoryBackend(MemoryBackend):
         with open(self._transcript_path, "a") as f:
             f.write(json.dumps({"role": "user", "content": user_message}) + "\n")
             f.write(json.dumps({"role": "assistant", "content": assistant_reply}) + "\n")
+
+    def append_system_note(self, text: str) -> None:
+        """Append a single system/mesh note to the transcript."""
+        self._session_dir.mkdir(parents=True, exist_ok=True)
+        with open(self._transcript_path, "a") as f:
+            f.write(json.dumps({"role": "system", "content": text}) + "\n")
 
     def retain(self, items: list[MemoryItem]) -> None:
         """Append memory/summary items to MEMORY.md; turns go to transcript."""
@@ -586,6 +599,11 @@ class HindsightMemoryBackend(MemoryBackend):
             logger.warning("Hindsight stats failed: %s", exc)
         return {"backend": "hindsight", "reachable": False}
 
+    def append_system_note(self, text: str) -> None:
+        """Append a note locally and queue it for hindsight if available."""
+        if self._fallback is not None:
+            self._fallback.append_system_note(text)
+
     def close(self) -> None:
         self._client.close()
 
@@ -783,6 +801,10 @@ class MemoryManager:
         with open(path, "a") as f:
             f.write(json.dumps({"role": "user", "content": user_message}) + "\n")
             f.write(json.dumps({"role": "assistant", "content": assistant_content}) + "\n")
+
+    def append_mesh_note(self, text: str) -> None:
+        """Append a mesh/system note to the current chat's transcript."""
+        self.backend.append_system_note(text)
 
     def _short_term_context(self, model: str | None = None) -> str:
         if not self.memory_config.include_short_term:

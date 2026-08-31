@@ -2646,6 +2646,37 @@ class AgentRuntime(RuntimeAPI):
     def restart(self, chat_id: str) -> ChatResult:
         return self.turn_controller.restart(chat_id)
 
+    def record_mesh_message(
+        self,
+        chat_id: str,
+        display_text: str,
+        mesh_payload: dict[str, Any],
+    ) -> ChatResult:
+        """Persist a terminal mesh message (e.g. a DSN) without running a turn.
+
+        Notifies plugins with a non-mesh wake event so the mesh plugin does not
+        overwrite `current_mesh` for terminal messages, and appends a transcript
+        note so the context is not lost.
+        """
+        with self._lock:
+            record = self._active_record(chat_id)
+
+        event = WakeEvent(
+            id=f"mesh:{mesh_payload.get('message_id', 'unknown')}",
+            chat_id=chat_id,
+            reason="mesh_dsn",
+            priority=1,
+            scheduled_at=time.time(),
+            payload={"user_message": display_text, "mesh_meta": mesh_payload},
+            silent=True,
+            ready=False,
+        )
+        self._plugins.on_waking(chat_id, record, time.time(), wake_event=event)
+
+        self._memory_manager(chat_id).append_mesh_note(display_text)
+
+        return ChatResult(reply="", notice=None)
+
     def graceful_service_restart(
         self,
         chat_id: str,
