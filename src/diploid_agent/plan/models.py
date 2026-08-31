@@ -52,6 +52,10 @@ class Task(BaseModel):
     completed_at: float | None = None
     created_at: float = Field(default_factory=time.time)
     cwd: Path | None = None
+    stop_reason: str | None = None
+    cancelled: bool = False
+    partial: bool = False
+    timed_out: bool = False
     chat_id: str | None = None
     acp_model: str | None = None
     acp_timeout: float | None = None

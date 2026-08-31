@@ -9,6 +9,7 @@ import time
 import traceback
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from diploid_agent.config import Config, TaskConfig
 from diploid_agent.engine import AcpEngine, AgentEngine, TurnRequest
@@ -131,10 +132,11 @@ class TaskEngine:
                     logger.exception("Task %s on_task_start failed", task_id)
 
             try:
-                result, log, exit_code = self._execute(task)
+                result, log, exit_code, extra = self._execute(task)
+                extra_kwargs = extra or {}
                 if exit_code == 0:
                     completed = self.plan_manager.complete_task(
-                        plan_id, task_id, result=result, log=log
+                        plan_id, task_id, result=result, log=log, **extra_kwargs
                     )
                     if completed:
                         self.event_bus.post(
@@ -144,12 +146,16 @@ class TaskEngine:
                                     "plan_id": plan_id,
                                     "task_id": task_id,
                                     "result": result,
+                                    "log": log,
+                                    **extra_kwargs,
                                 },
                             )
                         )
                         self._start_ready_dependents(plan_id)
                 else:
-                    failed = self.plan_manager.fail_task(plan_id, task_id, log=log or result)
+                    failed = self.plan_manager.fail_task(
+                        plan_id, task_id, log=log or result, **extra_kwargs
+                    )
                     if failed:
                         self.event_bus.post(
                             Event(
@@ -158,6 +164,7 @@ class TaskEngine:
                                     "plan_id": plan_id,
                                     "task_id": task_id,
                                     "log": log or result,
+                                    **extra_kwargs,
                                 },
                             )
                         )
@@ -185,16 +192,16 @@ class TaskEngine:
             except Exception:
                 logger.exception("Task %s on_task_done failed", task_id)
 
-    def _execute(self, task: Task) -> tuple[str, str, int]:
+    def _execute(self, task: Task) -> tuple[str, str, int, dict[str, Any] | None]:
         if task.type == TaskType.SHELL:
             return self._run_shell(task)
         if task.type in (TaskType.ACP, TaskType.SUBAGENT):
             return self._run_acp(task)
         if task.type == TaskType.NOOP:
-            return "noop", "", 0
-        return f"Unknown task type {task.type}", "", -1
+            return "noop", "", 0, None
+        return f"Unknown task type {task.type}", "", -1, None
 
-    def _run_shell(self, task: Task) -> tuple[str, str, int]:
+    def _run_shell(self, task: Task) -> tuple[str, str, int, dict[str, Any] | None]:
         cwd = task.cwd if task.cwd is not None else Path(os.getcwd())
         timeout = self._task_config.shell_timeout
         try:
@@ -207,16 +214,16 @@ class TaskEngine:
                 timeout=timeout,
                 check=False,
             )
-            return proc.stdout, proc.stderr, proc.returncode
+            return proc.stdout, proc.stderr, proc.returncode, None
         except subprocess.TimeoutExpired:
-            return "", f"Timed out after {timeout}s", -1
+            return "", f"Timed out after {timeout}s", -1, {"stop_reason": "timeout", "timed_out": True}
         except (OSError, ValueError) as exc:
-            return "", str(exc), -1
+            return "", str(exc), -1, {"stop_reason": "failed"}
 
-    def _run_acp(self, task: Task) -> tuple[str, str, int]:
+    def _run_acp(self, task: Task) -> tuple[str, str, int, dict[str, Any] | None]:
         prompt_text = task.prompt or task.command
         if not prompt_text:
-            return "ACP task has no prompt or command", "", -1
+            return "ACP task has no prompt or command", "", -1, {"stop_reason": "failed"}
 
         cwd = task.cwd if task.cwd is not None else Path(os.getcwd())
 
@@ -225,7 +232,7 @@ class TaskEngine:
         # an explicit non-ACP engine has been injected (e.g. FakeAgentEngine in
         # tests).
         if self.config is None:
-            return "ACP engine not configured", "", -1
+            return "ACP engine not configured", "", -1, {"stop_reason": "failed"}
 
         if self.engine is None or isinstance(self.engine, AcpEngine):
             api_key = self.config.secrets.windsurf_api_key if self.config.secrets else None
@@ -266,17 +273,50 @@ class TaskEngine:
             soft_timeout=soft_timeout,
         )
         try:
-            result = engine.prompt(request)
-            return result.reply, "", 0
-        except (RuntimeError, TimeoutError) as exc:
+            turn_result = engine.prompt(request)
+        except TimeoutError as exc:
             logger.exception("ACP task %s timed out", task.id)
-            return (str(exc), "", -1)
-        except Exception as exc:
+            return (str(exc), "", -1, {"stop_reason": "timeout", "timed_out": True})
+        except (RuntimeError, Exception) as exc:
             logger.exception("ACP task %s failed", task.id)
-            return (str(exc), "", -1)
+            return (str(exc), "", -1, {"stop_reason": "failed"})
         finally:
             if engine is not self.engine:
                 engine.close()
+
+        stop_reason: str | None = None
+        cancelled = turn_result.cancelled and not turn_result.timed_out
+        timed_out = turn_result.timed_out
+        partial = turn_result.partial
+
+        if timed_out:
+            stop_reason = "timeout"
+        elif cancelled:
+            stop_reason = "cancelled"
+        elif turn_result.stop_reason in ("timeout", "cancelled"):
+            stop_reason = turn_result.stop_reason
+            if stop_reason == "timeout":
+                timed_out = True
+            else:
+                cancelled = True
+            partial = True
+
+        log = ""
+        if stop_reason == "timeout":
+            log = "Subagent stopped early: timed out"
+        elif stop_reason == "cancelled":
+            log = "Subagent stopped early: cancelled"
+
+        extra: dict[str, Any] | None = None
+        if stop_reason is not None or partial or cancelled or timed_out:
+            extra = {
+                "stop_reason": stop_reason,
+                "cancelled": cancelled,
+                "partial": partial,
+                "timed_out": timed_out,
+            }
+
+        return turn_result.reply, log, 0, extra
 
     def _start_ready_dependents(self, plan_id: str) -> None:
         """Auto-start any tasks that became ready after the last state change."""

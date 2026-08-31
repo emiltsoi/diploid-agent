@@ -987,7 +987,7 @@ class TurnController:
             dispatch = self.runtime.dispatch_store.get(dispatch_id)
             if dispatch is None:
                 return ChatResult(reply="Unknown dispatch.")
-            if dispatch.status != DispatchStatus.PENDING:
+            if dispatch.status in (DispatchStatus.COMPLETED, DispatchStatus.FAILED):
                 return ChatResult(reply="Dispatch already completed.")
 
             dispatch.result = result
@@ -1002,6 +1002,10 @@ class TurnController:
             )
             dispatch.result = continue_ctx.result
             result = continue_ctx.result
+
+            # Persist the full result and a short summary so the continuation prompt
+            # can reference a clean file path even for manually-continued dispatches.
+            self.runtime._persist_subagent_result(dispatch, result)
 
             chat_id = dispatch.chat_id
             if chat_id in self.runtime._active_turns:

@@ -222,6 +222,11 @@ class PlanManager:
         task_id: str,
         result: str = "",
         log: str = "",
+        *,
+        stop_reason: str | None = None,
+        cancelled: bool = False,
+        partial: bool = False,
+        timed_out: bool = False,
     ) -> Task | None:
         with self._transaction():
             plan = self._plans.get(plan_id)
@@ -234,12 +239,26 @@ class PlanManager:
             task.result = result
             task.log = log
             task.completed_at = time.time()
+            task.stop_reason = stop_reason
+            task.cancelled = cancelled
+            task.partial = partial
+            task.timed_out = timed_out
             self._resolve_statuses(plan)
             self._update_plan_status(plan)
             plan.updated_at = time.time()
             return task
 
-    def fail_task(self, plan_id: str, task_id: str, log: str = "") -> Task | None:
+    def fail_task(
+        self,
+        plan_id: str,
+        task_id: str,
+        log: str = "",
+        *,
+        stop_reason: str | None = None,
+        cancelled: bool = False,
+        partial: bool = False,
+        timed_out: bool = False,
+    ) -> Task | None:
         with self._transaction():
             plan = self._plans.get(plan_id)
             if plan is None:
@@ -250,6 +269,10 @@ class PlanManager:
             task.status = TaskStatus.FAILED
             task.log = log
             task.completed_at = time.time()
+            task.stop_reason = stop_reason
+            task.cancelled = cancelled
+            task.partial = partial
+            task.timed_out = timed_out
             self._resolve_statuses(plan)
             self._update_plan_status(plan)
             plan.updated_at = time.time()

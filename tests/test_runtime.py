@@ -23,6 +23,9 @@ from diploid_agent.dispatch import DispatchStatus
 from diploid_agent.engine.base import AgentEngine, TurnRequest, TurnResult
 from diploid_agent.engine.fake import FakeAgentEngine
 from diploid_agent.harness import ConversationHarness
+from diploid_agent.models import WakeEvent
+from diploid_agent.notifier import NoopNotifier
+from diploid_agent.plan.models import Task, TaskStatus, TaskType
 from diploid_agent.runtime import AgentRuntime, TurnController
 from diploid_agent.transport.base import RuntimeAPI
 
@@ -382,3 +385,112 @@ def test_auto_continue_suppression(tmp_path: Path) -> None:
     assert runtime.is_auto_continue_suppressed("chat-1") is True
     runtime.suppress_auto_continue(seconds=10)
     assert runtime.is_auto_continue_suppressed("chat-2") is True
+
+
+def _enqueue_dispatch_wake(runtime: AgentRuntime, dispatch_id: str) -> None:
+    wake_id = f"wake-{dispatch_id}"
+    runtime.wake_queue.enqueue(
+        WakeEvent(
+            id=wake_id,
+            chat_id="chat-1",
+            reason="dispatch",
+            priority=1,
+            scheduled_at=time.time(),
+            created_at=time.time(),
+            silent=False,
+            payload={"dispatch_id": dispatch_id},
+            ready=False,
+        )
+    )
+
+
+def test_complete_subagent_task_persists_full_result(tmp_path: Path) -> None:
+    """_complete_subagent_task writes the full result and leaves the dispatch ready."""
+    runtime = AgentRuntime(_make_config(tmp_path))
+    try:
+        dispatch = runtime.dispatch_store.add("chat-1", "session-1", context="test")
+        _enqueue_dispatch_wake(runtime, dispatch.id)
+
+        task = Task(
+            name="subagent",
+            type=TaskType.SUBAGENT,
+            chat_id="chat-1",
+            dispatch_id=dispatch.id,
+            status=TaskStatus.DONE,
+            result="# Summary\n\nfull subagent result",
+            started_at=time.time() - 10,
+            completed_at=time.time(),
+        )
+        runtime._complete_subagent_task(task)
+
+        dispatch = runtime.dispatch_store.get(dispatch.id)
+        assert dispatch is not None
+        assert dispatch.status == DispatchStatus.PENDING
+        assert dispatch.result == "# Summary\n\nfull subagent result"
+        assert dispatch.summary == "Summary"
+        assert dispatch.full_result_path is not None
+        result_file = Path(dispatch.full_result_path)
+        assert result_file.exists()
+        assert result_file.read_text() == "# Summary\n\nfull subagent result"
+
+        wake = runtime.wake_queue.get(f"wake-{dispatch.id}")
+        assert wake is not None
+        assert wake.ready
+    finally:
+        runtime.shutdown()
+
+
+def test_complete_subagent_task_timeout_notifies_and_marks_status(tmp_path: Path) -> None:
+    """A timed-out subagent is marked TIMEOUT, persisted, and the user is notified."""
+    runtime = AgentRuntime(_make_config(tmp_path))
+
+    class _FakeNotifier(NoopNotifier):
+        def __init__(self) -> None:
+            self.sent: list[tuple[str, str]] = []
+
+        def send(self, chat_id: str, text: str, *, reply_to_message_id: int | None = None) -> None:
+            self.sent.append((chat_id, text))
+
+    fake = _FakeNotifier()
+    runtime.notifier = fake  # type: ignore[assignment]
+
+    try:
+        dispatch = runtime.dispatch_store.add("chat-1", "session-1", context="timeout test")
+        _enqueue_dispatch_wake(runtime, dispatch.id)
+
+        task = Task(
+            name="subagent",
+            type=TaskType.SUBAGENT,
+            chat_id="chat-1",
+            dispatch_id=dispatch.id,
+            status=TaskStatus.DONE,
+            result="partial result",
+            log="Subagent stopped early: timed out",
+            stop_reason="timeout",
+            timed_out=True,
+            partial=True,
+            started_at=time.time() - 60,
+            completed_at=time.time(),
+        )
+        runtime._complete_subagent_task(task)
+
+        dispatch = runtime.dispatch_store.get(dispatch.id)
+        assert dispatch is not None
+        assert dispatch.status == DispatchStatus.TIMEOUT
+        assert dispatch.stop_reason == "timeout"
+        assert dispatch.timed_out is True
+        assert dispatch.partial is True
+        assert dispatch.full_result_path is not None
+        assert "partial result" in Path(dispatch.full_result_path).read_text()
+
+        assert len(fake.sent) == 1
+        assert fake.sent[0][0] == "chat-1"
+        assert "timed out" in fake.sent[0][1]
+        assert "Partial summary:" in fake.sent[0][1]
+
+        wake = runtime.wake_queue.get(f"wake-{dispatch.id}")
+        assert wake is not None
+        assert wake.ready
+        assert runtime._subagent_status_name(task, dispatch) == "timeout"
+    finally:
+        runtime.shutdown()

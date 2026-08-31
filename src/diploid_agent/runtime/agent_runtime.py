@@ -1561,6 +1561,10 @@ class AgentRuntime(RuntimeAPI):
             payload["task_id"],
             result=payload.get("result", ""),
             log=payload.get("log", ""),
+            stop_reason=payload.get("stop_reason"),
+            cancelled=payload.get("cancelled", False),
+            partial=payload.get("partial", False),
+            timed_out=payload.get("timed_out", False),
         )
         if task is None:
             logger.warning(
@@ -1584,6 +1588,10 @@ class AgentRuntime(RuntimeAPI):
             payload["plan_id"],
             payload["task_id"],
             log=payload.get("log", payload.get("error", "")),
+            stop_reason=payload.get("stop_reason"),
+            cancelled=payload.get("cancelled", False),
+            partial=payload.get("partial", False),
+            timed_out=payload.get("timed_out", False),
         )
         if task is None:
             logger.warning(
@@ -2352,7 +2360,11 @@ class AgentRuntime(RuntimeAPI):
 
             if reason == "dispatch" and "dispatch_id" in payload:
                 dispatch = self.dispatch_store.get(payload["dispatch_id"])
-                if dispatch and dispatch.status == DispatchStatus.PENDING:
+                if dispatch and dispatch.status in (
+                    DispatchStatus.PENDING,
+                    DispatchStatus.TIMEOUT,
+                    DispatchStatus.CANCELLED,
+                ):
                     return self.continue_turn(
                         payload["dispatch_id"],
                         payload.get("result", dispatch.result or ""),
@@ -2688,12 +2700,39 @@ class AgentRuntime(RuntimeAPI):
             dispatch_id=dispatch.id,
         )
 
-    def _complete_subagent_task(self, task: Task) -> None:
-        """Store the subagent result and make the wake ready.
+    def _persist_subagent_result(self, dispatch: Dispatch, result: str) -> Path | None:
+        """Write the full subagent result to the chat session dir and update the dispatch.
 
-        The dispatch is kept PENDING so `continue_turn` can consume it.  The
-        TimerService will pick up the wake and call `continue_turn`, which
-        completes the dispatch and starts a real new turn.
+        Returns the path to the written file, or ``None`` on write failure.
+        """
+        chat_id = dispatch.chat_id
+        chat_dir = self._chat_dir(chat_id)
+        result_dir = chat_dir / "subagent-results"
+        result_dir.mkdir(parents=True, exist_ok=True)
+        result_path = result_dir / f"subagent-{dispatch.id}.md"
+        try:
+            result_path.write_text(result, encoding="utf-8")
+        except Exception:
+            logger.exception("Failed to write subagent result to %s", result_path)
+            return None
+
+        summary = self._extract_summary(result, max_chars=240)
+        self.dispatch_store.set_result(
+            dispatch.id,
+            result,
+            summary=summary,
+            finished_at=time.time(),
+            full_result_path=str(result_path),
+        )
+        return result_path
+
+    def _complete_subagent_task(self, task: Task) -> None:
+        """Store the subagent result, persist the full output, and make the wake ready.
+
+        The dispatch is kept PENDING for normal completions so `continue_turn`
+        can consume it. For timeout/cancelled subagents the status is updated to
+        TIMEOUT/CANCELLED, but `continue_turn` and `wake` still allow those
+        states to proceed. The full result is written to the chat session dir.
         """
         if task.dispatch_id is None or task.chat_id is None:
             return
@@ -2701,16 +2740,37 @@ class AgentRuntime(RuntimeAPI):
         if dispatch is None:
             return
 
-        result = task.result or "(no result)"
-        if task.status == TaskStatus.FAILED:
-            result = task.log or "(subagent failed)"
-        summary = self._extract_summary(result, max_chars=240)
+        result = task.result or task.log or "(no result)"
+        if task.status == TaskStatus.FAILED and not result:
+            result = "(subagent failed)"
+
+        status, stop_reason, is_timeout, is_cancelled, is_partial = self._subagent_terminal_state(
+            task
+        )
+        self._persist_subagent_result(dispatch, result)
+
+        # Re-read the dispatch after _persist_subagent_result so summary/full_result_path are fresh.
+        dispatch = self.dispatch_store.get(task.dispatch_id) or dispatch
+        summary = dispatch.summary or self._extract_summary(result, max_chars=240)
+
         self.dispatch_store.set_result(
             task.dispatch_id,
             result,
             summary=summary,
             finished_at=time.time(),
+            status=status,
+            stop_reason=stop_reason,
+            cancelled=is_cancelled,
+            partial=is_partial,
+            timed_out=is_timeout,
+            full_result_path=dispatch.full_result_path,
         )
+
+        if is_timeout or is_cancelled:
+            dispatch = self.dispatch_store.get(task.dispatch_id) or dispatch
+            self._notify_subagent_timeout(
+                task, task.chat_id, task.dispatch_id, dispatch, summary, is_timeout
+            )
 
         wake_id = f"wake-{task.dispatch_id}"
         try:
@@ -2739,9 +2799,100 @@ class AgentRuntime(RuntimeAPI):
             return first.lstrip("#").strip()[:max_chars]
         return text[:max_chars]
 
+    @staticmethod
+    def _human_duration(seconds: float) -> str:
+        """Return a compact, human-readable duration."""
+        seconds = max(0, int(seconds))
+        if seconds < 60:
+            return f"{seconds}s"
+        minutes, secs = divmod(seconds, 60)
+        if minutes < 60:
+            return f"{minutes}m {secs}s"
+        hours, minutes = divmod(minutes, 60)
+        return f"{hours}h {minutes}m {secs}s"
+
+    def _subagent_terminal_state(
+        self, task: Task
+    ) -> tuple[DispatchStatus | None, str | None, bool, bool, bool]:
+        """Map a finished subagent task to its dispatch status and reason flags.
+
+        Returns ``(dispatch_status, stop_reason, is_timeout, is_cancelled, is_partial)``.
+        ``dispatch_status`` is ``None`` for normal completions so the dispatch
+        stays PENDING until ``continue_turn`` completes it.
+        """
+        log = (task.log or "").lower()
+        if (
+            task.timed_out
+            or task.stop_reason == "timeout"
+            or (task.status == TaskStatus.FAILED and "timeout" in log)
+        ):
+            return (
+                DispatchStatus.TIMEOUT,
+                "timeout",
+                True,
+                False,
+                task.partial or True,
+            )
+        if (
+            task.cancelled
+            or task.stop_reason == "cancelled"
+            or (task.status == TaskStatus.FAILED and "cancel" in log)
+        ):
+            return (
+                DispatchStatus.CANCELLED,
+                "cancelled",
+                False,
+                True,
+                task.partial or True,
+            )
+        if task.status == TaskStatus.FAILED:
+            return (
+                None,
+                "failed",
+                False,
+                False,
+                task.partial or False,
+            )
+        return (
+            None,
+            None,
+            False,
+            False,
+            task.partial or False,
+        )
+
+    def _notify_subagent_timeout(
+        self,
+        task: Task,
+        chat_id: str,
+        dispatch_id: str,
+        dispatch: Dispatch,
+        summary: str,
+        is_timeout: bool,
+    ) -> None:
+        """Send a proactive user-visible notification for a timeout/cancelled subagent."""
+        start = task.started_at if task.started_at is not None else dispatch.started_at
+        finished = task.completed_at if task.completed_at is not None else dispatch.finished_at
+        if start is None or finished is None:
+            duration = "unknown"
+        else:
+            duration = self._human_duration(finished - start)
+        reason = "timed out" if is_timeout else "was cancelled"
+        text = f"Subagent {dispatch_id} {reason} after {duration}. Partial summary: {summary}"
+        try:
+            self.notifier.send(chat_id, text)
+        except Exception:
+            logger.exception("Failed to send timeout notification for subagent %s", dispatch_id)
+
     def _subagent_status_name(self, task: Task, dispatch: Dispatch | None) -> str:
         """Map a subagent task/dispatch to a simple status string."""
+        if task.timed_out or (dispatch is not None and dispatch.status == DispatchStatus.TIMEOUT):
+            return "timeout"
+        if task.cancelled or (dispatch is not None and dispatch.status == DispatchStatus.CANCELLED):
+            return "cancelled"
         if task.status == TaskStatus.RUNNING:
+            return "running"
+        if dispatch is not None and dispatch.status == DispatchStatus.PENDING and dispatch.finished_at is None:
             return "running"
         if task.status == TaskStatus.DONE:
             return "completed"

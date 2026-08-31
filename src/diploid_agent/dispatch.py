@@ -15,6 +15,8 @@ class DispatchStatus(Enum):
     PENDING = "pending"
     COMPLETED = "completed"
     FAILED = "failed"
+    TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
 
 
 @dataclass
@@ -30,6 +32,11 @@ class Dispatch:
     started_at: float | None = None
     finished_at: float | None = None
     summary: str | None = None
+    stop_reason: str | None = None
+    cancelled: bool = False
+    partial: bool = False
+    timed_out: bool = False
+    full_result_path: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -50,6 +57,11 @@ class Dispatch:
             started_at=data.get("started_at"),
             finished_at=data.get("finished_at"),
             summary=data.get("summary"),
+            stop_reason=data.get("stop_reason"),
+            cancelled=data.get("cancelled", False),
+            partial=data.get("partial", False),
+            timed_out=data.get("timed_out", False),
+            full_result_path=data.get("full_result_path"),
         )
 
 
@@ -125,17 +137,36 @@ class DispatchStore:
         *,
         summary: str | None = None,
         finished_at: float | None = None,
+        status: DispatchStatus | None = None,
+        stop_reason: str | None = None,
+        cancelled: bool = False,
+        partial: bool = False,
+        timed_out: bool = False,
+        full_result_path: str | None = None,
     ) -> Dispatch | None:
         with self._lock:
             dispatch = self._dispatches.get(dispatch_id)
             if dispatch is None:
                 return None
-            if dispatch.status == DispatchStatus.PENDING:
+            if dispatch.status in (
+                DispatchStatus.PENDING,
+                DispatchStatus.TIMEOUT,
+                DispatchStatus.CANCELLED,
+            ):
                 dispatch.result = result
                 if summary is not None:
                     dispatch.summary = summary
                 if finished_at is not None:
                     dispatch.finished_at = finished_at
+            if status is not None:
+                dispatch.status = status
+            if stop_reason is not None:
+                dispatch.stop_reason = stop_reason
+            dispatch.cancelled = cancelled
+            dispatch.partial = partial
+            dispatch.timed_out = timed_out
+            if full_result_path is not None:
+                dispatch.full_result_path = full_result_path
             self._save()
             return dispatch
 

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from diploid_agent.config import Config
-from diploid_agent.dispatch import Dispatch
+from diploid_agent.dispatch import Dispatch, DispatchStatus
 from diploid_agent.memory import MemoryManager, RecallResult
 from diploid_agent.models import SessionRecord, WakeEvent
 from diploid_agent.persona_composer import (
@@ -349,25 +349,73 @@ class ContextBuilder:
             )
         return None
 
+    @staticmethod
+    def _human_duration(seconds: float) -> str:
+        """Return a compact, human-readable duration."""
+        seconds = max(0, int(seconds))
+        if seconds < 60:
+            return f"{seconds}s"
+        minutes, secs = divmod(seconds, 60)
+        if minutes < 60:
+            return f"{minutes}m {secs}s"
+        hours, minutes = divmod(minutes, 60)
+        return f"{hours}h {minutes}m {secs}s"
+
+    def _subagent_result_path(self, chat_id: str, dispatch_id: str) -> Path:
+        """Return the absolute path where a subagent full result should live."""
+        safe = chat_id.replace("/", "_")
+        return (
+            Path(self.config.harness.sessions_root).expanduser()
+            / safe
+            / "subagent-results"
+            / f"subagent-{dispatch_id}.md"
+        )
+
+    def _dispatch_status_name(self, dispatch: Dispatch) -> str:
+        """Derive a display status from the dispatch and its stop reason."""
+        if dispatch.status in (DispatchStatus.TIMEOUT, DispatchStatus.CANCELLED):
+            return dispatch.status.value
+        if dispatch.stop_reason in ("timeout", "cancelled", "failed"):
+            return dispatch.stop_reason
+        if dispatch.status == DispatchStatus.PENDING:
+            if dispatch.result or dispatch.finished_at is not None:
+                return "completed"
+            return "running"
+        return dispatch.status.value
+
     def build_dispatch_continuation(self, dispatch: Dispatch) -> str:
-        """Build a continuation anchor for a completed background dispatch."""
-        parts = [
-            "## System notice",
+        """Build a clean, structured continuation anchor for a background dispatch."""
+        status = self._dispatch_status_name(dispatch)
+        start = dispatch.started_at or 0.0
+        end = dispatch.finished_at or time.time()
+        duration = self._human_duration(max(0.0, end - start))
+        summary = dispatch.summary or "(no summary)"
+        result_path = dispatch.full_result_path or str(
+            self._subagent_result_path(dispatch.chat_id or "unknown", dispatch.id)
+        )
+
+        lines: list[str] = [
+            "## Subagent result",
             "",
-            "A background task has completed.",
+            f"- **status:** {status}",
+            f"- **duration:** {duration}",
+            f"- **summary:** {summary}",
+            f"- **full_result_path:** {result_path}",
         ]
         if dispatch.context:
-            parts.append(f"Context: {dispatch.context}")
-        parts.extend(
-            [
-                "",
-                "Result:",
-                dispatch.result or "(no result)",
-                "",
-                "Please continue and present the result to the user.",
-            ]
-        )
-        return "\n".join(parts)
+            lines.append(f"- **context:** {dispatch.context}")
+
+        if status in ("timeout", "cancelled"):
+            reason = "it ran out of time" if status == "timeout" else "it was cancelled"
+            lines.extend(
+                [
+                    "",
+                    f"The subagent stopped because {reason}. The summary below is partial.",
+                ]
+            )
+
+        lines.extend(["", "Please continue and present the result to the user."])
+        return "\n".join(lines)
 
     # ---------------------------------------------------------------- prompt builders
 

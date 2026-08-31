@@ -7,7 +7,7 @@ from pathlib import Path
 
 from diploid_agent.config import Config, DiploidConfig, HarnessConfig, PersonaConfig, PluginConfig
 from diploid_agent.context import ContextBuilder
-from diploid_agent.dispatch import DispatchStore
+from diploid_agent.dispatch import Dispatch, DispatchStatus, DispatchStore
 from diploid_agent.engine.fake import FakeAgentEngine
 from diploid_agent.memory import MemoryItem, MemoryManager, RecallResult
 from diploid_agent.models import SessionRecord
@@ -443,3 +443,102 @@ def test_build_follow_up_skips_unchanged_persona_memory(tmp_path: Path) -> None:
 
     pctx_follow = builder.build_follow_up("chat-1", "how are you?", record=None)
     assert "We value kindness." not in pctx_follow.prompt
+
+
+def test_build_dispatch_continuation_completed(tmp_path: Path) -> None:
+    """A completed dispatch produces a structured result block."""
+    builder = _make_builder(tmp_path)
+    dispatch = Dispatch(
+        id="dispatch-abc123",
+        chat_id="chat-1",
+        session_id="session-1",
+        status=DispatchStatus.COMPLETED,
+        result="full result",
+        summary="Short summary",
+        started_at=1000.0,
+        finished_at=1030.0,
+        full_result_path="/tmp/sessions/chat-1/subagent-results/subagent-dispatch-abc123.md",
+    )
+    text = builder.build_dispatch_continuation(dispatch)
+    assert "## Subagent result" in text
+    assert "- **status:** completed" in text
+    assert "- **duration:** 30s" in text
+    assert "- **summary:** Short summary" in text
+    assert "- **full_result_path:** /tmp/sessions/chat-1/subagent-results/subagent-dispatch-abc123.md" in text
+    assert "Please continue and present the result to the user." in text
+    assert "stopped because" not in text
+
+
+def test_build_dispatch_continuation_timeout(tmp_path: Path) -> None:
+    """A timed-out dispatch reports timeout and partial summary."""
+    builder = _make_builder(tmp_path)
+    dispatch = Dispatch(
+        id="dispatch-abc123",
+        chat_id="chat-1",
+        session_id="session-1",
+        status=DispatchStatus.TIMEOUT,
+        result="partial result",
+        summary="Partial summary",
+        started_at=1000.0,
+        finished_at=1100.0,
+        full_result_path="/tmp/sessions/chat-1/subagent-results/subagent-dispatch-abc123.md",
+        stop_reason="timeout",
+    )
+    text = builder.build_dispatch_continuation(dispatch)
+    assert "- **status:** timeout" in text
+    assert "- **duration:** 1m 40s" in text
+    assert "The subagent stopped because it ran out of time." in text
+    assert "The summary below is partial." in text
+
+
+def test_build_dispatch_continuation_cancelled(tmp_path: Path) -> None:
+    """A cancelled dispatch reports cancellation."""
+    builder = _make_builder(tmp_path)
+    dispatch = Dispatch(
+        id="dispatch-abc123",
+        chat_id="chat-1",
+        session_id="session-1",
+        status=DispatchStatus.CANCELLED,
+        result="partial result",
+        summary="Partial summary",
+        started_at=1000.0,
+        finished_at=1005.0,
+        full_result_path="/tmp/sessions/chat-1/subagent-results/subagent-dispatch-abc123.md",
+    )
+    text = builder.build_dispatch_continuation(dispatch)
+    assert "- **status:** cancelled" in text
+    assert "The subagent stopped because it was cancelled." in text
+
+
+def test_build_dispatch_continuation_failed(tmp_path: Path) -> None:
+    """A failed dispatch reports failed status without a partial warning."""
+    builder = _make_builder(tmp_path)
+    dispatch = Dispatch(
+        id="dispatch-abc123",
+        chat_id="chat-1",
+        session_id="session-1",
+        status=DispatchStatus.PENDING,
+        result="error output",
+        summary="Error summary",
+        started_at=1000.0,
+        finished_at=1020.0,
+        stop_reason="failed",
+    )
+    text = builder.build_dispatch_continuation(dispatch)
+    assert "- **status:** failed" in text
+    assert "stopped because" not in text
+
+
+def test_build_dispatch_continuation_running_fallback_path(tmp_path: Path) -> None:
+    """A still-running dispatch reports running and falls back to a computed path."""
+    builder = _make_builder(tmp_path)
+    dispatch = Dispatch(
+        id="dispatch-abc123",
+        chat_id="chat-1",
+        session_id="session-1",
+        status=DispatchStatus.PENDING,
+        started_at=time.time(),
+    )
+    text = builder.build_dispatch_continuation(dispatch)
+    assert "- **status:** running" in text
+    assert "subagent-results/subagent-dispatch-abc123.md" in text
