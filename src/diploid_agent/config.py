@@ -156,6 +156,7 @@ class MemoryConfig(BaseModel):
     max_short_term_chars: int = 4096
     include_short_term: bool = True
     short_term_summary_cache_days: int = 7
+    recall_on_follow_up: bool = False  # whether to run long-term recall on follow-ups
     hindsight: HindsightConfig = Field(default_factory=HindsightConfig)
 
 

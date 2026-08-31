@@ -118,3 +118,9 @@ def test_persona_config_fleet_root_is_optional(tmp_path: Path) -> None:
 
 def test_telegram_config_message_format_defaults_to_plain() -> None:
     assert TelegramConfig().message_format == "plain"
+
+
+def test_memory_config_recall_on_follow_up_defaults_to_false() -> None:
+    from diploid_agent.config import MemoryConfig
+
+    assert MemoryConfig().recall_on_follow_up is False

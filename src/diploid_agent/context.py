@@ -23,6 +23,7 @@ from diploid_agent.persona_composer import (
     PersonaPrompt,
     _trim_to_section,
     compose_persona,
+    identity_anchor,
 )
 from diploid_agent.plugins import PluginManager
 from diploid_agent.plugins.contexts import (
@@ -510,7 +511,12 @@ class ContextBuilder:
         skill_names: set[str] | None = None,
         rehydrated: bool = False,
     ) -> PromptContext:
-        """Build a follow-up prompt, re-injecting full persona and chat memory."""
+        """Build a follow-up prompt with a short identity anchor and changed state.
+
+        The ACP session already holds the full persona and prior conversation, so
+        follow-ups only need a linked identity anchor and the user message. Long-
+        term recall is skipped on follow-ups unless `recall_on_follow_up` is true.
+        """
         build_ctx = PromptBuildContext(
             chat_id=chat_id,
             record=record,
@@ -529,17 +535,30 @@ class ContextBuilder:
             reply_to_message_id,
             chat_id,
         )
-        persona = compose_persona(self.config.persona)
+        anchor = identity_anchor(self.config.persona)
         mgr = self.memory_factory(chat_id)
-        recall = mgr.recall_context(formatted, model=effective_model)
+        if self.config.harness.memory.recall_on_follow_up:
+            recall = mgr.recall_context(formatted, model=effective_model)
+        else:
+            recall = RecallResult(
+                text="",
+                truncated=False,
+                memory_path=None,
+                limit=0,
+                loaded=0,
+                total=0,
+            )
         chat_status = mgr.chat_memory_status()
         pm = mgr.persona_memory(self.config.harness.memory.max_persona_memory_chars)
-        persona.memory_text = pm["text"]
-        persona.memory_truncated = pm["truncated"]
-        persona.memory_path = pm["path"]
-        persona.limit = pm["limit"]
-        persona.loaded = pm["loaded"]
-        persona.total = pm["total"]
+        persona = PersonaPrompt(
+            text=anchor,
+            memory_text=pm["text"],
+            memory_truncated=pm["truncated"],
+            memory_path=pm["path"],
+            limit=pm["limit"],
+            loaded=pm["loaded"],
+            total=pm["total"],
+        )
         notice = self.build_system_notice(persona, recall, chat_status)
 
         slots: dict[str, list[str]] = {

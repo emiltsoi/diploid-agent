@@ -26,4 +26,30 @@ def test_identity_anchor() -> None:
         profile_root=Path("/tmp"),
         fleet_root=Path("/tmp"),
     )
-    assert "test-pilot" in identity_anchor(config)
+    anchor = identity_anchor(config)
+    assert "test-pilot" in anchor
+    assert "Your full identity is in:" in anchor
+    assert "Follow them." in anchor
+
+
+def test_identity_anchor_lists_existing_files(tmp_path: Path) -> None:
+    root = tmp_path / "persona"
+    root.mkdir()
+    (root / "SOUL.md").write_text("# SOUL")
+    (root / "AGENTS.md").write_text("# AGENTS")
+    (root / "MEMORY.md").write_text("# MEMORY")
+    fleet = tmp_path / "fleet"
+    (fleet / "shared").mkdir(parents=True)
+    (fleet / "shared" / "AGENTS.md").write_text("# Shared")
+
+    config = PersonaConfig(
+        name="test-pilot",
+        profile_root=root,
+        fleet_root=fleet,
+    )
+    anchor = identity_anchor(config)
+
+    assert str(root / "SOUL.md") in anchor
+    assert str(root / "AGENTS.md") in anchor
+    assert str(root / "MEMORY.md") in anchor
+    assert str(fleet / "shared" / "AGENTS.md") in anchor

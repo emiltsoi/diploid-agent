@@ -216,6 +216,7 @@ harness:
     max_short_term_chars: 6144     # cap the short-term block; older turns summarized
     include_short_term: true
     short_term_summary_cache_days: 7  # stale .cache/*.md entries are removed after this many days
+    recall_on_follow_up: false     # run Hindsight recall on follow-ups; false skips it outside first/rehydrated turns
     hindsight:
       base_url: http://localhost:8888
       bank: example                 # defaults to persona name if unset

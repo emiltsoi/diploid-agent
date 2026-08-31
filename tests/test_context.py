@@ -7,7 +7,7 @@ from diploid_agent.config import Config, DiploidConfig, HarnessConfig, PersonaCo
 from diploid_agent.context import ContextBuilder
 from diploid_agent.dispatch import DispatchStore
 from diploid_agent.engine.fake import FakeAgentEngine
-from diploid_agent.memory import MemoryItem, MemoryManager
+from diploid_agent.memory import MemoryItem, MemoryManager, RecallResult
 from diploid_agent.models import SessionRecord
 from diploid_agent.plugins import PluginManager
 from diploid_agent.skills import SkillManager
@@ -79,13 +79,17 @@ def test_build_first_prompt_for_new_chat(tmp_path: Path) -> None:
 
 
 def test_build_follow_up_for_existing_chat(tmp_path: Path) -> None:
-    """A follow-up prompt re-injects the full identity and the user message."""
+    """A follow-up prompt uses a short, linked identity anchor and the user message."""
     builder = _make_builder(tmp_path)
 
     pctx = builder.build_follow_up("chat-1", "What about the second item?", record=None)
 
     assert "What about the second item?" in pctx.prompt
-    assert "I am **Test Pilot**" in pctx.prompt
+    # The follow-up uses the linked identity anchor, not the full SOUL/AGENTS text.
+    assert "You are test-pilot" in pctx.prompt
+    assert str(_fixture_root() / "SOUL.md") in pctx.prompt
+    assert str(_fixture_root() / "AGENTS.md") in pctx.prompt
+    assert "I am **Test Pilot**" not in pctx.prompt
     assert pctx.notice is None
     assert pctx.memory_flags == {
         "persona_memory_exceeded": False,
@@ -98,6 +102,52 @@ def test_build_follow_up_for_existing_chat(tmp_path: Path) -> None:
     assert "self_state" in pctx.slots
     assert "mesh" in pctx.slots
     assert "persona_state" not in pctx.slots
+
+
+def _fake_recall_result() -> RecallResult:
+    return RecallResult(
+        text="RECALL",
+        truncated=False,
+        memory_path=None,
+        limit=100,
+        loaded=6,
+        total=6,
+    )
+
+
+def test_build_follow_up_skips_recall_when_disabled(tmp_path: Path, monkeypatch) -> None:
+    """Hindsight recall is skipped on follow-ups when recall_on_follow_up is False."""
+    builder = _make_builder(tmp_path)
+    calls: list[str] = []
+
+    def fake_recall(_self, user_message: str, model: str | None = None) -> RecallResult:
+        calls.append(user_message)
+        return _fake_recall_result()
+
+    monkeypatch.setattr(MemoryManager, "recall_context", fake_recall)
+    pctx = builder.build_follow_up("chat-1", "What about the second item?", record=None)
+
+    assert not calls
+    assert "RECALL" not in pctx.prompt
+    assert pctx.slots.get("recall") == []
+
+
+def test_build_follow_up_includes_recall_when_enabled(tmp_path: Path, monkeypatch) -> None:
+    """Hindsight recall is run on follow-ups when recall_on_follow_up is True."""
+    builder = _make_builder(tmp_path)
+    builder.config.harness.memory.recall_on_follow_up = True
+    calls: list[str] = []
+
+    def fake_recall(_self, user_message: str, model: str | None = None) -> RecallResult:
+        calls.append(user_message)
+        return _fake_recall_result()
+
+    monkeypatch.setattr(MemoryManager, "recall_context", fake_recall)
+    pctx = builder.build_follow_up("chat-1", "What about the second item?", record=None)
+
+    assert calls
+    assert "RECALL" in pctx.prompt
+    assert pctx.slots.get("recall") == ["## Chat memory\n\nRECALL"]
 
 
 def test_build_first_prompt_trims_reply_quote_and_injects_continuation(tmp_path: Path) -> None:

@@ -76,5 +76,28 @@ def compose_persona(config: PersonaConfig) -> PersonaPrompt:
 
 
 def identity_anchor(config: PersonaConfig) -> str:
-    """A short identity anchor for follow-up messages."""
-    return f"You are {config.name}. Follow your AGENTS.md and MEMORY.md."
+    """A short, linked identity anchor for follow-up messages.
+
+    The full identity lives on disk; the anchor only reminds the model who it is
+    and where to find its identity files. This keeps the follow-up prompt small
+    while still giving the model the file handles it needs if context has been
+    compressed or lost.
+    """
+    lines = [f"You are {config.name}. Your full identity is in:"]
+    root = config.profile_root
+
+    candidates = [
+        ("SOUL.md", root / "SOUL.md"),
+        ("AGENTS.md", root / "AGENTS.md"),
+    ]
+    fleet_root = config.fleet_root or root.parent
+    shared = fleet_root / "shared" / "AGENTS.md"
+    candidates.append(("Fleet shared AGENTS", shared))
+    candidates.append(("MEMORY.md", root / config.memory_filename))
+
+    for _label, path in candidates:
+        if path.exists():
+            lines.append(f"- {path}")
+
+    lines.append("Follow them.")
+    return "\n".join(lines)
