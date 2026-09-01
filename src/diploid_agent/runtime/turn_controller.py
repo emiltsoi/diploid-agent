@@ -1664,13 +1664,26 @@ class TurnController:
             notice="The next message will start a fresh Devin session.",
         )
 
-    @_locked
-    def switch_model(self, chat_id: str, model: str) -> ChatResult:
-        """Switch the model for a chat by starting a fresh Devin session."""
+    def _start_fresh_session(
+        self,
+        chat_id: str,
+        *,
+        desired_model: str,
+        kind: str,
+        label: str,
+        system_message: str,
+        reply_prefix: str,
+        old_model: str | None = None,
+        clear_active: bool = False,
+        plugin_overrides: Any | None = None,
+    ) -> ChatResult:
+        """Archive any active session and start a fresh ACP session for the chat."""
         record = self.runtime._active_record(chat_id)
         current_model = self.runtime._model(record)
-        if record and model == current_model:
-            return ChatResult(reply=f"Already using model `{model}` for this chat.")
+        if record and desired_model == current_model and kind == "switch_model":
+            return ChatResult(reply=f"Already using model `{desired_model}` for this chat.")
+
+        use_model = desired_model or current_model
 
         if record:
             self.runtime._plugins.before_session_archive(
@@ -1678,6 +1691,13 @@ class TurnController:
                 SessionArchiveContext(chat_id=chat_id, old_record=record),
             )
             self.runtime._archive_active_session(chat_id, record)
+
+        if clear_active:
+            self.runtime._plugins.before_session_clear(
+                chat_id,
+                SessionClearContext(chat_id=chat_id, old_record=record),
+            )
+            self.runtime._clear_active_session(chat_id)
 
         user_message = (
             "Continue the conversation as your true self. "
@@ -1690,116 +1710,11 @@ class TurnController:
             chat_id,
             SessionStartContext(
                 chat_id=chat_id,
-                kind="switch_model",
-                user_message=user_message,
-                model=model,
-                session_number=session_number,
-                old_model=current_model,
-                skill_names=set(self.runtime._active_skill_names(chat_id)),
-                mcp_servers=self.runtime._active_mcp_servers(chat_id),
-            ),
-        )
-        if isinstance(start_ctx, ChatResult):
-            return start_ctx
-        use_model = start_ctx.model or model
-        user_message = start_ctx.user_message
-
-        pctx = self.runtime.context_builder.build_first(
-            chat_id,
-            user_message,
-            record,
-            model=use_model,
-            skill_names=start_ctx.skill_names,
-            mcp_names=None,
-        )
-        prompt = pctx.prompt
-        notice = pctx.notice
-        memory_flags = pctx.memory_flags
-        use_model = pctx.model or use_model
-
-        result, session_id = self.runtime._call_unlocked(
-            self.runtime._start_new_session,
-            chat_id,
-            prompt,
-            use_model,
-            mcp_servers=start_ctx.mcp_servers or self.runtime._active_mcp_servers(chat_id),
-            skill_names=start_ctx.skill_names or set(self.runtime._active_skill_names(chat_id)),
-        )
-        reply = result.reply
-        new_record = self.runtime._create_record(
-            chat_id,
-            session_number,
-            session_id,
-            use_model,
-            reply,
-            memory_flags,
-            label=f"switched to {use_model}",
-        )
-        self.runtime._chat_state(chat_id).sessions[new_record.session_number] = new_record
-        record = new_record
-        record.turn_number += 1
-        self.runtime._memory_manager(chat_id).record_turn(
-            user_message=f"[system: switched to model {use_model}]",
-            reply=reply,
-            model=use_model,
-            session_number=record.session_number,
-            turn_number=record.turn_number,
-            notice=notice,
-        )
-
-        transition = self.runtime._check_chat_memory_transition(chat_id, record)
-        if transition:
-            notice = transition if notice is None else f"{notice}\n\n{transition}"
-
-        self.runtime._append_record(record)
-        self.runtime._prune_and_compact(chat_id)
-        self.runtime._plugins.after_session_active(
-            chat_id,
-            SessionActiveContext(chat_id=chat_id, record=record),
-        )
-        return ChatResult(
-            reply=f"Now running on model `{use_model}`.\n\n{reply.strip()}",
-            notice=notice,
-            session_id=record.session_id,
-            session_number=record.session_number,
-            turn_number=record.turn_number,
-        )
-
-    @_locked
-    def new_session(self, chat_id: str, model: str | None = None) -> ChatResult:
-        """Start a fresh ACP session for a chat, clearing the active context."""
-        record = self.runtime._active_record(chat_id)
-        current_model = self.runtime._model(record)
-        use_model = model or current_model
-
-        if record:
-            self.runtime._plugins.before_session_archive(
-                chat_id,
-                SessionArchiveContext(chat_id=chat_id, old_record=record),
-            )
-            self.runtime._archive_active_session(chat_id, record)
-
-        self.runtime._plugins.before_session_clear(
-            chat_id,
-            SessionClearContext(chat_id=chat_id, old_record=record),
-        )
-        self.runtime._clear_active_session(chat_id)
-
-        user_message = (
-            "Continue the conversation as your true self. "
-            "Acknowledge that you are ready to continue. "
-            "Do not claim to know the name of the model serving you. "
-            "Do not sign your reply."
-        )
-        session_number = self.runtime._next_session_number(chat_id)
-        start_ctx = self.runtime._plugins.before_session_start(
-            chat_id,
-            SessionStartContext(
-                chat_id=chat_id,
-                kind="new",
+                kind=kind,
                 user_message=user_message,
                 model=use_model,
                 session_number=session_number,
+                old_model=old_model,
                 skill_names=set(self.runtime._active_skill_names(chat_id)),
                 mcp_servers=self.runtime._active_mcp_servers(chat_id),
             ),
@@ -1839,16 +1754,20 @@ class TurnController:
             use_model,
             reply,
             memory_flags,
-            label="new session",
+            label=label,
         )
         new_record.enabled_mcp_servers = self.runtime._active_mcp_server_names(chat_id)
         new_record.enabled_skills = sorted(self.runtime._active_skill_names(chat_id))
-        new_record.plugin_overrides = record.plugin_overrides if record else None
+        if plugin_overrides is not None:
+            new_record.plugin_overrides = plugin_overrides
+        elif record is not None:
+            new_record.plugin_overrides = record.plugin_overrides
+
         self.runtime._chat_state(chat_id).sessions[new_record.session_number] = new_record
         record = new_record
         record.turn_number += 1
         self.runtime._memory_manager(chat_id).record_turn(
-            user_message="[system: new session started]",
+            user_message=f"[system: {system_message}]",
             reply=reply,
             model=use_model,
             session_number=record.session_number,
@@ -1867,11 +1786,42 @@ class TurnController:
             SessionActiveContext(chat_id=chat_id, record=record),
         )
         return ChatResult(
-            reply=f"New session started.\n\n{reply.strip()}",
+            reply=f"{reply_prefix}\n\n{reply.strip()}",
             notice=notice,
             session_id=record.session_id,
             session_number=record.session_number,
             turn_number=record.turn_number,
+        )
+
+    @_locked
+    def switch_model(self, chat_id: str, model: str) -> ChatResult:
+        """Switch the model for a chat by starting a fresh Devin session."""
+        record = self.runtime._active_record(chat_id)
+        current_model = self.runtime._model(record)
+        return self._start_fresh_session(
+            chat_id,
+            desired_model=model,
+            kind="switch_model",
+            label=f"switched to {model}",
+            system_message=f"switched to model {model}",
+            reply_prefix=f"Now running on model `{model}`.",
+            old_model=current_model,
+        )
+
+    @_locked
+    def new_session(self, chat_id: str, model: str | None = None) -> ChatResult:
+        """Start a fresh ACP session for a chat, clearing the active context."""
+        record = self.runtime._active_record(chat_id)
+        plugin_overrides = record.plugin_overrides if record else None
+        return self._start_fresh_session(
+            chat_id,
+            desired_model=model or self.runtime._model(record),
+            kind="new",
+            label="new session",
+            system_message="new session started",
+            reply_prefix="New session started.",
+            clear_active=True,
+            plugin_overrides=plugin_overrides,
         )
 
     @_locked
