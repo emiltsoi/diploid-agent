@@ -89,9 +89,12 @@ class McpManager:
             harness_url=self._harness_url,
         )
         env = [fmt.format(e) for e in server.env]
-        # Pass the harness API key to child MCP processes so they can call back.
+        # Pass the harness URL and API key to child MCP processes so they can
+        # call back even if the server config omits the --harness-url CLI arg.
+        if not any(e.startswith("HARNESS_URL=") for e in env):
+            env.append(f"HARNESS_URL={self._harness_url}")
         harness_api_key = self.config.secrets.harness_api_key if self.config.secrets else None
-        if harness_api_key:
+        if harness_api_key and not any(e.startswith("HARNESS_API_KEY=") for e in env):
             env.append(f"HARNESS_API_KEY={harness_api_key}")
         return {
             "name": server.name,

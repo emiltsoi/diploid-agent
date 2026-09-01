@@ -107,7 +107,8 @@ def test_mcp_manager_renders_placeholders(tmp_path: Path) -> None:
     assert enabled[0]["name"] == "example-mcp"
     assert enabled[0]["args"][3] == "chat/1"
     assert Path(enabled[0]["args"][5]).is_absolute()
-    assert enabled[0]["env"] == [f"CHAT_DIR={tmp_path / 'chat_1'}"]
+    assert f"CHAT_DIR={tmp_path / 'chat_1'}" in enabled[0]["env"]
+    assert "HARNESS_URL=http://127.0.0.1:4003" in enabled[0]["env"]
 
 
 def test_mcp_manager_renders_harness_url(tmp_path: Path) -> None:
