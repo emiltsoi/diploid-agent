@@ -1664,6 +1664,44 @@ class TurnController:
             notice="The next message will start a fresh Devin session.",
         )
 
+    def _finalize_session_activation(
+        self,
+        chat_id: str,
+        record: SessionRecord,
+        reply: str,
+        system_message: str,
+        reply_prefix: str,
+        notice: str | None = None,
+    ) -> ChatResult:
+        """Record the turn, append the record, notify plugins, and return the result."""
+        record.turn_number += 1
+        self.runtime._memory_manager(chat_id).record_turn(
+            user_message=f"[system: {system_message}]",
+            reply=reply,
+            model=record.model,
+            session_number=record.session_number,
+            turn_number=record.turn_number,
+            notice=notice,
+        )
+
+        transition = self.runtime._check_chat_memory_transition(chat_id, record)
+        if transition:
+            notice = transition if notice is None else f"{notice}\n\n{transition}"
+
+        self.runtime._append_record(record)
+        self.runtime._prune_and_compact(chat_id)
+        self.runtime._plugins.after_session_active(
+            chat_id,
+            SessionActiveContext(chat_id=chat_id, record=record),
+        )
+        return ChatResult(
+            reply=f"{reply_prefix}\n\n{reply.strip()}",
+            notice=notice,
+            session_id=record.session_id,
+            session_number=record.session_number,
+            turn_number=record.turn_number,
+        )
+
     def _start_fresh_session(
         self,
         chat_id: str,
@@ -1764,33 +1802,13 @@ class TurnController:
             new_record.plugin_overrides = record.plugin_overrides
 
         self.runtime._chat_state(chat_id).sessions[new_record.session_number] = new_record
-        record = new_record
-        record.turn_number += 1
-        self.runtime._memory_manager(chat_id).record_turn(
-            user_message=f"[system: {system_message}]",
-            reply=reply,
-            model=use_model,
-            session_number=record.session_number,
-            turn_number=record.turn_number,
-            notice=notice,
-        )
-
-        transition = self.runtime._check_chat_memory_transition(chat_id, record)
-        if transition:
-            notice = transition if notice is None else f"{notice}\n\n{transition}"
-
-        self.runtime._append_record(record)
-        self.runtime._prune_and_compact(chat_id)
-        self.runtime._plugins.after_session_active(
+        return self._finalize_session_activation(
             chat_id,
-            SessionActiveContext(chat_id=chat_id, record=record),
-        )
-        return ChatResult(
-            reply=f"{reply_prefix}\n\n{reply.strip()}",
+            new_record,
+            reply,
+            system_message,
+            reply_prefix,
             notice=notice,
-            session_id=record.session_id,
-            session_number=record.session_number,
-            turn_number=record.turn_number,
         )
 
     @_locked
@@ -2001,29 +2019,12 @@ class TurnController:
                 chat_id, self.runtime._chat_dir(chat_id), source_skill_names
             )
 
-        record = source
-        record.turn_number += 1
-        self.runtime._memory_manager(chat_id).record_turn(
-            user_message="[system: resumed session]",
-            reply=reply,
-            model=record.model,
-            session_number=record.session_number,
-            turn_number=record.turn_number,
-        )
-
-        notice = self.runtime._check_chat_memory_transition(chat_id, record)
-        self.runtime._append_record(record)
-        self.runtime._prune_and_compact(chat_id)
-        self.runtime._plugins.after_session_active(
+        return self._finalize_session_activation(
             chat_id,
-            SessionActiveContext(chat_id=chat_id, record=record),
-        )
-        return ChatResult(
-            reply=f"Resumed session {session_number}.\n\n{reply.strip()}",
-            notice=notice,
-            session_id=record.session_id,
-            session_number=record.session_number,
-            turn_number=record.turn_number,
+            source,
+            reply,
+            "resumed session",
+            f"Resumed session {session_number}.",
         )
 
     @_locked
@@ -2172,30 +2173,11 @@ class TurnController:
         new_record.enabled_skills = sorted(source_skill_names)
         new_record.plugin_overrides = source.plugin_overrides
         self.runtime._chat_state(chat_id).sessions[new_record.session_number] = new_record
-        record = new_record
-        record.turn_number += 1
-        self.runtime._memory_manager(chat_id).record_turn(
-            user_message="[system: branched session]",
-            reply=reply,
-            model=use_model,
-            session_number=record.session_number,
-            turn_number=record.turn_number,
-        )
-
-        transition = self.runtime._check_chat_memory_transition(chat_id, record)
-        if transition:
-            notice = transition if notice is None else f"{notice}\n\n{transition}"
-
-        self.runtime._append_record(record)
-        self.runtime._prune_and_compact(chat_id)
-        self.runtime._plugins.after_session_active(
+        return self._finalize_session_activation(
             chat_id,
-            SessionActiveContext(chat_id=chat_id, record=record),
-        )
-        return ChatResult(
-            reply=f"Branched from session {session_number}.\n\n{reply.strip()}",
+            new_record,
+            reply,
+            "branched session",
+            f"Branched from session {session_number}.",
             notice=notice,
-            session_id=record.session_id,
-            session_number=record.session_number,
-            turn_number=record.turn_number,
         )
