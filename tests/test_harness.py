@@ -927,7 +927,7 @@ def test_new_session_uses_enabled_mcp_servers(monkeypatch, tmp_path: Path) -> No
             "name": "github",
             "command": "npx",
             "args": ["-y", "@modelcontextprotocol/server-github"],
-            "env": [],
+            "env": ["HARNESS_URL=http://127.0.0.1:4003"],
         }
     ]
 

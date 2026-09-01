@@ -219,6 +219,8 @@ class TurnProcess:
                     reply_to_is_bot=reply_to_is_bot,
                     reply_to_message_id=reply_to_message_id,
                     continuation_anchor=continuation_anchor,
+                    wake_event=wake_event,
+                    other_instance_running=other_instance_running,
                 )
                 prompt = pctx.prompt
                 use_model = pctx.model or use_model

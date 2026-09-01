@@ -602,6 +602,8 @@ class ContextBuilder:
         continuation_anchor: str | None = None,
         skill_names: set[str] | None = None,
         rehydrated: bool = False,
+        wake_event: WakeEvent | None = None,
+        other_instance_running: bool = False,
     ) -> PromptContext:
         """Build a follow-up prompt with a short identity anchor and changed state.
 
@@ -610,6 +612,15 @@ class ContextBuilder:
         term recall, persona memory, chat memory, and plugin blocks are only
         re-injected when they have changed since the last prompt.
         """
+        if wake_event is not None:
+            self.plugin_manager.on_waking(
+                chat_id,
+                record,
+                time.time(),
+                wake_event=wake_event,
+                other_instance_running=other_instance_running,
+            )
+
         build_ctx = PromptBuildContext(
             chat_id=chat_id,
             record=record,

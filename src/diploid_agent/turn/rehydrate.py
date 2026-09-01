@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -104,13 +103,6 @@ class TurnRehydrate:
                     mcp_servers=self.runtime._active_mcp_servers(chat_id),
                 )
                 logger.warning("Resumed ACP session %s for %s", resumed_id, chat_id)
-                self.runtime._plugins.on_waking(
-                    chat_id,
-                    old_record,
-                    time.time(),
-                    wake_event=wake_event,
-                    other_instance_running=other_instance_running,
-                )
                 pctx = self.runtime.context_builder.build_follow_up(
                     chat_id,
                     user_message,
@@ -120,6 +112,8 @@ class TurnRehydrate:
                     reply_to_message_id=reply_to_message_id,
                     continuation_anchor=continuation_anchor,
                     rehydrated=True,
+                    wake_event=wake_event,
+                    other_instance_running=other_instance_running,
                 )
                 follow_model = pctx.model or use_model
                 request = TurnRequest(
