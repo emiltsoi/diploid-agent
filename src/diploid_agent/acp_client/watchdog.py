@@ -52,7 +52,7 @@ class PromptWatchdog:
         """Detect unresponsive ACP transport and trigger recovery."""
         client = self._client
         with client._lock:
-            if not client._watchdog_running:
+            if not self._running:
                 return
             if client._inflight_future is None or client._inflight_future.done():
                 return

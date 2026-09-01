@@ -15,7 +15,7 @@ import uuid
 from collections import deque
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import yaml
 from pydantic import BaseModel
@@ -69,6 +69,8 @@ from diploid_agent.task.engine import TaskEngine
 from diploid_agent.transport.base import RuntimeAPI
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T", bound=BaseModel)
 
 # This set is intentionally keyed by file name, not full path. Durable files are
 # expected to live at the root of each session directory, and that convention is
@@ -1331,8 +1333,8 @@ class AgentRuntime(RuntimeAPI):
 
     def _update_config_section(
         self,
-        current: BaseModel,
-        new: BaseModel,
+        current: _T,
+        new: _T,
         *,
         success: str,
         post: Callable[[], None] | None = None,
