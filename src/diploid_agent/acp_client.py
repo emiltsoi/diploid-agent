@@ -259,6 +259,7 @@ class AcpClient:
         self._thread: threading.Thread | None = None
         self._proc: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task[None] | None = None
+        self._stderr_task: asyncio.Task[None] | None = None
         self._watchdog_thread: threading.Thread | None = None
         self._watchdog_running = False
         self._watchdog_interval = watchdog_interval
@@ -834,7 +835,12 @@ if __name__ == "__main__":
             self._initialized = False
             self._transport_healthy = False
             try:
-                if self._thread is not None and self._thread.is_alive():
+                if (
+                    self._thread is not None
+                    and self._thread.is_alive()
+                    and self._loop is not None
+                    and self._loop.is_running()
+                ):
                     # Schedule _close_transport on the background loop and stop
                     # the loop only after the coroutine has actually completed.
                     # Stopping the loop from the main thread immediately after
@@ -924,6 +930,16 @@ if __name__ == "__main__":
                     inflight.set_exception(TimeoutError(reason))
                 except Exception:
                     logger.exception("Failed to interrupt in-flight ACP future")
+
+            # Abort any pending request futures so _send() does not hang.
+            exc = AcpTransportError("acp.transport", msg=reason)
+            for req_id, future in list(self._pending.items()):
+                if not future.done():
+                    try:
+                        future.set_exception(exc)
+                    except Exception:
+                        logger.exception("Failed to unblock pending ACP request %s", req_id)
+            self._pending.clear()
 
             for prompt in list(self._active_prompts.values()):
                 prompt.cancelled = True
@@ -1863,6 +1879,21 @@ if __name__ == "__main__":
                 await asyncio.wait_for(self._proc.wait(), timeout=5.0)
             except TimeoutError:
                 self._kill_process_group(self._proc)
+
+        # Cancel reader and stderr drain so the loop does not keep them alive.
+        for task in (self._reader_task, self._stderr_task):
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("ACP task %s ended with %s", task.get_name(), exc)
+
+        # Any request futures that have not been resolved by the reader should
+        # be aborted now, including in-flight _run() callers.
+        self._unblock_inflight("ACP transport closed")
 
     def _stop_watchdog(self) -> None:
         """Signal the watchdog thread to stop and wait briefly."""

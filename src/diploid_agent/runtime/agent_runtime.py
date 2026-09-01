@@ -295,6 +295,7 @@ class AgentRuntime(RuntimeAPI):
     def client(self, value: AgentEngine) -> None:
         self.engine = value
 
+    @_locked
     def _on_service_restart(self, service: str, reason: str) -> None:
         """Handle a service restart request from the ACP child.
 
@@ -368,21 +369,23 @@ class AgentRuntime(RuntimeAPI):
     def suppress_auto_continue(self, chat_id: str | None = None, seconds: float = 300.0) -> None:
         """Suppress auto-continue for a chat or globally for a number of seconds."""
         until = time.time() + seconds
-        if chat_id is None:
-            self._auto_continue_globally_suppressed_until = until
-        else:
-            self._auto_continue_suppressed[chat_id] = until
+        with self._lock:
+            if chat_id is None:
+                self._auto_continue_globally_suppressed_until = until
+            else:
+                self._auto_continue_suppressed[chat_id] = until
 
     def is_auto_continue_suppressed(self, chat_id: str) -> bool:
         """Return True if auto-continue should be suppressed for this chat."""
         now = time.time()
-        if now < self._auto_continue_globally_suppressed_until:
-            return True
-        until = self._auto_continue_suppressed.get(chat_id, 0)
-        if now < until:
-            return True
-        self._auto_continue_suppressed.pop(chat_id, None)
-        return False
+        with self._lock:
+            if now < self._auto_continue_globally_suppressed_until:
+                return True
+            until = self._auto_continue_suppressed.get(chat_id, 0)
+            if now < until:
+                return True
+            self._auto_continue_suppressed.pop(chat_id, None)
+            return False
 
     def _create_notifier(self) -> Notifier:
         if self.config.harness.notifications.outbox_delivery:
@@ -555,13 +558,15 @@ class AgentRuntime(RuntimeAPI):
     # ---------------------------------------------------------------- active state
 
     def _chat_state(self, chat_id: str) -> ChatState:
-        return self._store.setdefault(chat_id, ChatState())
+        with self._lock:
+            return self._store.setdefault(chat_id, ChatState())
 
     def _active_record(self, chat_id: str) -> SessionRecord | None:
-        state = self._chat_state(chat_id)
-        if not state.sessions:
-            return None
-        return max(state.sessions.values(), key=lambda r: r.updated_at)
+        with self._lock:
+            state = self._store.get(chat_id)
+            if state is None or not state.sessions:
+                return None
+            return max(state.sessions.values(), key=lambda r: r.updated_at)
 
     def _next_session_number(self, chat_id: str) -> int:
         state = self._chat_state(chat_id)
@@ -2659,8 +2664,7 @@ class AgentRuntime(RuntimeAPI):
         note so the context is not lost. This deliberately does not enqueue a
         wake because a DSN must not trigger a model turn.
         """
-        with self._lock:
-            record = self._active_record(chat_id)
+        record = self._active_record(chat_id)
 
         event = WakeEvent(
             id=f"mesh:{mesh_payload.get('message_id', 'unknown')}",
@@ -2678,6 +2682,7 @@ class AgentRuntime(RuntimeAPI):
 
         return ChatResult(reply="", notice=None)
 
+    @_locked
     def graceful_service_restart(
         self,
         chat_id: str,

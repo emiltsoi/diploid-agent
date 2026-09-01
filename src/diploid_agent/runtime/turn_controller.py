@@ -276,13 +276,16 @@ class _OutboxHeartbeat:
         while not self._stop.is_set():
             with self.runtime._lock:
                 current = self.runtime._active_turns.get(self.chat_id)
+                # Read message_text under the same lock that _on_chunk and
+                # _on_update use to update it.
+                no_visible_text = current is self.active and not self.active.message_text
             if current is not self.active or current is None or current.stopped:
                 break
 
             # Only nudge when the model has not produced any visible reply yet.
             # If it has produced partial text, the user can already see progress
             # in the final message when it arrives.
-            if not self.active.message_text:
+            if no_visible_text:
                 elapsed = time.time() - self.active.start_time
                 elapsed_str = _format_elapsed_short(elapsed)
                 chat_result = ChatResult(
