@@ -46,16 +46,15 @@ from diploid_agent.plan.models import Plan, PlanStatus, Task, TaskStatus, TaskTy
 from diploid_agent.plugin_incidents import PluginIncidentStore
 from diploid_agent.plugins import PluginManager
 from diploid_agent.plugins.contexts import (
-    McpCommandContext,
     MemoryTransitionContext,
     PromoteContext,
     RetainContext,
     ShutdownContext,
-    SkillCommandContext,
 )
 from diploid_agent.runtime.config_manager import RuntimeConfigManager
 from diploid_agent.runtime.event_bus import Event, EventBus
 from diploid_agent.runtime.instance import InstanceManager
+from diploid_agent.runtime.mcp_skills import RuntimeMcpSkills
 from diploid_agent.runtime.metrics import RuntimeMetrics
 from diploid_agent.runtime.outbox import RuntimeOutbox
 from diploid_agent.runtime.store import ChatSessionStore
@@ -212,6 +211,7 @@ class AgentRuntime(RuntimeAPI):
             shared_root=self.config.harness.skills.shared_root,
             chat_cwd_root=self.sessions_root,
         )
+        self._mcp_skills = RuntimeMcpSkills(self)
 
         # Prompt assembly is delegated to a dedicated builder.
         self.context_builder = ContextBuilder(
@@ -485,116 +485,26 @@ class AgentRuntime(RuntimeAPI):
     def _metrics_context_for_prompt(self, chat_id: str, compact: bool = False) -> str | None:
         return self._runtime_metrics._metrics_context_for_prompt(chat_id, compact=compact)
 
-    @_locked
     def mcp_list(self, chat_id: str) -> str:
-        lines = ["Configured MCP servers:"]
-        for server in self.mcp.list_servers():
-            status = "disabled" if server["disabled"] else "enabled"
-            lines.append(
-                f"- {server['name']} ({status}): {server['command']} {' '.join(server['args'])}"
-            )
-        return "\n".join(lines) if len(lines) > 1 else "No MCP servers configured."
+        return self._mcp_skills.mcp_list(chat_id)
 
-    @_locked
     def mcp_enable(self, chat_id: str, name: str) -> str:
-        record = self._active_record(chat_id)
-        if record is None:
-            return "No active session. Start one with /new first."
-        ctx = self._plugins.before_mcp_enabled(
-            chat_id,
-            McpCommandContext(chat_id=chat_id, server_name=name, enabled=True, record=record),
-        )
-        name = ctx.server_name
-        names = set(record.enabled_mcp_servers or self.mcp.default_enabled_names())
-        names.add(name)
-        record.enabled_mcp_servers = sorted(names)
-        self._append_record(record)
-        self._plugins.after_mcp_enabled(
-            chat_id,
-            McpCommandContext(chat_id=chat_id, server_name=name, enabled=True, record=record),
-        )
-        return f"Enabled MCP server {name}. New sessions will use it."
+        return self._mcp_skills.mcp_enable(chat_id, name)
 
-    @_locked
     def mcp_disable(self, chat_id: str, name: str) -> str:
-        record = self._active_record(chat_id)
-        if record is None:
-            return "No active session. Start one with /new first."
-        ctx = self._plugins.before_mcp_disabled(
-            chat_id,
-            McpCommandContext(chat_id=chat_id, server_name=name, enabled=False, record=record),
-        )
-        name = ctx.server_name
-        names = set(record.enabled_mcp_servers or self.mcp.default_enabled_names())
-        names.discard(name)
-        record.enabled_mcp_servers = sorted(names)
-        self._append_record(record)
-        self._plugins.after_mcp_disabled(
-            chat_id,
-            McpCommandContext(chat_id=chat_id, server_name=name, enabled=False, record=record),
-        )
-        return f"Disabled MCP server {name}."
+        return self._mcp_skills.mcp_disable(chat_id, name)
 
-    @_locked
     def skill_list(self, chat_id: str) -> str:
-        skills = self.skills.list_skills(chat_id)
-        enabled = self._active_skill_names(chat_id)
-        if not skills:
-            return "No skills available."
-        lines = ["Available skills:"]
-        for skill in skills:
-            state = "enabled" if skill.name in enabled else "disabled"
-            lines.append(f"- /{skill.name} ({state}) — {skill.description or 'no description'}")
-        return "\n".join(lines)
+        return self._mcp_skills.skill_list(chat_id)
 
-    @_locked
     def skill_enable(self, chat_id: str, name: str) -> str:
-        record = self._active_record(chat_id)
-        if record is None:
-            return "No active session. Start one with /new first."
-        ctx = self._plugins.before_skill_enabled(
-            chat_id,
-            SkillCommandContext(chat_id=chat_id, skill_name=name, enabled=True, record=record),
-        )
-        name = ctx.skill_name
-        enabled = set(record.enabled_skills or self._default_active_skills())
-        enabled.add(name)
-        record.enabled_skills = sorted(enabled)
-        record.disabled_skills = sorted(set(record.disabled_skills or []) - {name})
-        self._append_record(record)
-        self._plugins.after_skill_enabled(
-            chat_id,
-            SkillCommandContext(chat_id=chat_id, skill_name=name, enabled=True, record=record),
-        )
-        return f"Enabled skill /{name}."
+        return self._mcp_skills.skill_enable(chat_id, name)
 
-    @_locked
     def skill_disable(self, chat_id: str, name: str) -> str:
-        record = self._active_record(chat_id)
-        if record is None:
-            return "No active session. Start one with /new first."
-        ctx = self._plugins.before_skill_disabled(
-            chat_id,
-            SkillCommandContext(chat_id=chat_id, skill_name=name, enabled=False, record=record),
-        )
-        name = ctx.skill_name
-        enabled = set(record.enabled_skills or self._default_active_skills())
-        enabled.discard(name)
-        record.enabled_skills = sorted(enabled)
-        record.disabled_skills = sorted(set(record.disabled_skills or []) | {name})
-        self._append_record(record)
-        self._plugins.after_skill_disabled(
-            chat_id,
-            SkillCommandContext(chat_id=chat_id, skill_name=name, enabled=False, record=record),
-        )
-        return f"Disabled skill /{name}."
+        return self._mcp_skills.skill_disable(chat_id, name)
 
-    @_locked
     def skill_create(self, chat_id: str, name: str, content: str) -> str:
-        if not self.config.harness.skills.allow_chat_creation:
-            return "Chat-scoped skill creation is disabled."
-        self.skills.create_chat_skill(chat_id, name, content)
-        return f"Created chat skill /{name}. It will be available after /new."
+        return self._mcp_skills.skill_create(chat_id, name, content)
 
     def get_metrics(self, chat_id: str | None = None) -> dict[str, Any]:
         """Return cumulative metrics for a chat or globally."""
@@ -615,49 +525,19 @@ class AgentRuntime(RuntimeAPI):
     # ---------------------------------------------------------------- helpers
 
     def _active_mcp_server_names(self, chat_id: str) -> list[str]:
-        record = self._active_record(chat_id)
-        if record and record.enabled_mcp_servers is not None:
-            return record.enabled_mcp_servers
-        return sorted(
-            set(self.mcp.default_enabled_names()) | set(self._plugins.default_mcp_names())
-        )
+        return self._mcp_skills._active_mcp_server_names(chat_id)
 
     def _active_mcp_servers(self, chat_id: str) -> list[dict[str, Any]]:
-        return self.mcp.enabled_servers(chat_id, self._active_mcp_server_names(chat_id))
+        return self._mcp_skills._active_mcp_servers(chat_id)
 
     def _default_active_skills(self) -> set[str]:
-        """Return skills that should be active for a brand-new chat."""
-        if self.config.harness.skills.default_lazy:
-            return set()
-        return set(self.config.harness.skills.default_enabled) | set(
-            self._plugins.default_skill_names()
-        )
+        return self._mcp_skills._default_active_skills()
 
     def _active_skill_names(self, chat_id: str) -> set[str]:
-        record = self._active_record(chat_id)
-        if record and record.enabled_skills is not None:
-            base = set(record.enabled_skills)
-        else:
-            base = self._default_active_skills()
-        return base | self._active_chat_skills.get(chat_id, set())
+        return self._mcp_skills._active_skill_names(chat_id)
 
-    @_locked
     def match_and_activate_skills(self, chat_id: str, user_message: str) -> set[str]:
-        """Match user message against skill triggers for this turn.
-
-        Matched skills are only active for the current turn.  Persistent
-        enabling is still tracked in ``record.enabled_skills``.
-        """
-        record = self._active_record(chat_id)
-        all_skills = {s.name for s in self.skills.list_skills(chat_id)}
-        disabled = set(record.disabled_skills or []) if record else set()
-        matched = self.skills.match_skills(
-            user_message,
-            chat_id,
-            enabled=all_skills - disabled,
-        )
-        self._active_chat_skills[chat_id] = matched
-        return self._active_skill_names(chat_id)
+        return self._mcp_skills.match_and_activate_skills(chat_id, user_message)
 
     def _memory_manager(self, chat_id: str) -> MemoryManager:
         if chat_id not in self._memory_managers:
