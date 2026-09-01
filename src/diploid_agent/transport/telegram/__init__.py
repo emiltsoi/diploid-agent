@@ -19,6 +19,8 @@ from diploid_agent.transport.telegram.poller import (
     TelegramPoller,
     TurnWorker,
 )
+from diploid_agent.transport.telegram.sender import TelegramSenderMixin
+from diploid_agent.transport.telegram.state import TelegramStateMixin
 from diploid_agent.transport.telegram.transport import TelegramTransport, main
 
 __all__ = [
@@ -30,6 +32,8 @@ __all__ = [
     "DeliveryWorker",
     "TelegramCommandMixin",
     "TelegramPoller",
+    "TelegramSenderMixin",
+    "TelegramStateMixin",
     "TelegramTransport",
     "TurnWorker",
     "_build_heartbeat_text",
