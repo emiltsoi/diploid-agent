@@ -2408,7 +2408,7 @@ class AgentRuntime(RuntimeAPI):
                 notice="This chat is busy; your message was queued.",
             )
         try:
-            return self.turn_controller.process(
+            result = self.turn_controller.process(
                 chat_id,
                 user_message,
                 model=model,
@@ -2418,6 +2418,9 @@ class AgentRuntime(RuntimeAPI):
                 notify=notify,
                 other_instance_running=False,
             )
+            if result is not None and reply_to_message_id is not None:
+                result.reply_to_message_id = reply_to_message_id
+            return result
         finally:
             self.instance_manager.release(chat_id)
 
@@ -2509,7 +2512,7 @@ class AgentRuntime(RuntimeAPI):
                         payload.get("result", dispatch.result or ""),
                     )
 
-            return self.turn_controller.process(
+            result = self.turn_controller.process(
                 chat_id,
                 user_message,
                 model=model,
@@ -2520,6 +2523,9 @@ class AgentRuntime(RuntimeAPI):
                 notify=wake_notify,
                 other_instance_running=False,
             )
+            if result is not None and reply_to_message_id is not None:
+                result.reply_to_message_id = reply_to_message_id
+            return result
         finally:
             self.instance_manager.release(chat_id)
 

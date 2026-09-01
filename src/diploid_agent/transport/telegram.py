@@ -181,12 +181,13 @@ class TurnWorker(threading.Thread):
         self.chat_input = chat_input
         self.chat_id = chat_input.chat_id
         self._should_stop = threading.Event()
+        self._running = threading.Event()
 
     def steer(self, chat_input: ChatInput) -> None:
         """Queue the new input and ask the worker to cancel the current turn."""
         with self.poller._worker_lock:
             self.poller._pending_inputs.setdefault(self.chat_id, deque()).append(chat_input)
-        if self.is_alive():
+        if self.is_alive() and self._running.is_set():
             self.poller._harness_stop(self.chat_id)
 
     def stop(self) -> None:
@@ -554,11 +555,13 @@ class TurnWorker(threading.Thread):
 
     def run(self) -> None:
         chat_input = self.chat_input
+        self._running.set()
         try:
             while chat_input:
                 self._run_turn(chat_input)
                 chat_input = self._take_next_message()
         finally:
+            self._running.clear()
             with self.poller._worker_lock:
                 active = self.poller._active_workers.get(self.chat_id)
                 if active is self:
@@ -679,6 +682,7 @@ class TelegramPoller:
         self._pending_inputs: dict[int, deque[ChatInput]] = {}
         self._delivery_workers: dict[int, DeliveryWorker] = {}
         self._last_user_message_ids: dict[int, int] = {}
+        self._send_locks: dict[int, threading.RLock] = {}
         self._worker_lock = threading.RLock()
         self._message_registry_lock = threading.RLock()
         self._rate_limit_lock = threading.RLock()
@@ -746,7 +750,9 @@ class TelegramPoller:
 
     def _deliver_outbox_result(self, chat_id: int, chat_result: ChatResult) -> None:
         """Deliver an outbox ChatResult to Telegram, registering sent message IDs."""
-        reply_to_message_id = self._last_user_message_ids.get(chat_id)
+        reply_to_message_id = chat_result.reply_to_message_id
+        if reply_to_message_id is None:
+            reply_to_message_id = self._last_user_message_ids.get(chat_id)
         if chat_result.reply:
             sent = self._send_text(
                 chat_id,
@@ -1460,10 +1466,30 @@ class TelegramPoller:
         If ``first_message_id`` is provided, the first chunk edits that message
         in place and the remaining chunks are sent as new messages. Each message
         in a multi-part reply is tagged with ``(X/Y)`` at the end.
+
+        Sends for a given chat are serialised with an RLock so a turn and its
+        delivery worker do not interleave or duplicate messages.
         """
         if not text:
             return []
+        send_lock = self._send_locks.setdefault(chat_id, threading.RLock())
+        with send_lock:
+            return self._send_text_locked(
+                chat_id,
+                text,
+                first_message_id=first_message_id,
+                reply_to_message_id=reply_to_message_id,
+            )
 
+    def _send_text_locked(
+        self,
+        chat_id: int,
+        text: str,
+        *,
+        first_message_id: int | None = None,
+        reply_to_message_id: int | None = None,
+    ) -> list[int]:
+        """Implementation of _send_text; caller must hold the per-chat send lock."""
         ask_block: AskBlock | None = None
         display_text = text
 
@@ -2510,7 +2536,7 @@ class TelegramPoller:
             logger.info("Message from chat %s: /continue", chat_id)
             with self._worker_lock:
                 worker = self._active_workers.get(chat_id)
-            if worker and worker.is_alive():
+            if worker is not None and worker.is_alive() and worker._running.is_set():
                 worker.steer(continue_input)
             else:
                 worker = TurnWorker(self, continue_input)
@@ -2564,9 +2590,14 @@ class TelegramTransport(Transport):
             worker.stop()
         for worker in delivery_workers:
             worker.stop()
+        for worker in workers:
+            worker.join(timeout=5.0)
+        for worker in delivery_workers:
+            worker.join(timeout=5.0)
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=5.0)
         self._thread = None
+        self._poller._close_client()
 
     def send(self, message: OutboundMessage) -> list[int]:
         chat_id_value: int | str = message.chat_id

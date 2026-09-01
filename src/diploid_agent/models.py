@@ -83,6 +83,7 @@ class ChatResult:
     session_number: int | None = None
     turn_number: int | None = None
     metrics: dict[str, Any] | None = None
+    reply_to_message_id: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -391,9 +391,13 @@ class FakeProcessForRestart:
         self.stdin = FakeStream()
         self.stdout = FakeStream()
         self.returncode: int | None = None
+        self.pid = 12345
 
     def terminate(self) -> None:
         pass
+
+    def kill(self) -> None:
+        self.returncode = -9
 
     async def wait(self) -> int:
         return 0
