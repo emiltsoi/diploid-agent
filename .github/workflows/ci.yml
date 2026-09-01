@@ -6,11 +6,20 @@ on:
   pull_request:
     branches: [master, main]
 
+env:
+  # Dummy key for tests that instantiate AcpClient but never start a real ACP child.
+  WINDSURF_API_KEY: ci-test-key-not-real
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: emiltsoi/diploid-plugins
+          path: diploid-plugins
 
       - uses: actions/setup-python@v5
         with:
@@ -20,6 +29,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
+          pip install -e ./diploid-plugins --no-deps
 
       - name: Lint
         run: ruff check src tests
