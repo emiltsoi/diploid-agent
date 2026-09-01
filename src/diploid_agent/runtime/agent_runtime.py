@@ -60,11 +60,11 @@ from diploid_agent.runtime.prompts import RuntimePrompts
 from diploid_agent.runtime.store import ChatSessionStore
 from diploid_agent.runtime.subagent import RuntimeSubagent
 from diploid_agent.runtime.timer_service import TimerService
-from diploid_agent.runtime.turn_controller import TurnController
 from diploid_agent.runtime.wake_queue import WakeQueue
 from diploid_agent.skills import SkillManager
 from diploid_agent.task.engine import TaskEngine
 from diploid_agent.transport.base import RuntimeAPI
+from diploid_agent.turn import TurnController
 
 logger = logging.getLogger(__name__)
 
