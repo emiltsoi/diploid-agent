@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from pydantic import BaseModel
 
 from diploid_agent.config import (
     Config,
@@ -1330,8 +1331,8 @@ class AgentRuntime(RuntimeAPI):
 
     def _update_config_section(
         self,
-        current: Any,
-        new: Any,
+        current: BaseModel,
+        new: BaseModel,
         *,
         success: str,
         post: Callable[[], None] | None = None,

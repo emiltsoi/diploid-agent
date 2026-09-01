@@ -1713,7 +1713,7 @@ class TurnController:
         reply_prefix: str,
         old_model: str | None = None,
         clear_active: bool = False,
-        plugin_overrides: Any | None = None,
+        plugin_overrides: dict[str, bool] | None = None,
     ) -> ChatResult:
         """Archive any active session and start a fresh ACP session for the chat."""
         record = self.runtime._active_record(chat_id)
