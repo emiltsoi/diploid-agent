@@ -31,6 +31,7 @@ retention to a Hindsight memory server.
 - Edits the streaming placeholder with a `(still working, Xm)` liveness suffix, and sends `⏳ Still thinking...` outbox heartbeats for long wake-driven turns, so users know whether to wait or send `/stop`.
 - Runs a `diploid-memory` MCP server with `memory_recall`, `memory_retain`, and
   `memory_promote` tools, plus a shared `memory` skill that lets the agent use them.
+- Supports agent-to-agent mesh messaging via [`diploid-mesh`](https://github.com/emiltsoi/diploid-mesh), with `reply=yes/no/end` semantics, DSN recording, and per-turn nudges/caps to prevent mesh-send loops.
 - Exposes a plugin framework for per-chat state plugins; the built-in state plugins
   live in [`diploid-plugins`](https://github.com/emiltsoi/diploid-plugins).
 
@@ -129,6 +130,7 @@ Browse the docs as a searchable site: **https://emiltsoi.github.io/diploid-agent
 - [Design decisions](docs/design-decisions.md)
 - [Hindsight API contract](docs/hindsight-api-contract.md)
 - [Background dispatches and continuation](docs/dispatch.md)
+- [Mesh integration](docs/mesh.md)
 - [Index of all documentation](docs/index.md)
 - [Plugin contract](docs/plugin-contract.md)
 
@@ -139,9 +141,11 @@ Browse the docs as a searchable site: **https://emiltsoi.github.io/diploid-agent
 - Receives Ed25519-signed `[mesh]` webhooks on `/mesh/receive` (and the OpenClaw alias `/plugins/openclaw-mesh/webhook`).
 - Wakes the diploid runtime with mesh context so the agent can reply.
 - Exposes MCP tools (`mesh_send`, `mesh_list`, `mesh_register`, `mesh_sync`, `mesh_publish`, `mesh_health`, `mesh_deregister`).
+- Enforces `reply=yes/no/end` semantics: `reply=no` nudges the model to avoid replying, `reply=end` hard-blocks `mesh_send`, and DSNs are recorded without a turn.
+- Nudges and hard-caps `mesh_send` calls per ACP turn via `harness.mesh.max_sends_per_turn` and `harness.mesh.max_message_in_turn_suggestion`.
 - Shares the same `mesh-peer-registry` and local vault format with [`hermes-mesh`](https://github.com/emiltsoi/hermes-mesh) and [`openclaw-mesh`](https://github.com/emiltsoi/openclaw-mesh), so a diploid agent can exchange messages with Hermes and OpenClaw agents using the same envelope and signatures.
 
-See the [`diploid-mesh` README](https://github.com/emiltsoi/diploid-mesh/blob/main/README.md) for install, vault setup, and `harness.yaml` configuration.
+See [`docs/mesh.md`](docs/mesh.md) and the [`diploid-mesh` README](https://github.com/emiltsoi/diploid-mesh/blob/main/README.md) for install, vault setup, and `harness.yaml` configuration.
 
 ## Important caveats
 

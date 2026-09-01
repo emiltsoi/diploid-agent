@@ -11,4 +11,5 @@
 - [Design decisions](design-decisions.md)
 - [Hindsight API contract](hindsight-api-contract.md)
 - [Background dispatches](dispatch.md)
+- [Mesh integration](mesh.md)
 - [Plugin contract](plugin-contract.md)

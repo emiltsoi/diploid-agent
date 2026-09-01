@@ -16,6 +16,7 @@ This is the wiki for the `diploid-agent`.
 10. [Design decisions](design-decisions.md) — why the harness is built this way.
 11. [Hindsight API contract](hindsight-api-contract.md) — the external Hindsight server contract.
 12. [Background dispatches and continuation](dispatch.md) — run work in the background and resume the session when it completes.
+13. [Mesh integration](mesh.md) — agent-to-agent mesh messaging, reply semantics, and per-turn send caps.
 
 ## One-sentence summary
 
