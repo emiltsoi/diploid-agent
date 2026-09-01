@@ -293,7 +293,7 @@ class AcpTransport:
 
         self._client._watchdog.start()
 
-        init = await self._call(
+        init = await self.call(
             "initialize",
             {
                 "protocolVersion": 1,
