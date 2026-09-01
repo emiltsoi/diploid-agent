@@ -216,7 +216,12 @@ class TaskEngine:
             )
             return proc.stdout, proc.stderr, proc.returncode, None
         except subprocess.TimeoutExpired:
-            return "", f"Timed out after {timeout}s", -1, {"stop_reason": "timeout", "timed_out": True}
+            return (
+                "",
+                f"Timed out after {timeout}s",
+                -1,
+                {"stop_reason": "timeout", "timed_out": True},
+            )
         except (OSError, ValueError) as exc:
             return "", str(exc), -1, {"stop_reason": "failed"}
 

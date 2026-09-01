@@ -14,7 +14,13 @@ from diploid_agent.transport.http.models import *
 from diploid_agent.transport.http.utils import _to_response
 
 
-def register_skills(app: FastAPI, runtime: RuntimeAPI, command_handler: CommandHandler, config: Config, _require_api_key: Callable[[str | None], None]) -> None:
+def register_skills(
+    app: FastAPI,
+    runtime: RuntimeAPI,
+    command_handler: CommandHandler,
+    config: Config,
+    _require_api_key: Callable[[str | None], None],
+) -> None:
     @app.get("/skill/{chat_id}")
     def skill_get(chat_id: str) -> ChatResponse:
         raw = command_handler.call(

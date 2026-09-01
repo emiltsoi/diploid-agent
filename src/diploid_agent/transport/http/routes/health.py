@@ -14,7 +14,13 @@ from diploid_agent.transport.command_handler import CommandHandler
 from diploid_agent.transport.http.models import *
 
 
-def register_health(app: FastAPI, runtime: RuntimeAPI, command_handler: CommandHandler, config: Config, _require_api_key: Callable[[str | None], None]) -> None:
+def register_health(
+    app: FastAPI,
+    runtime: RuntimeAPI,
+    command_handler: CommandHandler,
+    config: Config,
+    _require_api_key: Callable[[str | None], None],
+) -> None:
     @app.get("/health")
     def health() -> dict[str, Any]:
         return command_handler.call(

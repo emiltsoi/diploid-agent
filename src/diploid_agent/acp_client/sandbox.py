@@ -292,7 +292,9 @@ class AcpSandbox:
                 "name": str(s.get("name", "")),
                 "command": str(s.get("command", "")),
                 "args": list(s.get("args", [])),
-                "env": list(s.get("env", [])) if isinstance(s.get("env"), list) else dict(s.get("env", {})),
+                "env": list(s.get("env", []))
+                if isinstance(s.get("env"), list)
+                else dict(s.get("env", {})),
             }
             for s in mcp_servers
         ]

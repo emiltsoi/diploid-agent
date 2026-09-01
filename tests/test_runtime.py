@@ -52,9 +52,7 @@ def _make_config(tmp_path: Path) -> Config:
 
 def _make_config_with_outbox(tmp_path: Path) -> Config:
     config = _make_config(tmp_path)
-    config.harness.notifications = NotificationsConfig(
-        enabled=True, outbox_delivery=True
-    )
+    config.harness.notifications = NotificationsConfig(enabled=True, outbox_delivery=True)
     return config
 
 

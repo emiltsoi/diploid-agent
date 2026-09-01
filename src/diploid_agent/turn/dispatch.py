@@ -141,7 +141,6 @@ class TurnDispatch:
         self.runtime._plugins.on_dispatch(chat_id, dispatch)
         return ChatResult(reply="Dispatched.", dispatch_id=dispatch.id)
 
-
     def continue_turn(
         self,
         dispatch_id: str,
@@ -619,5 +618,3 @@ class TurnDispatch:
             self.runtime._deliver_chat_result(chat_id, chat_result)
 
         return chat_result
-
-

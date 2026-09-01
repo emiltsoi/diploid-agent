@@ -1985,9 +1985,7 @@ def test_cancel_ask_callback(tmp_path: Path) -> None:
     def fake_clear(chat_id: int, message_id: int) -> None:
         cleared.append((chat_id, message_id))
 
-    def fake_edit(
-        chat_id: int, message_id: int, text: str, *, parse_mode: Any = None
-    ) -> bool:
+    def fake_edit(chat_id: int, message_id: int, text: str, *, parse_mode: Any = None) -> bool:
         edited.append((chat_id, message_id, text))
         return True
 

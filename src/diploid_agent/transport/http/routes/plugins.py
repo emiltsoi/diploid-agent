@@ -17,7 +17,13 @@ from diploid_agent.transport.http.models import *
 from diploid_agent.transport.http.utils import _to_response
 
 
-def register_plugins(app: FastAPI, runtime: RuntimeAPI, command_handler: CommandHandler, config: Config, _require_api_key: Callable[[str | None], None]) -> None:
+def register_plugins(
+    app: FastAPI,
+    runtime: RuntimeAPI,
+    command_handler: CommandHandler,
+    config: Config,
+    _require_api_key: Callable[[str | None], None],
+) -> None:
     @app.get("/plugins/{chat_id}", response_model=PluginListResponse)
     def plugin_list(chat_id: str) -> PluginListResponse:
         raw = command_handler.call(

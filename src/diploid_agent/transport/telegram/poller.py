@@ -50,7 +50,6 @@ from .state import TelegramStateMixin
 
 
 class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMixin):
-
     def __init__(
         self,
         token: str,
@@ -183,7 +182,11 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
                 chat_result.reply,
                 reply_to_message_id=reply_to_message_id,
             )
-            if sent and chat_result.session_number is not None and chat_result.turn_number is not None:
+            if (
+                sent
+                and chat_result.session_number is not None
+                and chat_result.turn_number is not None
+            ):
                 self._register_message_ids(
                     chat_id,
                     sent,

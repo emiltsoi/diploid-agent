@@ -363,7 +363,9 @@ class RuntimeSubagent:
                         "dispatch_id": task.dispatch_id,
                         "name": plan.name,
                         "status": status,
-                        "continued": dispatch.status == DispatchStatus.COMPLETED if dispatch else False,
+                        "continued": dispatch.status == DispatchStatus.COMPLETED
+                        if dispatch
+                        else False,
                         "started_at": started_at,
                         "finished_at": finished_at,
                         "summary": summary,

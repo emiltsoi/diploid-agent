@@ -170,9 +170,7 @@ class RuntimeActions:
             state = self._runtime._chat_state(chat_id)
             active = self._runtime._active_record(chat_id)
             sessions = []
-            for record in sorted(
-                state.sessions.values(), key=lambda r: r.session_number
-            ):
+            for record in sorted(state.sessions.values(), key=lambda r: r.session_number):
                 sessions.append(
                     {
                         "number": record.session_number,
@@ -220,9 +218,7 @@ class RuntimeActions:
         max_tokens: int | None = None,
     ) -> ChatResult:
         """Recall relevant memories for a query."""
-        max_tokens = (
-            max_tokens or self.config.harness.memory.hindsight.max_recall_tokens
-        )
+        max_tokens = max_tokens or self.config.harness.memory.hindsight.max_recall_tokens
         reply = self._runtime._memory_manager(chat_id).backend.recall(
             query,
             tags=tags,
@@ -332,9 +328,7 @@ class RuntimeActions:
             try:
                 self.wake_queue.cancel(chat_id=chat_id, reason="auto_continue")
             except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "Failed to cancel auto-continue wakes for %s: %s", chat_id, exc
-                )
+                logger.warning("Failed to cancel auto-continue wakes for %s: %s", chat_id, exc)
 
         if self._incidents is not None:
             try:
@@ -348,9 +342,7 @@ class RuntimeActions:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Failed to record restart incident for %s: %s", chat_id, exc)
 
-        self._runtime._schedule_systemd_restart(
-            service, delay=5.0, chat_id=chat_id, reason=reason
-        )
+        self._runtime._schedule_systemd_restart(service, delay=5.0, chat_id=chat_id, reason=reason)
 
         return ChatResult(
             reply=f"Restarting {service}. I'll be back in a moment.",
@@ -386,9 +378,7 @@ class RuntimeActions:
             name, description=description, chat_id=chat_id, tasks=tasks or []
         )
 
-    def plan_task_start(
-        self, plan_id: str, task_id: str | None = None
-    ) -> Task:
+    def plan_task_start(self, plan_id: str, task_id: str | None = None) -> Task:
         """Start a ready task in a plan."""
         return self.task_engine.start_task(plan_id, task_id)
 
@@ -403,9 +393,7 @@ class RuntimeActions:
         """Manually mark a task as done and emit the completion event."""
         existing = self.plan_manager.get_task(plan_id, task_id)
         already_done = existing is not None and existing.status == TaskStatus.DONE
-        task = self.plan_manager.complete_task(
-            plan_id, task_id, result=result, log=log
-        )
+        task = self.plan_manager.complete_task(plan_id, task_id, result=result, log=log)
         if task is None:
             raise ValueError(f"Task {task_id} not found in plan {plan_id}")
         if not already_done:

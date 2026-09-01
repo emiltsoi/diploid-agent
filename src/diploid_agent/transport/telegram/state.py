@@ -7,6 +7,7 @@ on its own; it expects the host class to provide attributes such as
 ``_send_message``, ``_edit_message_text``, ``_delete_message``,
 ``_answer_callback_query``, ``_clear_inline_keyboard``.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -28,7 +29,6 @@ logger = logging.getLogger("telegram_poll")
 
 
 class TelegramStateMixin:
-
     def _chat_dir(self, chat_id: int) -> Path:
         """Return the per-chat session directory, mirroring the harness layout."""
         safe = str(chat_id).replace("/", "_")
@@ -160,9 +160,7 @@ class TelegramStateMixin:
         except Exception:
             logger.exception("Failed to remove pending question for chat %s", chat_id)
 
-    def _maybe_answer_pending_question(
-        self, chat_input: ChatInput
-    ) -> ChatInput | None:
+    def _maybe_answer_pending_question(self, chat_input: ChatInput) -> ChatInput | None:
         """If the user is answering a pending question, rewrite the message.
 
         If the question is cancellable and the user pressed the cancel button,
@@ -180,9 +178,7 @@ class TelegramStateMixin:
         if pending is None:
             return chat_input
 
-        if pending.get("cancellable") and chat_input.text == pending.get(
-            "cancel_label", "Cancel"
-        ):
+        if pending.get("cancellable") and chat_input.text == pending.get("cancel_label", "Cancel"):
             self._remove_pending_question(chat_input.chat_id)
             try:
                 self._send_message(
@@ -242,34 +238,25 @@ class TelegramStateMixin:
         if pending.get("cancellable") and is_ask_cancel_callback(data):
             self._remove_pending_question(chat_input.chat_id)
             if question_message_id:
-                self._edit_message_text(
-                    chat_input.chat_id, question_message_id, "Cancelled."
-                )
-                self._clear_inline_keyboard(
-                    chat_input.chat_id, question_message_id
-                )
+                self._edit_message_text(chat_input.chat_id, question_message_id, "Cancelled.")
+                self._clear_inline_keyboard(chat_input.chat_id, question_message_id)
             return None
 
         index = parse_ask_callback_index(data)
         if index is None or index < 0 or index >= len(pending["options"]):
             self._remove_pending_question(chat_input.chat_id)
             if question_message_id:
-                self._clear_inline_keyboard(
-                    chat_input.chat_id, question_message_id
-                )
+                self._clear_inline_keyboard(chat_input.chat_id, question_message_id)
             return None
 
         selected = pending["options"][index]
         self._remove_pending_question(chat_input.chat_id)
         if question_message_id:
-            self._clear_inline_keyboard(
-                chat_input.chat_id, question_message_id
-            )
+            self._clear_inline_keyboard(chat_input.chat_id, question_message_id)
         return ChatInput(
             chat_id=chat_input.chat_id,
             message_id=chat_input.message_id,
-            text=f'The user answered the question "{pending["question"]}" '
-            f"by selecting: {selected}",
+            text=f'The user answered the question "{pending["question"]}" by selecting: {selected}',
             reply_to=pending["question"],
             reply_to_is_bot=True,
             reply_to_message_id=question_message_id,

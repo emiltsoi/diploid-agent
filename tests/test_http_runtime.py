@@ -239,9 +239,7 @@ def test_task_config_update_rejects_invalid_types(client: TestClient) -> None:
 
 def _make_config_with_outbox(tmp_path: Path) -> Config:
     config = _make_config(tmp_path)
-    config.harness.notifications = NotificationsConfig(
-        enabled=True, outbox_delivery=True
-    )
+    config.harness.notifications = NotificationsConfig(enabled=True, outbox_delivery=True)
     return config
 
 
@@ -387,9 +385,7 @@ def test_graceful_restart_endpoint_calls_runtime_graceful_restart(
         called.append((chat_id, service, reason))
         return ChatResult(reply=f"Restarting {service}")
 
-    monkeypatch.setattr(
-        client.app.state.runtime, "graceful_service_restart", fake_graceful_restart
-    )
+    monkeypatch.setattr(client.app.state.runtime, "graceful_service_restart", fake_graceful_restart)
 
     resp = client.post(
         "/graceful-restart",

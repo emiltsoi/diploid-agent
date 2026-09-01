@@ -74,11 +74,10 @@ def _acp_error_from_response(method: str, error: dict[str, Any]) -> AcpError:
         # list. A genuine "model not found" has a non-empty available-models list.
         available_models_str = ""
         if "available models:" in detail:
-            available_models_str = detail.split("available models:", 1)[1].strip(" \"\'[]").strip()
+            available_models_str = detail.split("available models:", 1)[1].strip(" \"'[]").strip()
 
-        looks_like_model_error = (
-            detail.startswith("model not found")
-            or ("model" in detail and "not found" in detail)
+        looks_like_model_error = detail.startswith("model not found") or (
+            "model" in detail and "not found" in detail
         )
         if looks_like_model_error:
             if available_models_str == "":

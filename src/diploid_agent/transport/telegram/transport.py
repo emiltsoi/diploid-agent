@@ -118,9 +118,7 @@ def main() -> int:
     # The poller must wait longer than the harness's absolute ACP timeout,
     # otherwise it gives up on a turn that is still running. If the harness has
     # no hard timeout, the poller also waits indefinitely.
-    reply_timeout = (
-        config.engine.timeout + 30.0 if config.engine.timeout is not None else None
-    )
+    reply_timeout = config.engine.timeout + 30.0 if config.engine.timeout is not None else None
     metrics = MetricsCollector(prefix="harness")
     poller = TelegramPoller(
         token=token,

@@ -7,6 +7,7 @@ expects the host class to provide attributes such as ``client``,
 ``_chat_last_telegram_api_call``, ``_rate_limit_lock``, ``_send_locks``,
 ``_max_telegram_retries``, ``_max_telegram_backoff``, and ``metrics``.
 """
+
 from __future__ import annotations
 
 import json
@@ -37,7 +38,6 @@ logger = logging.getLogger("telegram_poll")
 
 
 class TelegramSenderMixin:
-
     def _throttle_telegram(
         self, method: str, chat_id: int | None, *, throttle: bool = True
     ) -> None:

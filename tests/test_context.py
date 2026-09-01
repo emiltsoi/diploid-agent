@@ -19,7 +19,9 @@ def _fixture_root() -> Path:
     return Path(__file__).parent / "fixtures" / "test-pilot"
 
 
-def _make_builder_with_plugins(tmp_path: Path, plugin_configs: list[PluginConfig]) -> ContextBuilder:
+def _make_builder_with_plugins(
+    tmp_path: Path, plugin_configs: list[PluginConfig]
+) -> ContextBuilder:
     """Return a ContextBuilder with additional plugin configs."""
     config = _make_config(tmp_path)
     if plugin_configs:
@@ -464,7 +466,10 @@ def test_build_dispatch_continuation_completed(tmp_path: Path) -> None:
     assert "- **status:** completed" in text
     assert "- **duration:** 30s" in text
     assert "- **summary:** Short summary" in text
-    assert "- **full_result_path:** /tmp/sessions/chat-1/subagent-results/subagent-dispatch-abc123.md" in text
+    assert (
+        "- **full_result_path:** /tmp/sessions/chat-1/subagent-results/subagent-dispatch-abc123.md"
+        in text
+    )
     assert "Please continue and present the result to the user." in text
     assert "stopped because" not in text
 

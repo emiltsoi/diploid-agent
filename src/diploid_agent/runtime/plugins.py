@@ -173,9 +173,7 @@ class RuntimePlugins:
         return ChatResult(reply=result)
 
     @_locked
-    def plugin_sandbox(
-        self, module: str, plugin: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
+    def plugin_sandbox(self, module: str, plugin: dict[str, Any] | None = None) -> dict[str, Any]:
         """Run a candidate plugin module through start/stop in a subprocess."""
         data: dict[str, Any] = {"name": "sandbox", "module": module, **(plugin or {})}
         cfg = PluginConfig(**data)

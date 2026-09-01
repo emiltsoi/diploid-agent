@@ -100,7 +100,11 @@ class CommandHandler:
 
         try:
             if http_method == "GET":
-                path = http_path.format(chat_id=str(chat_id)) if "{chat_id}" in http_path else http_path
+                path = (
+                    http_path.format(chat_id=str(chat_id))
+                    if "{chat_id}" in http_path
+                    else http_path
+                )
                 params = {k: v for k, v in kwargs.items() if v is not None}
                 resp = client.get(f"{self.harness_url}{path}", headers=headers, params=params)
             else:

@@ -12,7 +12,13 @@ from diploid_agent.transport.command_handler import CommandHandler
 from diploid_agent.transport.http.models import *
 
 
-def register_mesh(app: FastAPI, runtime: RuntimeAPI, command_handler: CommandHandler, config: Config, _require_api_key: Callable[[str | None], None]) -> None:
+def register_mesh(
+    app: FastAPI,
+    runtime: RuntimeAPI,
+    command_handler: CommandHandler,
+    config: Config,
+    _require_api_key: Callable[[str | None], None],
+) -> None:
     @app.post("/ingress/{protocol}")
     async def ingress_route(protocol: str, request: Request) -> Response:
         """Generic pluggable ingress route."""

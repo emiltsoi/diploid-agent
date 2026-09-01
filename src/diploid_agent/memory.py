@@ -134,7 +134,7 @@ def _trim_to_last_section(text: str, limit: int) -> str:
         return text
     for m in reversed(list(re.finditer(r"\n## ", text))):
         if len(text) - m.start() <= limit:
-            return text[m.start():].lstrip("\n")
+            return text[m.start() :].lstrip("\n")
     return text[-limit:].lstrip("\n")
 
 

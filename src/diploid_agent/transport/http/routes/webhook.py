@@ -13,7 +13,13 @@ from diploid_agent.transport.command_handler import CommandHandler
 from diploid_agent.transport.http.models import *
 
 
-def register_webhook(app: FastAPI, runtime: RuntimeAPI, command_handler: CommandHandler, config: Config, _require_api_key: Callable[[str | None], None]) -> None:
+def register_webhook(
+    app: FastAPI,
+    runtime: RuntimeAPI,
+    command_handler: CommandHandler,
+    config: Config,
+    _require_api_key: Callable[[str | None], None],
+) -> None:
     @app.post("/webhook")
     async def telegram_webhook(request: Request) -> dict[str, object]:
         """Minimal Telegram webhook: extracts text and chat_id from update."""

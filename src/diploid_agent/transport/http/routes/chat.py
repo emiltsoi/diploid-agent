@@ -14,7 +14,13 @@ from diploid_agent.transport.http.models import *
 from diploid_agent.transport.http.utils import _to_response
 
 
-def register_chat(app: FastAPI, runtime: RuntimeAPI, command_handler: CommandHandler, config: Config, _require_api_key: Callable[[str | None], None]) -> None:
+def register_chat(
+    app: FastAPI,
+    runtime: RuntimeAPI,
+    command_handler: CommandHandler,
+    config: Config,
+    _require_api_key: Callable[[str | None], None],
+) -> None:
     @app.post("/chat", response_model=ChatResponse, dependencies=[Depends(_require_api_key)])
     def chat(req: ChatRequest) -> ChatResponse:
         # The caller (e.g. the Telegram long-polling bot) is responsible for

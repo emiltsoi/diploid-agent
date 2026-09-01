@@ -484,7 +484,9 @@ def test_sandbox_systemctl_wrapper_routes_to_harness(monkeypatch, tmp_path: Path
 
         env = os.environ.copy()
         env["DIPLOID_CONTROL_SOCKET"] = str(client._control_socket_path)
-        env["PATH"] = f"{client._sandbox.devin_home / '.local' / 'bin'}{os.pathsep}{env.get('PATH', '')}"
+        env["PATH"] = (
+            f"{client._sandbox.devin_home / '.local' / 'bin'}{os.pathsep}{env.get('PATH', '')}"
+        )
         env.pop("DBUS_SESSION_BUS_ADDRESS", None)
         env.pop("DBUS_SYSTEM_BUS_ADDRESS", None)
 

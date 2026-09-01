@@ -35,9 +35,7 @@ def _make_config(tmp_path):
             session_store_path=tmp_path / "sessions.jsonl",
             session_prune_enabled=False,
             plugins=[
-                PluginConfig(
-                    name="continuity", enabled=True, module="diploid_plugins.continuity"
-                )
+                PluginConfig(name="continuity", enabled=True, module="diploid_plugins.continuity")
             ],
         ),
     )

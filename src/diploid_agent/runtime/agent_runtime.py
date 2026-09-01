@@ -589,17 +589,13 @@ class AgentRuntime(RuntimeAPI):
     def plugin_remove(self, name: str) -> ChatResult:
         return self._runtime_plugins.plugin_remove(name)
 
-    def plugin_toggle(
-        self, name: str, enabled: bool, chat_id: str | None = None
-    ) -> ChatResult:
+    def plugin_toggle(self, name: str, enabled: bool, chat_id: str | None = None) -> ChatResult:
         return self._runtime_plugins.plugin_toggle(name, enabled, chat_id=chat_id)
 
     def plugin_rollback(self, steps: int = 1) -> ChatResult:
         return self._runtime_plugins.plugin_rollback(steps)
 
-    def plugin_sandbox(
-        self, module: str, plugin: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
+    def plugin_sandbox(self, module: str, plugin: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._runtime_plugins.plugin_sandbox(module, plugin)
 
     def plugin_create(
@@ -1107,11 +1103,9 @@ class AgentRuntime(RuntimeAPI):
         """Return the harness-recorded status for a chat."""
         return self._actions.status(chat_id)
 
-
     def list_sessions(self, chat_id: str) -> dict[str, Any]:
         """Return all non-pruned sessions for a chat, with the active one marked."""
         return self._actions.list_sessions(chat_id)
-
 
     def memory(self, chat_id: str) -> str:
         """Return the per-chat memory content."""
@@ -1129,9 +1123,7 @@ class AgentRuntime(RuntimeAPI):
         max_tokens: int | None = None,
     ) -> ChatResult:
         """Recall relevant memories for a query."""
-        return self._actions.recall(
-            chat_id, query=query, tags=tags, max_tokens=max_tokens
-        )
+        return self._actions.recall(chat_id, query=query, tags=tags, max_tokens=max_tokens)
 
     def retain(
         self,
@@ -1141,9 +1133,7 @@ class AgentRuntime(RuntimeAPI):
         context: str | None = None,
     ) -> ChatResult:
         """Retain an observation in the chat's memory."""
-        return self._actions.retain(
-            chat_id, content=content, tags=tags, context=context
-        )
+        return self._actions.retain(chat_id, content=content, tags=tags, context=context)
 
     def promote(self, chat_id: str, fact: str) -> ChatResult:
         """Promote a fact to the persona's memory."""
@@ -1386,9 +1376,7 @@ class AgentRuntime(RuntimeAPI):
         mesh_payload: dict[str, Any],
     ) -> ChatResult:
         """Persist a terminal mesh message (e.g. a DSN) without running a turn."""
-        return self._actions.record_mesh_message(
-            chat_id, display_text, mesh_payload
-        )
+        return self._actions.record_mesh_message(chat_id, display_text, mesh_payload)
 
     def graceful_service_restart(
         self,
@@ -1397,9 +1385,7 @@ class AgentRuntime(RuntimeAPI):
         reason: str = "",
     ) -> ChatResult:
         """Public API for a graceful service restart (HTTP/Telegram/MCP)."""
-        return self._actions.graceful_service_restart(
-            chat_id, service=service, reason=reason
-        )
+        return self._actions.graceful_service_restart(chat_id, service=service, reason=reason)
 
     def switch_model(self, chat_id: str, model: str) -> ChatResult:
         """Switch the model for a chat."""
@@ -1431,9 +1417,7 @@ class AgentRuntime(RuntimeAPI):
             name, description=description, chat_id=chat_id, tasks=tasks
         )
 
-    def plan_task_start(
-        self, plan_id: str, task_id: str | None = None
-    ) -> Task:
+    def plan_task_start(self, plan_id: str, task_id: str | None = None) -> Task:
         """Start a ready task in a plan."""
         return self._actions.plan_task_start(plan_id, task_id)
 
@@ -1445,9 +1429,7 @@ class AgentRuntime(RuntimeAPI):
         log: str = "",
     ) -> Task:
         """Manually mark a task as done and emit the completion event."""
-        return self._actions.plan_task_done(
-            plan_id, task_id, result=result, log=log
-        )
+        return self._actions.plan_task_done(plan_id, task_id, result=result, log=log)
 
     @_locked
     def subagent_start(
@@ -1497,7 +1479,9 @@ class AgentRuntime(RuntimeAPI):
         summary: str,
         is_timeout: bool,
     ) -> None:
-        self._subagent._notify_subagent_timeout(task, chat_id, dispatch_id, dispatch, summary, is_timeout)
+        self._subagent._notify_subagent_timeout(
+            task, chat_id, dispatch_id, dispatch, summary, is_timeout
+        )
 
     def _subagent_status_name(self, task: Task, dispatch: Dispatch | None) -> str:
         """Map a subagent task/dispatch to a simple status string."""
@@ -1507,7 +1491,11 @@ class AgentRuntime(RuntimeAPI):
             return "cancelled"
         if task.status == TaskStatus.RUNNING:
             return "running"
-        if dispatch is not None and dispatch.status == DispatchStatus.PENDING and dispatch.finished_at is None:
+        if (
+            dispatch is not None
+            and dispatch.status == DispatchStatus.PENDING
+            and dispatch.finished_at is None
+        ):
             return "running"
         if task.status == TaskStatus.DONE:
             return "completed"

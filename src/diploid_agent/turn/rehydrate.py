@@ -95,9 +95,7 @@ class TurnRehydrate:
         ):
             assert old_record is not None
             try:
-                logger.warning(
-                    "%s; attempting ACP session resume for %s", log_prefix, chat_id
-                )
+                logger.warning("%s; attempting ACP session resume for %s", log_prefix, chat_id)
                 resumed_id = self.runtime.call_engine_unlocked(
                     self.runtime.engine.resume_session,
                     old_record.session_id,
@@ -140,9 +138,7 @@ class TurnRehydrate:
                 )
                 return result, resumed_id, pctx
             except (RuntimeError, TimeoutError) as exc:
-                logger.warning(
-                    "%s: ACP session resume failed for %s: %s", log_prefix, chat_id, exc
-                )
+                logger.warning("%s: ACP session resume failed for %s: %s", log_prefix, chat_id, exc)
 
         pctx = self.runtime.context_builder.build_first(
             chat_id,

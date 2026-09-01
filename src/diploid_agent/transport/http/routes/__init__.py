@@ -1,4 +1,5 @@
 """HTTP route registration functions."""
+
 from .chat import register_chat
 from .config import register_config
 from .health import register_health

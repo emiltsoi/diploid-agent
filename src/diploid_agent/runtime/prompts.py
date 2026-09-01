@@ -283,7 +283,9 @@ class RuntimePrompts:
         """Create a new ACP session and return the prompt result + session id."""
         cwd = self._chat_store._chat_dir(chat_id)
         cwd.mkdir(parents=True, exist_ok=True)
-        self.skills.sync_to_chat(chat_id, cwd, skill_names or self._mcp_skills._active_skill_names(chat_id))
+        self.skills.sync_to_chat(
+            chat_id, cwd, skill_names or self._mcp_skills._active_skill_names(chat_id)
+        )
         request = TurnRequest(
             prompt=prompt,
             cwd=cwd,

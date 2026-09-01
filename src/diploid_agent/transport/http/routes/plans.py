@@ -14,7 +14,13 @@ from diploid_agent.transport.http.models import *
 from diploid_agent.transport.http.utils import _plan_to_response, _task_to_response
 
 
-def register_plans(app: FastAPI, runtime: RuntimeAPI, command_handler: CommandHandler, config: Config, _require_api_key: Callable[[str | None], None]) -> None:
+def register_plans(
+    app: FastAPI,
+    runtime: RuntimeAPI,
+    command_handler: CommandHandler,
+    config: Config,
+    _require_api_key: Callable[[str | None], None],
+) -> None:
     @app.post("/plan/create", response_model=PlanResponse, dependencies=[Depends(_require_api_key)])
     def plan_create(req: PlanCreateRequest) -> PlanResponse:
         tasks = []

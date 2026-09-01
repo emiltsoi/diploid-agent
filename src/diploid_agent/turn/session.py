@@ -521,9 +521,7 @@ class TurnSession:
             chat_id, source, use_model
         ):
             try:
-                logger.debug(
-                    "Attempting ACP session resume for branch of %s", source.session_id
-                )
+                logger.debug("Attempting ACP session resume for branch of %s", source.session_id)
                 resumed_id = self.runtime._call_unlocked(
                     self.runtime.engine.resume_session,
                     source.session_id,
@@ -533,9 +531,7 @@ class TurnSession:
                     or self.runtime.mcp.enabled_servers(chat_id, source_mcp_names),
                 )
             except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "Failed to resume ACP session for branch %s: %s", chat_id, exc
-                )
+                logger.warning("Failed to resume ACP session for branch %s: %s", chat_id, exc)
 
         if resumed_id:
             pctx = self.runtime.context_builder.build_follow_up(

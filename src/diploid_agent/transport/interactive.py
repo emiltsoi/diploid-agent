@@ -15,14 +15,16 @@ ASK_CANCEL_CALLBACK_DATA = f"{ASK_CALLBACK_PREFIX}cancel"
 # Normalised forms of the old open-ended "Other (please specify)" escape option.
 # These are removed from the option list because every ask dialog now has a
 # default cancel button instead.
-_OTHER_ESCAPE_FORMS = frozenset({
-    "otherpleasespecify",
-    "otherspleasespecify",
-    "otherandspecify",
-    "othersandspecify",
-    "otherspecify",
-    "othersspecify",
-})
+_OTHER_ESCAPE_FORMS = frozenset(
+    {
+        "otherpleasespecify",
+        "otherspleasespecify",
+        "otherandspecify",
+        "othersandspecify",
+        "otherspecify",
+        "othersspecify",
+    }
+)
 
 
 def _is_open_ended_escape(option: str) -> bool:
@@ -41,9 +43,7 @@ class AskBlock:
     cancel_label: str = "Cancel"
 
 
-def build_reply_keyboard(
-    options: list[str], cancel: str | None = None
-) -> dict[str, Any]:
+def build_reply_keyboard(options: list[str], cancel: str | None = None) -> dict[str, Any]:
     """Return a Telegram ReplyKeyboardMarkup for a list of option strings.
 
     If ``cancel`` is provided and not already in ``options``, it is added as a
@@ -97,9 +97,7 @@ def is_ask_cancel_callback(data: str, *, prefix: str = ASK_CALLBACK_PREFIX) -> b
     return data == f"{prefix}cancel"
 
 
-def parse_ask_callback_index(
-    data: str, *, prefix: str = ASK_CALLBACK_PREFIX
-) -> int | None:
+def parse_ask_callback_index(data: str, *, prefix: str = ASK_CALLBACK_PREFIX) -> int | None:
     """Parse a callback_data string into its option index, or None."""
     if not data.startswith(prefix):
         return None

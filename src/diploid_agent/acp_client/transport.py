@@ -161,9 +161,7 @@ class AcpTransport:
 
         deadline = time.monotonic() + timeout if timeout is not None else float("inf")
         result_timeout = timeout + 5.0 if timeout is not None else None
-        future: concurrent.futures.Future[Any] = asyncio.run_coroutine_threadsafe(
-            coro, self._loop
-        )
+        future: concurrent.futures.Future[Any] = asyncio.run_coroutine_threadsafe(coro, self._loop)
         with self._client._lock:
             self._inflight_future = future
             self._inflight_deadline = deadline

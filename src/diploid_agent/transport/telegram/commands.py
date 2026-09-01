@@ -6,6 +6,7 @@ host class to provide attributes such as ``command_handler``, ``client``,
 ``_send_text``, ``_send_result``, ``_typing_context``, ``runtime``,
 ``_api_key``, ``_worker_lock``, and ``_active_workers``.
 """
+
 from __future__ import annotations
 
 import json
@@ -315,9 +316,7 @@ class TelegramCommandMixin:
         if active_turn.get("status") == "running":
             elapsed = active_turn.get("elapsed_seconds", 0)
             user_message = active_turn.get("user_message", "")
-            lines.append(
-                f"Turn: running for {elapsed}s on \"{user_message}\""
-            )
+            lines.append(f'Turn: running for {elapsed}s on "{user_message}"')
         else:
             lines.append("Turn: idle")
 
@@ -602,4 +601,3 @@ class TelegramCommandMixin:
 
     def _harness_help(self, chat_id: int) -> str:
         return _TELEGRAM_HELP
-

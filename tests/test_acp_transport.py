@@ -25,6 +25,7 @@ class FakeMetrics:
 class FakeSandbox:
     def __init__(self) -> None:
         self.prepared: list[Any] = []
+        self.devin_home: Any = None
 
     def prepare(self, mcp_servers: Any) -> None:
         self.prepared.append(mcp_servers)
@@ -42,6 +43,14 @@ class FakeProcess:
         pass
 
 
+class FakeWatchdog:
+    def start(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+
 class FakeClient:
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -53,6 +62,11 @@ class FakeClient:
         self._loop: Any = None
         self._max_restarts = 3
         self._restart_backoff_window = 300.0
+        self._api_key = "test"
+        self._startup_timeout = 30.0
+        self.agent_bin = "/fake/devin"
+        self.start_args: list[str] = []
+        self._watchdog = FakeWatchdog()
 
 
 def _make_transport() -> AcpTransport:
@@ -119,7 +133,9 @@ def test_unblock_inflight_sets_exception_and_aborts_prompts() -> None:
     future = concurrent.futures.Future()
     transport._inflight_future = future
     transport._pending[1] = asyncio.Future()
-    prompt: Any = type("Prompt", (), {"cancelled": False, "timed_out": False, "cancel_done": asyncio.Future()})()
+    prompt: Any = type(
+        "Prompt", (), {"cancelled": False, "timed_out": False, "cancel_done": asyncio.Future()}
+    )()
     transport._client._active_prompts["s-1"] = prompt
 
     transport._unblock_inflight("test reason")
@@ -182,7 +198,11 @@ def test_route_update_routes_to_active_prompt() -> None:
 
 def test_route_update_falls_back_to_single_active_prompt() -> None:
     transport = _make_transport()
-    prompt = type("Prompt", (), {"session_id": "s-1", "chunks": [], "updates": [], "on_chunk": None, "on_update": None})()
+    prompt = type(
+        "Prompt",
+        (),
+        {"session_id": "s-1", "chunks": [], "updates": [], "on_chunk": None, "on_update": None},
+    )()
     prompt.chunks = []
     prompt.updates = []
     transport._client._active_prompts["s-1"] = prompt
@@ -196,3 +216,42 @@ def test_route_update_falls_back_to_single_active_prompt() -> None:
     }
     transport._route_update(msg)
     assert "hi" in prompt.chunks
+
+
+async def _noop() -> None:
+    """No-op coroutine for monkey-patching transport background tasks."""
+    return
+
+
+def test_start_transport_calls_initialize(monkeypatch: Any) -> None:
+    """Regression: _start_transport must call self.call('initialize', ...).
+
+    Before the fix it referenced the non-existent AcpTransport._call,
+    which was a left-over from when the startup code lived on AcpClient.
+    """
+    transport = _make_transport()
+    transport._loop = asyncio.new_event_loop()
+
+    called: dict[str, Any] = {}
+
+    async def fake_call(method: str, params: Any, timeout: float | None = None) -> Any:
+        called["method"] = method
+        called["params"] = params
+        called["timeout"] = timeout
+        return {"agentInfo": {"title": "Test", "version": "0.0"}}
+
+    monkeypatch.setattr(transport, "call", fake_call)
+    monkeypatch.setattr(transport, "_reader", _noop)
+    monkeypatch.setattr(transport, "_stderr_drain", _noop)
+
+    async def fake_create_subprocess_exec(*args: Any, **kwargs: Any) -> Any:
+        return FakeProcess(returncode=None)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    asyncio.run(transport._start_transport())
+
+    assert called.get("method") == "initialize"
+    assert called["params"]["protocolVersion"] == 1
+    assert called["params"]["clientInfo"]["name"] == "diploid-agent"
+    assert called["timeout"] == transport._client._startup_timeout
