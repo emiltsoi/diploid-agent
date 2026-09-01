@@ -15,7 +15,6 @@ import logging
 import os
 import shutil
 import signal
-import socket
 import tempfile
 import threading
 import time
@@ -23,6 +22,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from diploid_agent.acp_client.control import ControlListener
 from diploid_agent.acp_client.errors import (
     AcpError,
     AcpMcpError,
@@ -130,11 +130,12 @@ class AcpClient:
         # through a private Unix socket instead of killing the parent directly.
         self._service_name = service_name
         self._on_service_restart = on_service_restart
-        self._control_socket_dir = Path(tempfile.mkdtemp(prefix="acp-ctl-"))
-        self._control_socket_path = self._control_socket_dir / "control.sock"
-        self._control_listener_running = False
-        self._control_listener_thread: threading.Thread | None = None
-        self._start_control_listener()
+        self._control = ControlListener(
+            service_name=service_name or "unknown.service",
+            on_service_restart=on_service_restart,
+            control_timeout=control_timeout,
+            watchdog_timeout=watchdog_timeout,
+        )
 
         # Restart backoff: avoid an infinite kill/restart loop when the ACP child
         # cannot be made healthy.
@@ -144,93 +145,10 @@ class AcpClient:
 
         atexit.register(self.close)
 
-    def _start_control_listener(self) -> None:
-        """Start a Unix socket listener for restart requests from the ACP child.
-
-        The socket is created and bound in the calling thread so the
-        `DIPLOID_CONTROL_SOCKET` path exists before `devin acp` starts. The
-        accept loop runs in a daemon thread.
-        """
-        if self._on_service_restart is None:
-            return
-        if self._control_listener_thread is not None and self._control_listener_thread.is_alive():
-            return
-        self._control_listener_running = True
-        sock = self._bind_control_socket()
-        if sock is None:
-            return
-        self._control_listener_thread = threading.Thread(
-            target=self._control_listener,
-            args=(sock,),
-            daemon=True,
-        )
-        self._control_listener_thread.start()
-
-    def _bind_control_socket(self) -> socket.socket | None:
-        """Create and bind the control socket used by the fake systemctl wrapper."""
-        try:
-            self._control_socket_path.parent.mkdir(parents=True, exist_ok=True)
-            if self._control_socket_path.exists():
-                self._control_socket_path.unlink()
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            sock.bind(str(self._control_socket_path))
-            sock.listen(1)
-            sock.settimeout(1.0)
-            return sock
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to bind ACP control socket: %s", exc)
-            return None
-
-    def _control_listener(self, sock: socket.socket) -> None:
-        """Listen for restart requests from the fake systemctl wrapper."""
-        try:
-            while self._control_listener_running:
-                try:
-                    conn, _ = sock.accept()
-                except TimeoutError:
-                    continue
-                with conn:
-                    try:
-                        data = b""
-                        while True:
-                            chunk = conn.recv(4096)
-                            if not chunk:
-                                break
-                            data += chunk
-                            if len(chunk) < 4096:
-                                break
-                        if not data:
-                            continue
-                        msg = json.loads(data.decode("utf-8"))
-                        action = msg.get("action")
-                        service = msg.get("service") or self._service_name or "unknown.service"
-                        reason = msg.get("reason", "")
-                        if action == "restart_service" and self._on_service_restart is not None:
-                            self._on_service_restart(service, reason)
-                        conn.sendall(json.dumps({"status": "ok"}).encode("utf-8"))
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning("ACP control socket request failed: %s", exc)
-        finally:
-            try:
-                sock.close()
-            except OSError:
-                pass
-            try:
-                if self._control_socket_path.exists():
-                    self._control_socket_path.unlink()
-            except OSError:
-                pass
-
-    def _stop_control_listener(self) -> None:
-        """Signal the control listener to stop and clean up its socket."""
-        self._control_listener_running = False
-        if self._control_listener_thread is not None and self._control_listener_thread.is_alive():
-            self._control_listener_thread.join(timeout=2.0)
-        self._control_listener_thread = None
-
-    def _control_call_timeout(self) -> float:
-        """Cap control-call waits at the watchdog threshold to keep stalls short."""
-        return max(60.0, min(self._control_timeout, self._watchdog_timeout))
+    @property
+    def _control_socket_path(self) -> Path:
+        """Backward-compatible alias for tests that introspect the control socket."""
+        return self._control.socket_path
 
     def _prepare_devin_home(
         self,
@@ -732,11 +650,7 @@ if __name__ == "__main__":
                 self._reader_task = None
                 self._stderr_task = None
                 self._cleanup_devin_home()
-                self._stop_control_listener()
-                try:
-                    shutil.rmtree(self._control_socket_dir)
-                except OSError:
-                    pass
+                self._control.close()
 
     def _check_restart_backoff(self) -> None:
         """Raise AcpTransportError if we have restarted too many times recently."""
@@ -987,10 +901,6 @@ if __name__ == "__main__":
                 self._inflight_deadline = 0.0
 
     async def _start_transport(self) -> None:
-        # Make sure the control socket is bound and listening before the child
-        # starts; the child will fail to connect if the socket is not ready.
-        self._start_control_listener()
-
         env = os.environ.copy()
         env["WINDSURF_API_KEY"] = self._api_key
         env["ACP_API_KEY"] = self._api_key
@@ -1020,9 +930,7 @@ if __name__ == "__main__":
             env["XDG_RUNTIME_DIR"] = str(self._devin_home / ".run")
             env.pop("DBUS_SESSION_BUS_ADDRESS", None)
             env.pop("DBUS_SYSTEM_BUS_ADDRESS", None)
-            env["DIPLOID_CONTROL_SOCKET"] = str(self._control_socket_path)
-            if self._service_name:
-                env["DIPLOID_SERVICE_NAME"] = self._service_name
+            env.update(self._control.env())
 
             # Prepend the fake binary directory to PATH.
             fake_bin = str(self._devin_home / ".local" / "bin")
@@ -1339,7 +1247,7 @@ if __name__ == "__main__":
         }
 
         try:
-            call_timeout = self._control_call_timeout()
+            call_timeout = self._control.call_timeout()
             try:
                 await self._call(
                     "session/resume",
@@ -1386,7 +1294,7 @@ if __name__ == "__main__":
         # write the correct mcp_config.json.
         if mcp_servers is not None:
             self._mcp_servers = self._normalize_mcp_servers(mcp_servers)
-        call_timeout = self._control_call_timeout()
+        call_timeout = self._control.call_timeout()
         try:
             await self._call(
                 "session/load",
@@ -1415,7 +1323,7 @@ if __name__ == "__main__":
         timeout: float | None = None,
     ) -> None:
         """Set mode and model on a freshly created or resumed session."""
-        call_timeout = timeout or self._control_call_timeout()
+        call_timeout = timeout or self._control.call_timeout()
         await self._call(
             "session/set_config_option",
             {"sessionId": session_id, "configId": "mode", "value": self.acp_mode},
@@ -1453,7 +1361,7 @@ if __name__ == "__main__":
         # does not hold the harness lock for multiple minutes. The watchdog
         # stall threshold is also bounded by _watchdog_timeout, so align the
         # call timeout with that ceiling (at least 60s to allow normal init).
-        session_new_timeout = self._control_call_timeout()
+        session_new_timeout = self._control.call_timeout()
         session = await self._call(
             "session/new",
             {"cwd": use_cwd, "mcpServers": []},
