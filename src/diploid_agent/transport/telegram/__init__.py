@@ -2,6 +2,7 @@
 
 import time  # noqa: F401
 
+from diploid_agent.transport.telegram.commands import TelegramCommandMixin
 from diploid_agent.transport.telegram.formatting import (
     _HEARTBEAT_INTERVAL,
     _REPLY_PLACEHOLDER,
@@ -27,6 +28,7 @@ __all__ = [
     "_THINKING_PREFIX",
     "ChatInput",
     "DeliveryWorker",
+    "TelegramCommandMixin",
     "TelegramPoller",
     "TelegramTransport",
     "TurnWorker",
