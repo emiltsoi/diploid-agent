@@ -194,6 +194,34 @@ compliance story is part of the design, not an afterthought. Do not market the
 harness as "free Devin" or as a way to bypass paid tiers — it is a way to get
 more value from a subscription you already hold.
 
+## Source layout
+
+The top-level packages were split in Phase 4/5 so each major responsibility
+lives in a focused module:
+
+- `diploid_agent/runtime/agent_runtime.py` — the service container and turn
+  orchestrator (the old `ConversationHarness`).
+- `diploid_agent/acp_client/` — ACP JSON-RPC transport and process lifecycle:
+  - `client.py` — public `AcpClient` session/prompt API.
+  - `transport.py` — low-level `AcpTransport` (subprocess, JSON-RPC reader).
+  - `watchdog.py` — `PromptWatchdog` stall detection and recovery.
+  - `control.py` — Unix-socket listener for agent restart requests.
+  - `sandbox.py` — isolated `HOME` and fake `systemctl` wrappers.
+  - `errors.py`, `types.py`, `utils.py` — shared helpers.
+- `diploid_agent/transport/telegram/` — Telegram long-polling bot:
+  - `poller.py` — `TelegramPoller` composing `TelegramCommandMixin`,
+    `TelegramSenderMixin`, and `TelegramStateMixin`.
+  - `commands.py`, `sender.py`, `state.py` — the three mixins.
+  - `workers.py` — `TurnWorker` and `DeliveryWorker`.
+- `diploid_agent/transport/http/` — FastAPI harness:
+  - `app.py` — `create_app`, `HttpTransport`, `main`.
+  - `routes/*.py` — domain-grouped route handlers.
+  - `models.py` — request/response Pydantic models.
+- `diploid_agent/memory.py` / `memory_mcp.py` — transcript and long-term memory.
+- `diploid_agent/mcp.py` — MCP server resolution and per-chat enablement.
+- `diploid_agent/skills.py` — skill discovery and chat-scoped skill loading.
+- `diploid_agent/plugins/` — state plugin lifecycle and manager.
+
 ## License
 
 [MIT](LICENSE)

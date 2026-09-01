@@ -17,7 +17,7 @@ leaking the token, and the poller uses `POST` form data instead of query strings
 
 ## How the poller works
 
-`telegram_poll.py` long-polls Telegram's `getUpdates` endpoint. For each
+`transport/telegram/poller.py` long-polls Telegram's `getUpdates` endpoint. For each
 message:
 
 1. Skip messages sent by the bot itself.
@@ -223,7 +223,7 @@ The Telegram poller uses the same `transport/command_handler.py` dispatch layer
 as the HTTP endpoints. When the poller is connected directly to a `RuntimeAPI`
 it calls the runtime methods; when it is configured with a `harness_url` it
 calls the matching HTTP endpoints. The formatting and command-specific parsing
-live in `transport/telegram.py`.
+live in `transport/telegram/poller.py`, `commands.py`, `sender.py`, `state.py`, and `formatting.py`.
 
 ### Live runtime configuration
 

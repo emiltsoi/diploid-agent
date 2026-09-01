@@ -3,36 +3,46 @@
 ## Components
 
 ```
-┌─────────────────┐     ┌──────────────────────┐
-│ Telegram bot    │────▶│ transport/telegram.py│
-│ (user messages) │     │ (long-polling loop)  │
-└─────────────────┘     └──────────┬───────────┘
-                                   │ HTTP
-                                   ▼
-┌────────────────────────────────────────────────────┐
-│ transport/http.py (FastAPI)                         │
-│  /chat /turn /stop /switch-model /status /memory ...│
-│  /outbox /subagents /subagent                       │
-└────────┬───────────────────────────────────────────┘
+┌─────────────────┐     ┌────────────────────────────────────────────┐
+│ Telegram bot    │────▶│ transport/telegram/                        │
+│ (user messages) │     │  poller.py (long-polling loop)             │
+└─────────────────┘     │  workers.py (TurnWorker, DeliveryWorker)   │
+                      └──────────────────────┬───────────────────────┘
+                                             │ HTTP
+                                             ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│ transport/http/ (FastAPI)                                                │
+│  app.py — create_app / HttpTransport / main                              │
+│  routes/*.py — /chat /turn /stop /switch-model /status /memory ...       │
+│  /outbox /subagents /subagent                                            │
+└──────────────────────┬───────────────────────────────────────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│ runtime/agent_runtime.py (AgentRuntime)                                  │
+│  - sessions.jsonl (registry)                                             │
+│  - sessions/<chat>/.archive/ (session history)                           │
+│  - wake_queue.jsonl (pending wakes)                                      │
+│  - outbox (per-chat ChatResult queue)                                    │
+│  - AcpClient                                                             │
+│  - MemoryManager                                                         │
+│  - McpManager                                                            │
+│  - SkillManager                                                          │
+└──────────────────────┬───────────────────────────────┬───────────────────┘
+                       │                               │
+                       ▼                               ▼
+┌──────────────────────┐     ┌──────────────────────────────────────────┐
+│ acp_client/          │     │ memory.py / memory_mcp.py                │
+│  client.py           │     │ (file or Hindsight backend)              │
+│  transport.py        │     └──────────────────────────────────────────┘
+│  watchdog.py         │
+└────────┬─────────────┘
          │
          ▼
-┌─────────────────────────────────────────────────┐
-│ ConversationHarness                               │
-│  - sessions.jsonl (registry)                      │
-│  - sessions/<chat>/.archive/ (session history)    │
-│  - wake_queue.jsonl (pending wakes)               │
-│  - outbox (per-chat ChatResult queue)             │
-│  - AcpClient                                      │
-│  - MemoryManager                                  │
-│  - McpManager                                     │
-│  - SkillManager                                   │
-└────────┬──────────────────────┬──────────────────┘
-         │                      │
-         ▼                      ▼
-┌─────────────────┐     ┌──────────────────────┐
-│ ACP engine      │     │ Memory backend       │
-│ (default devin) │     │ (file or Hindsight)  │
-└────────┬────────┘     └──────────────────────┘
+┌─────────────────┐
+│ ACP engine      │
+│ (default devin) │
+└────────┬────────┘
          │
          ▼
 ┌─────────────────┐
@@ -41,7 +51,7 @@
 └─────────────────┘
 ```
 
-### `ConversationHarness`
+### `AgentRuntime` (`runtime/agent_runtime.py`)
 
 The core state machine.
 
@@ -50,7 +60,7 @@ The core state machine.
 - Calls `MemoryManager` to retain turns and recall context.
 - Handles model switching by starting a new engine session.
 
-### `AcpClient`
+### `AcpClient` (`acp_client/`)
 
 Synchronous wrapper around the configured ACP v1 JSON-RPC agent binary.
 
@@ -61,9 +71,15 @@ Synchronous wrapper around the configured ACP v1 JSON-RPC agent binary.
 - `list_models()` returns the model options advertised by the ACP server.
 - Spawns one long-lived ACP agent subprocess and multiplexes all chats
   through it.
-- Sandboxes the ACP child with a private `XDG_RUNTIME_DIR`, no D-Bus, and a fake
-  `systemctl` wrapper; restart requests from the child are routed through a
-  control socket to the harness.
+- `acp_client/transport.py` owns the JSON-RPC stdio transport, process
+  lifecycle, and backoff/recovery (`AcpTransport`).
+- `acp_client/watchdog.py` monitors in-flight calls and kills stuck children
+  (`PromptWatchdog`).
+- `acp_client/control.py` listens for graceful-restart requests from the ACP
+  child over a private Unix socket.
+- `acp_client/sandbox.py` sets up the isolated `HOME`, fake `systemctl`
+  wrappers, and MCP configuration so the child cannot touch the host system
+  directly.
 
 ### `MemoryManager`
 
@@ -109,12 +125,17 @@ and capped by `MemoryManager` during prompt assembly. Optional reference docs
 such as `references/*.md` are loaded by the plugin or skill that needs them, not
 by the composer.
 
-### `transport/http.py`, `transport/telegram.py`, and `transport/command_handler.py`
+### `transport/http/` and `transport/telegram/`
 
-- `transport/http.py` is the FastAPI service. It exposes the long-poll
-  `GET /outbox/{chat_id}` endpoint for transport-side delivery workers.
-- `transport/telegram.py` is the long-polling Telegram client. It can connect
-  either to a local `RuntimeAPI` or to the HTTP harness.
+- `transport/http/app.py` creates the FastAPI service and keeps `HttpTransport`
+  and `main`. The route handlers are grouped by domain in
+  `transport/http/routes/*.py` (health, chat, sessions, models, skills,
+  plugins, plans, runtime, state, config, mesh, webhook).
+- `transport/telegram/poller.py` is the long-polling Telegram client. It
+  composes `TelegramCommandMixin` (slash handlers), `TelegramSenderMixin`
+  (Bot API calls and throttling), and `TelegramStateMixin` (per-chat
+  persistence). It can connect either to a local `RuntimeAPI` or to the HTTP
+  harness.
 - `transport/command_handler.py` is the single dispatch layer used by the
   Telegram poller's slash-command handlers. It calls `RuntimeAPI` methods when
   the poller has a direct runtime, otherwise it calls the matching HTTP
@@ -159,7 +180,7 @@ for details on `/new`, `/resume`, `/branch`, `/sessions`, and auto-recovery.
 ## Data flow for a normal message
 
 1. Telegram/caller sends message for `chat_id`.
-2. `ConversationHarness.process(chat_id, message, reply_to=..., reply_to_is_bot=...)`:
+2. `AgentRuntime.process(chat_id, message, reply_to=..., reply_to_is_bot=...)`:
    - If a turn is already running for `chat_id`, the message is queued as a
      high-priority `user_request` wake and the user sees an immediate
      acknowledgement (`I'll get back to you in a moment.`). It runs when the
@@ -199,7 +220,7 @@ for details on `/new`, `/resume`, `/branch`, `/sessions`, and auto-recovery.
 ## Data flow for `/stop`
 
 1. Caller sends `POST /stop` with `chat_id`.
-2. `ConversationHarness.stop(chat_id)`:
+2. `AgentRuntime.stop(chat_id)`:
    - Acquires the lock, reads the active `session_id` from `ActiveTurn`.
    - Calls `AcpClient.cancel(session_id)`, which schedules a `session/cancel`
      notification on the ACP background loop.
@@ -209,7 +230,7 @@ for details on `/new`, `/resume`, `/branch`, `/sessions`, and auto-recovery.
 ## Data flow for a model switch
 
 1. User calls `POST /switch-model` or Telegram `/model <name>`.
-2. `ConversationHarness.switch_model(chat_id, model)`:
+2. `AgentRuntime.switch_model(chat_id, model)`:
    - Checks if already on that model.
    - Builds `_first_prompt` with persona + current memory + a system turn to introduce the switch.
    - Creates a new ACP session and sets the `model` config option to

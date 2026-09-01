@@ -9,7 +9,7 @@ new model see the full persona + memory context in a single first prompt.
 
 ## What the harness does
 
-`ConversationHarness.switch_model(chat_id, model)`:
+`AgentRuntime.switch_model(chat_id, model)`:
 
 1. Checks if the chat is already on the requested model.
 2. Builds a first prompt with:
