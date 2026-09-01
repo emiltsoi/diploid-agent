@@ -1,17 +1,18 @@
 """ACP client: drive an ACP-compatible agent binary over stdio JSON-RPC."""
 
-from diploid_agent.acp_client.client import (
-    AcpClient,
+from diploid_agent.acp_client.client import AcpClient
+from diploid_agent.acp_client.errors import (
     AcpError,
     AcpMcpError,
     AcpModelError,
-    AcpPromptResult,
     AcpSessionStaleError,
     AcpTransportError,
     _acp_error_from_response,
+)
+from diploid_agent.acp_client.types import AcpPromptResult, _Prompt
+from diploid_agent.acp_client.utils import (
     _load_windsurf_api_key,
     _normalize_model,
-    _Prompt,
     _resolve_agent_bin,
 )
 
