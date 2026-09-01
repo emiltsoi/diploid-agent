@@ -37,6 +37,7 @@ from diploid_agent.acp_client.utils import (
     _normalize_model,
     _resolve_agent_bin,
 )
+from diploid_agent.acp_client.watchdog import PromptWatchdog
 
 logger = logging.getLogger(__name__)
 
@@ -101,8 +102,7 @@ class AcpClient:
         self._proc: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task[None] | None = None
         self._stderr_task: asyncio.Task[None] | None = None
-        self._watchdog_thread: threading.Thread | None = None
-        self._watchdog_running = False
+        self._watchdog = PromptWatchdog(self)
         self._watchdog_interval = watchdog_interval
         self._watchdog_timeout = watchdog_timeout
         self._last_stdout_at: float = 0.0
@@ -148,6 +148,19 @@ class AcpClient:
     def _control_socket_path(self) -> Path:
         """Backward-compatible alias for tests that introspect the control socket."""
         return self._control.socket_path
+
+    @property
+    def _watchdog_running(self) -> bool:
+        """Backward-compatible alias for tests that drive the watchdog directly."""
+        return self._watchdog._running
+
+    @_watchdog_running.setter
+    def _watchdog_running(self, value: bool) -> None:
+        self._watchdog._running = value
+
+    def _check_watchdog(self) -> None:
+        """Backward-compatible alias for tests that drive the watchdog directly."""
+        self._watchdog.check()
 
     # ---------------------------------------------------------------- public
 
@@ -360,7 +373,7 @@ class AcpClient:
                         except Exception:
                             logger.exception("Failed to kill ACP process during close")
             finally:
-                self._stop_watchdog()
+                self._watchdog.stop()
                 if self._thread and self._thread.is_alive():
                     self._thread.join(timeout=10.0)
                 self._loop = None
@@ -474,7 +487,7 @@ class AcpClient:
                 self._loop.call_soon_threadsafe(self._loop.stop)
             except RuntimeError:
                 logger.warning("Failed to stop stale ACP event loop")
-        self._stop_watchdog()
+        self._watchdog.stop()
 
     def _ensure_started(
         self,
@@ -493,12 +506,7 @@ class AcpClient:
             with self._lock:
                 if self._is_transport_healthy():
                     if self._sandbox.mcp_servers_key(target) == self._sandbox.mcp_servers_key(self._mcp_servers):
-                        if self._watchdog_thread is None or not self._watchdog_thread.is_alive():
-                            self._watchdog_running = True
-                            self._watchdog_thread = threading.Thread(
-                                target=self._watchdog, daemon=True
-                            )
-                            self._watchdog_thread.start()
+                        self._watchdog.start()
                         return
                     # MCP list changed; restart outside the lock.
                     needs_restart = True
@@ -569,10 +577,7 @@ class AcpClient:
         with self._lock:
             self._inflight_future = future
             self._inflight_deadline = deadline
-            if self._watchdog_thread is not None and not self._watchdog_thread.is_alive():
-                self._watchdog_running = True
-                self._watchdog_thread = threading.Thread(target=self._watchdog, daemon=True)
-                self._watchdog_thread.start()
+            self._watchdog.start()
         try:
             result = future.result(timeout=result_timeout)
             self._transport_healthy = True
@@ -668,9 +673,7 @@ class AcpClient:
         self._reader_task = asyncio.create_task(self._reader())
         self._stderr_task = asyncio.create_task(self._stderr_drain())
 
-        self._watchdog_running = True
-        self._watchdog_thread = threading.Thread(target=self._watchdog, daemon=True)
-        self._watchdog_thread.start()
+        self._watchdog.start()
 
         init = await self._call(
             "initialize",
@@ -1364,103 +1367,4 @@ class AcpClient:
         # be aborted now, including in-flight _run() callers.
         self._unblock_inflight("ACP transport closed")
 
-    def _stop_watchdog(self) -> None:
-        """Signal the watchdog thread to stop and wait briefly."""
-        with self._lock:
-            self._watchdog_running = False
-        if self._watchdog_thread is not None:
-            if self._watchdog_thread.is_alive():
-                self._watchdog_thread.join(timeout=1.0)
-            self._watchdog_thread = None
 
-    def _watchdog(self) -> None:
-        """Monitor ACP transport I/O and kill stuck children."""
-        while True:
-            with self._lock:
-                if not self._watchdog_running:
-                    break
-                interval = self._watchdog_interval
-            time.sleep(interval)
-            try:
-                self._check_watchdog()
-            except Exception:
-                logger.exception("ACP watchdog check failed")
-
-    def _check_watchdog(self) -> None:
-        """Detect unresponsive ACP transport and trigger recovery."""
-        with self._lock:
-            if not self._watchdog_running:
-                return
-            if self._inflight_future is None or self._inflight_future.done():
-                return
-
-            # If the child process has already exited, the transport is dead and
-            # recovery should start immediately.
-            if self._proc is not None and self._proc.returncode is not None:
-                logger.warning(
-                    "ACP process %s exited with code %s; watchdog recovering",
-                    self._proc.pid,
-                    self._proc.returncode,
-                )
-                self._stall_recovery()
-                return
-
-            now = time.monotonic()
-            deadline = self._inflight_deadline
-            last_request = self._last_request_at
-            call_deadline = self._last_control_call_deadline
-            has_prompt = bool(self._active_prompts)
-            has_pending = bool(self._pending)
-
-        if now > deadline:
-            logger.warning("ACP call exceeded its deadline; watchdog recovering")
-            self._stall_recovery()
-            return
-
-        # The `_pending` map also holds the future for an in-flight prompt, so
-        # only use the request timing for non-prompt control calls. Prompts are
-        # not killed by the watchdog for time; they are governed by their own
-        # `soft_timeout` (client-side cancel that returns a partial reply) and by
-        # the overall `_run` deadline. The transport-death check above already
-        # handles an exited child.
-        if has_pending and not has_prompt:
-            if call_deadline and now > call_deadline:
-                logger.warning(
-                    "ACP control call produced no response for %.1fs; watchdog recovering",
-                    now - last_request,
-                )
-                self._stall_recovery()
-                return
-            if not call_deadline and now - last_request > self._watchdog_timeout:
-                logger.warning(
-                    "ACP control call produced no response for %ss; watchdog recovering",
-                    self._watchdog_timeout,
-                )
-                self._stall_recovery()
-                return
-
-    def _stall_recovery(self) -> None:
-        """Kill the ACP child and unblock the in-flight caller (watchdog path)."""
-        with self._lock:
-            if self.metrics is not None:
-                self.metrics.inc("acp_watchdog_fired_total")
-
-        self._unblock_inflight("ACP transport watchdog detected a stall")
-
-        with self._lock:
-            # Kill the process and stop the loop.
-            self._transport_healthy = False
-            self._initialized = False
-            if self._proc is not None and self._proc.returncode is None:
-                try:
-                    logger.warning("Killing unresponsive ACP process %s", self._proc.pid)
-                    self._kill_process_group(self._proc)
-                    if self.metrics is not None:
-                        self.metrics.inc("acp_transport_killed_total")
-                except Exception:
-                    logger.exception("Failed to kill ACP process during watchdog recovery")
-            if self._loop is not None and self._loop.is_running():
-                try:
-                    self._loop.call_soon_threadsafe(self._loop.stop)
-                except Exception:
-                    logger.exception("Failed to stop ACP event loop during watchdog recovery")
