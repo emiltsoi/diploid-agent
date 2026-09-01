@@ -8,25 +8,21 @@ the user.
 
 from __future__ import annotations
 
-import argparse
 import contextlib
 import json
 import logging
-import os
 import re
 import threading
 import time
 from collections import deque
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import httpx
 
 from diploid_agent.config import (
-    Config,
     ConfigPersistenceError,
     NotificationsConfig,
     TaskConfig,
@@ -34,12 +30,9 @@ from diploid_agent.config import (
     TimerConfig,
     WakerConfig,
 )
-from diploid_agent.metrics import MetricsCollector
 from diploid_agent.models import ChatResult
 from diploid_agent.transport.base import (
-    OutboundMessage,
     RuntimeAPI,
-    Transport,
 )
 from diploid_agent.transport.command_handler import CommandHandler, _coerce_chat_result
 from diploid_agent.transport.interactive import (
@@ -72,100 +65,16 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger("telegram_poll")
 
 
-_THINKING_PREFIX = "Thinking..."
-_THINKING_CONTINUED = "... (thinking continues)"
-_HEARTBEAT_INTERVAL = 30.0
-_REPLY_PLACEHOLDER = "..."
-
-
-def _format_thought(thought: str, limit: int = 4096) -> str:
-    """Return a Telegram-sized thought block, rolling the tail once it grows past the limit.
-
-    Short thoughts are shown with the normal prefix. Once the limit is exceeded,
-    the placeholder switches to a "continues" marker and shows the latest tail so
-    the user can always see the most recent reasoning without generating new
-    Telegram messages.
-    """
-    if not thought:
-        return ""
-    full = f"{_THINKING_PREFIX}\n{thought}"
-    if len(full) <= limit:
-        return full
-    tail_limit = limit - len(_THINKING_CONTINUED) - 1  # -1 for the newline
-    if tail_limit <= 0:
-        return thought[-limit:]
-    return f"{_THINKING_CONTINUED}\n{thought[-tail_limit:]}"
-
-
-def _format_elapsed(seconds: float) -> str:
-    """Return a short, human-readable elapsed time."""
-    minutes, secs = divmod(int(seconds), 60)
-    if minutes:
-        return f"{minutes}m {secs}s"
-    return f"{secs}s"
-
-
-def _format_subagent_time(ts: float | None) -> str:
-    """Return a concise UTC time string for a subagent started/finished time."""
-    if ts is None:
-        return "—"
-    return time.strftime("%H:%M:%S", time.gmtime(ts))
-
-
-def _build_heartbeat_text(base: str, elapsed: float, limit: int = 4096) -> str:
-    """Return ``base`` with a small liveness suffix, truncating if needed."""
-    suffix = f"\n\n(still working, {_format_elapsed(elapsed)})"
-    if not base:
-        return suffix[1:] if len(suffix) > limit else suffix
-    total = base + suffix
-    if len(total) <= limit:
-        return total
-    max_base = limit - len(suffix) - 3
-    if max_base <= 0:
-        return total[:limit]
-    return base[:max_base] + "..." + suffix
-
-
-_TELEGRAM_HELP = """Available commands:
-
-/status - current model, session id, working directory, and context-window usage
-/metrics - token usage and latency for this chat
-/mcp list | /mcp enable <name> | /mcp disable <name> - manage MCP servers
-/skill list | /skill enable <name> | /skill disable <name> | /skill create <name> <markdown> - manage skills
-/plugin list | /plugin enable <name> | /plugin disable <name> | /plugin reload <name> - manage state plugins
-/state <plugin> <event> [args...] - dispatch a state event to a plugin
-/memory - show per-chat memory
-/models - list ACP model names
-/model <name> - switch this chat to a new model
-/new - start a fresh Devin session while keeping chat memory
-/stop - cancel the current turn and return a partial reply
-/restart - kill the ACP child and start a fresh transport
-/graceful-restart [service] - schedule a graceful restart of the named service
-/subagent <prompt> - start a background subagent and continue when it finishes
-/subagents - list background subagents for this chat
-/continue - resume the previous turn after a partial reply or timeout
-/sessions - list numbered sessions for this chat
-/resume <n> - resume session n as the active session
-/branch <n> - branch from session n and make it active
-/summarize - trigger file-backed summarization
-/recall <query> - search memory for relevant context
-/promote <fact> - append a fact to persona global memory
-/stream_thoughts on|off - toggle the optional real-time thought stream
-/config <section> <key>=<value> [key=value...] - update live runtime config (task|waker|timer|notifications|telegram)
-/help - show this list"""
-
-
-@dataclass(frozen=True)
-class ChatInput:
-    """A normalized user message from Telegram, including any reply-to context."""
-
-    chat_id: int
-    message_id: int
-    text: str
-    reply_to: str | None = None
-    reply_to_is_bot: bool | None = None
-    reply_to_message_id: int | None = None
-    callback_query_id: str | None = None
+from diploid_agent.transport.telegram.formatting import (
+    _HEARTBEAT_INTERVAL,
+    _REPLY_PLACEHOLDER,
+    _TELEGRAM_HELP,
+    _THINKING_PREFIX,
+    _build_heartbeat_text,
+    _format_subagent_time,
+    _format_thought,
+)
+from diploid_agent.transport.telegram.models import ChatInput
 
 
 class TurnWorker(threading.Thread):
@@ -2555,133 +2464,4 @@ class TelegramPoller:
                     worker.start()
 
 
-class TelegramTransport(Transport):
-    """A Transport implementation backed by the Telegram long-poller."""
 
-    def __init__(
-        self,
-        token: str,
-        runtime: RuntimeAPI | None = None,
-        **poller_kwargs: Any,
-    ):
-        poller_kwargs.setdefault("runtime", runtime)
-        self._poller = TelegramPoller(token, **poller_kwargs)
-        self._thread: threading.Thread | None = None
-
-    def start(self, runtime: RuntimeAPI | None = None) -> None:
-        if runtime is not None:
-            self._poller.runtime = runtime
-        if self._poller.harness_url is None and self._poller.runtime is None:
-            raise RuntimeError("TelegramTransport requires a runtime or harness_url to start")
-        self._poller._stop.clear()
-        self._thread = threading.Thread(
-            target=self._poller.run,
-            daemon=True,
-            name="telegram-transport",
-        )
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._poller._stop.set()
-        with self._poller._worker_lock:
-            workers = list(self._poller._active_workers.values())
-            delivery_workers = list(self._poller._delivery_workers.values())
-        for worker in workers:
-            worker.stop()
-        for worker in delivery_workers:
-            worker.stop()
-        for worker in workers:
-            worker.join(timeout=5.0)
-        for worker in delivery_workers:
-            worker.join(timeout=5.0)
-        if self._thread is not None and self._thread.is_alive():
-            self._thread.join(timeout=5.0)
-        self._thread = None
-        self._poller._close_client()
-
-    def send(self, message: OutboundMessage) -> list[int]:
-        chat_id_value: int | str = message.chat_id
-        try:
-            chat_id_value = int(message.chat_id)
-        except (ValueError, TypeError):
-            pass
-
-        sent: list[int] = []
-        if message.text:
-            sent.extend(
-                self._poller._send_text(
-                    chat_id_value,
-                    message.text,
-                    reply_to_message_id=message.reply_to_message_id,
-                )
-            )
-        if message.notice:
-            sent.extend(
-                self._poller._send_text(
-                    chat_id_value,
-                    f"System: {message.notice}",
-                )
-            )
-        return sent
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Telegram long-polling ingress")
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=Path(__file__).parent.parent.parent / "config" / "harness.yaml",
-    )
-    parser.add_argument(
-        "--harness-url",
-        default="http://127.0.0.1:4003",
-        help="Base URL of the diploid-agent /chat endpoint",
-    )
-    parser.add_argument(
-        "--poll-interval",
-        type=float,
-        default=2.0,
-    )
-    args = parser.parse_args()
-
-    config = Config.load(args.config)
-    token = config.harness.telegram.token or os.environ.get("TELEGRAM_BOT_TOKEN")
-    if not token:
-        logger.error(
-            "TELEGRAM_BOT_TOKEN not found in secrets.env, env, or config. "
-            "Set it before running the poller."
-        )
-        return 1
-
-    # The poller must wait longer than the harness's absolute ACP timeout,
-    # otherwise it gives up on a turn that is still running. If the harness has
-    # no hard timeout, the poller also waits indefinitely.
-    reply_timeout = (
-        config.engine.timeout + 30.0 if config.engine.timeout is not None else None
-    )
-    metrics = MetricsCollector(prefix="harness")
-    poller = TelegramPoller(
-        token=token,
-        harness_url=args.harness_url.rstrip("/"),
-        poll_interval=args.poll_interval,
-        reply_timeout=reply_timeout,
-        api_key=config.secrets.harness_api_key,
-        stream_thoughts_default=config.harness.telegram.stream_thoughts,
-        stream_chunk_interval=config.harness.telegram.stream_chunk_interval,
-        intermediate_messages=config.harness.telegram.intermediate_messages,
-        intermediate_idle=config.harness.telegram.intermediate_idle,
-        intermediate_min_chars=config.harness.telegram.intermediate_min_chars,
-        min_telegram_interval=config.harness.telegram.min_telegram_interval,
-        min_edit_message_interval=config.harness.telegram.min_edit_message_interval,
-        message_format=config.harness.telegram.message_format,
-        code_style=config.harness.telegram.code_style,
-        state_dir=config.harness.sessions_root / ".poller-placeholders",
-        reply_preview_chars=config.harness.memory.max_bot_reply_quote_chars,
-        metrics=metrics,
-    )
-    poller.run()
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
