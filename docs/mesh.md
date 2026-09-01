@@ -27,7 +27,7 @@ harness:
     - name: mesh
       enabled: true
       module: diploid_mesh
-      prompt_slot: persona_state
+      prompt_slot: mesh
       first_prompt_only: false
       prompt_order: 50
       max_prompt_chars: 4096
