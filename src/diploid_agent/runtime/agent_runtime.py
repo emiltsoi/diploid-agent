@@ -26,7 +26,7 @@ from diploid_agent.config import (
 )
 from diploid_agent.context import ContextBuilder
 from diploid_agent.dispatch import Dispatch, DispatchStatus, DispatchStore
-from diploid_agent.engine import AgentEngine, TurnRequest, TurnResult, build_engine
+from diploid_agent.engine import AgentEngine, TurnResult, build_engine
 from diploid_agent.engine.router import ModelRoute, ModelRouter
 from diploid_agent.mcp import McpManager
 from diploid_agent.memory import MemoryManager, RecallResult
@@ -45,7 +45,6 @@ from diploid_agent.plan.models import Plan, PlanStatus, Task, TaskStatus, TaskTy
 from diploid_agent.plugin_incidents import PluginIncidentStore
 from diploid_agent.plugins import PluginManager
 from diploid_agent.plugins.contexts import (
-    MemoryTransitionContext,
     PromoteContext,
     RetainContext,
     ShutdownContext,
@@ -57,6 +56,7 @@ from diploid_agent.runtime.mcp_skills import RuntimeMcpSkills
 from diploid_agent.runtime.metrics import RuntimeMetrics
 from diploid_agent.runtime.outbox import RuntimeOutbox
 from diploid_agent.runtime.plugins import RuntimePlugins
+from diploid_agent.runtime.prompts import RuntimePrompts
 from diploid_agent.runtime.store import ChatSessionStore
 from diploid_agent.runtime.timer_service import TimerService
 from diploid_agent.runtime.turn_controller import TurnController
@@ -223,6 +223,8 @@ class AgentRuntime(RuntimeAPI):
             self._active_skill_names,
         )
         self.context_builder.metrics = self._runtime_metrics._per_chat_metrics
+
+        self._prompts = RuntimePrompts(self)
 
         self.turn_controller = TurnController(self)
 
@@ -924,35 +926,21 @@ class AgentRuntime(RuntimeAPI):
         chat_status: dict[str, Any],
     ) -> str | None:
         """Build a notice when memory is truncated for a first turn prompt."""
-        return self.context_builder.build_system_notice(persona, recall, chat_status)
+        return self._prompts._build_system_notice(persona, recall, chat_status)
 
     def _trim_reply_quote_to(self, quote: str, limit: int) -> str:
         """Trim a reply-to quote to a given budget, with a truncation marker."""
-        return self.context_builder.trim_reply_quote_to(quote, limit)
+        return self._prompts._trim_reply_quote_to(quote, limit)
 
     def _trim_reply_quote(self, quote: str) -> str:
         """Trim a reply-to quote to the configured budget, with a truncation marker."""
-        return self.context_builder.trim_reply_quote(quote)
+        return self._prompts._trim_reply_quote(quote)
 
     def _telegram_message_registry_path(self, chat_id: str) -> Path:
-        return self._chat_dir(chat_id) / "telegram_messages.jsonl"
+        return self._prompts._telegram_message_registry_path(chat_id)
 
     def _load_telegram_message_registry(self, chat_id: str) -> dict[int, dict[str, Any]]:
-        path = self._telegram_message_registry_path(chat_id)
-        if not path.exists():
-            return {}
-        entries: dict[int, dict[str, Any]] = {}
-        for line in path.read_text().splitlines():
-            if not line.strip():
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            message_id = entry.get("message_id")
-            if message_id is not None:
-                entries[message_id] = entry
-        return entries
+        return self._prompts._load_telegram_message_registry(chat_id)
 
     def _format_user_message(
         self,
@@ -963,7 +951,7 @@ class AgentRuntime(RuntimeAPI):
         chat_id: str | None = None,
     ) -> str:
         """Wrap the user message with a labeled reply-to reference if present."""
-        return self.context_builder.format_user_message(
+        return self._prompts._format_user_message(
             user_message,
             reply_to=reply_to,
             reply_to_is_bot=reply_to_is_bot,
@@ -983,18 +971,15 @@ class AgentRuntime(RuntimeAPI):
         continuation_anchor: str | None = None,
     ) -> tuple[str, str | None, dict[str, bool]]:
         """Build a first-turn prompt and any memory truncation notice."""
-        record = self._active_record(chat_id)
-        pctx = self.context_builder.build_first(
+        return self._prompts._build_first_prompt(
             chat_id,
             user_message,
-            record,
             model=model,
             reply_to=reply_to,
             reply_to_is_bot=reply_to_is_bot,
             reply_to_message_id=reply_to_message_id,
             continuation_anchor=continuation_anchor,
         )
-        return pctx.prompt, pctx.notice, pctx.memory_flags
 
     def _follow_up_prompt(
         self,
@@ -1007,20 +992,17 @@ class AgentRuntime(RuntimeAPI):
         continuation_anchor: str | None = None,
     ) -> str:
         """Build a follow-up prompt for an existing session."""
-        record = self._active_record(chat_id)
-        pctx = self.context_builder.build_follow_up(
-            chat_id,
+        return self._prompts._follow_up_prompt(
             user_message,
-            record,
+            chat_id=chat_id,
             reply_to=reply_to,
             reply_to_is_bot=reply_to_is_bot,
             reply_to_message_id=reply_to_message_id,
             continuation_anchor=continuation_anchor,
         )
-        return pctx.prompt
 
     def _model(self, record: SessionRecord | None) -> str:
-        return record.model if record else self.config.engine.model
+        return self._prompts._model(record)
 
     def resolve_model(
         self,
@@ -1029,14 +1011,7 @@ class AgentRuntime(RuntimeAPI):
         record: SessionRecord | None = None,
     ) -> ModelRoute:
         """Resolve the model for a user message, checking budget and lane rules."""
-        cumulative_tokens = 0
-        if record and record.cumulative_metrics:
-            cumulative_tokens = record.cumulative_metrics.get("total_tokens", 0)
-        else:
-            with self._lock:
-                per_chat = self._per_chat_metrics.get(chat_id, {})
-                cumulative_tokens = per_chat.get("total_tokens", 0)
-        return self._router.resolve(user_message, cumulative_tokens)
+        return self._prompts.resolve_model(chat_id, user_message, record=record)
 
     def routing_context(
         self,
@@ -1044,45 +1019,22 @@ class AgentRuntime(RuntimeAPI):
         record: SessionRecord | None = None,
     ) -> dict[str, Any]:
         """Return the current routing/budget context for a chat."""
-        cumulative_tokens = 0
-        if record and record.cumulative_metrics:
-            cumulative_tokens = record.cumulative_metrics.get("total_tokens", 0)
-        else:
-            with self._lock:
-                per_chat = self._per_chat_metrics.get(chat_id, {})
-                cumulative_tokens = per_chat.get("total_tokens", 0)
-        return self._router.budget_status(cumulative_tokens)
+        return self._prompts.routing_context(chat_id, record=record)
 
-    @staticmethod
-    def _partial_notice(result: TurnResult, continue_word: str = "Continue") -> str:
+    def _partial_notice(self, result: TurnResult, continue_word: str = "Continue") -> str:
         """Return a user-facing notice for an interrupted/partial ACP turn."""
-        if result.timed_out or result.stop_reason == "timeout":
-            return (
-                f"The agent reached the time limit before completing its reply. A partial result is shown. "
-                f"Reply `{continue_word}` to keep going, or tell me what to change."
-            )
-        if result.cancelled or result.stop_reason == "cancelled":
-            return (
-                f"The agent was stopped before completing its reply. A partial result is shown. "
-                f"Reply `{continue_word}` to keep going, or tell me what to change."
-            )
-        if result.partial:
-            return (
-                f"The agent reached the time limit before completing its reply. A partial result is shown. "
-                f"Reply `{continue_word}` to keep going, or tell me what to change."
-            )
-        return ""
+        return self._prompts._partial_notice(result, continue_word=continue_word)
 
     def is_continuation_message(self, user_message: str) -> bool:
         """Return True if the user message is a continuation trigger."""
-        return self.context_builder.is_continuation_message(user_message)
+        return self._prompts.is_continuation_message(user_message)
 
     def _continuation_anchor(self, record: SessionRecord | None, user_message: str) -> str | None:
         """Return a prompt anchor when resuming an interrupted turn."""
-        return self.context_builder.continuation_anchor(record, user_message)
+        return self._prompts._continuation_anchor(record, user_message)
 
     def _turn_number(self, record: SessionRecord | None) -> int:
-        return record.turn_number if record else 0
+        return self._prompts._turn_number(record)
 
     def _create_record(
         self,
@@ -1096,22 +1048,15 @@ class AgentRuntime(RuntimeAPI):
         parent: int | None = None,
         label: str | None = None,
     ) -> SessionRecord:
-        cwd = self._chat_dir(chat_id)
-        now = time.time()
-        return SessionRecord(
-            chat_id=chat_id,
-            session_number=session_number,
-            session_id=session_id,
-            model=model,
-            persona=self.config.persona.name,
-            cwd=str(cwd),
-            created_at=now,
-            updated_at=now,
-            turn_number=0,
-            label=label,
+        return self._prompts._create_record(
+            chat_id,
+            session_number,
+            session_id,
+            model,
+            reply,
+            memory_flags,
             parent=parent,
-            persona_memory_exceeded=memory_flags.get("persona_memory_exceeded", False),
-            chat_memory_exceeded=memory_flags.get("chat_memory_exceeded", False),
+            label=label,
         )
 
     def _start_new_session(
@@ -1126,124 +1071,29 @@ class AgentRuntime(RuntimeAPI):
         on_update: Any | None = None,
     ) -> tuple[TurnResult, str]:
         """Create a new ACP session and return the prompt result + session id."""
-        cwd = self._chat_dir(chat_id)
-        cwd.mkdir(parents=True, exist_ok=True)
-        self.skills.sync_to_chat(chat_id, cwd, skill_names or self._active_skill_names(chat_id))
-        request = TurnRequest(
-            prompt=prompt,
-            cwd=cwd,
-            model=model,
-            mcp_servers=mcp_servers or self._active_mcp_servers(chat_id),
-            soft_timeout=self.config.engine.soft_timeout,
+        return self._prompts._start_new_session(
+            chat_id,
+            prompt,
+            model,
+            mcp_servers=mcp_servers,
+            skill_names=skill_names,
+            on_chunk=on_chunk,
+            on_update=on_update,
         )
-        result = self.engine.prompt(request, on_chunk=on_chunk, on_update=on_update)
-        if result.session_id is None:
-            from diploid_agent.acp_client import AcpError
-
-            raise AcpError(
-                "acp.create_session",
-                {"message": "Engine returned a result without a session id"},
-            )
-        return result, result.session_id
 
     def _check_chat_memory_transition(self, chat_id: str, record: SessionRecord) -> str | None:
         """Return a system notice if the chat memory just exceeded its cap."""
-        cap = self.config.harness.memory.max_chat_memory_chars
-        if not cap:
-            return None
-
-        mgr = self._memory_manager(chat_id)
-        path = mgr.chat_memory_path
-        if not path or not path.exists():
-            return None
-
-        total = len(path.read_text())
-        previous = record.chat_memory_exceeded
-        exceeded = total > cap
-        record.chat_memory_exceeded = exceeded
-
-        if previous == exceeded:
-            return None
-
-        default_notice: str | None = None
-        if not previous and exceeded:
-            default_notice = (
-                f"Chat memory ({path}) has grown beyond the context budget "
-                f"({total} > {cap} characters). Older content is still saved "
-                f"but is not loaded. You can ask me to read and prune it."
-            )
-
-        ctx = self._plugins.on_chat_memory_transition(
-            chat_id,
-            MemoryTransitionContext(
-                chat_id=chat_id,
-                record=record,
-                kind="chat",
-                path=path,
-                total=total,
-                cap=cap,
-                notice=default_notice,
-                suppress_default=False,
-            ),
-        )
-        if ctx.suppress_default:
-            if ctx.notice and ctx.notice != default_notice:
-                return ctx.notice
-            return None
-        return ctx.notice or default_notice
+        return self._prompts._check_chat_memory_transition(chat_id, record)
 
     def _check_persona_memory_transition(self, record: SessionRecord) -> str | None:
         """Return a system notice if the persona memory just exceeded its cap."""
-        cap = self.config.harness.memory.max_persona_memory_chars
-        if not cap:
-            return None
-
-        path = self.config.persona.profile_root / self.config.persona.memory_filename
-        if not path.exists():
-            return None
-
-        total = len(path.read_text())
-        previous = record.persona_memory_exceeded
-        exceeded = total > cap
-        record.persona_memory_exceeded = exceeded
-
-        if previous == exceeded:
-            return None
-
-        default_notice: str | None = None
-        if not previous and exceeded:
-            default_notice = (
-                f"Persona memory ({path}) has grown beyond the context budget "
-                f"({total} > {cap} characters). Older content is still saved "
-                f"but is not loaded. You can ask me to read and prune it."
-            )
-
-        chat_id = record.chat_id
-        ctx = self._plugins.on_persona_memory_transition(
-            chat_id,
-            MemoryTransitionContext(
-                chat_id=chat_id,
-                record=record,
-                kind="persona",
-                path=path,
-                total=total,
-                cap=cap,
-                notice=default_notice,
-                suppress_default=False,
-            ),
-        )
-        if ctx.suppress_default:
-            if ctx.notice and ctx.notice != default_notice:
-                return ctx.notice
-            return None
-        return ctx.notice or default_notice
+        return self._prompts._check_persona_memory_transition(record)
 
     # ---------------------------------------------------------------- public API
 
     def get_model(self, chat_id: str) -> str:
         """Return the model currently used for a chat, or the default."""
-        with self._lock:
-            return self._model(self._active_record(chat_id))
+        return self._prompts.get_model(chat_id)
 
     def _context_usage(self, record: SessionRecord) -> dict[str, Any]:
         """Return context-window and prompt-budget usage for a chat record."""
