@@ -13,6 +13,7 @@ import pytest
 
 from diploid_agent.acp_client import (
     AcpClient,
+    AcpError,
     AcpMcpError,
     AcpModelError,
     AcpPromptResult,
@@ -288,6 +289,22 @@ def test_is_stale_session_error_with_typed_exceptions() -> None:
     )
     assert not AcpClient._is_stale_session_error(
         AcpTransportError("acp.send", msg="ACP process not running")
+    )
+
+
+def test_is_method_not_found_precedence() -> None:
+    """Only true method-not-found or session/resume-not-found are reported as missing methods."""
+    assert AcpClient._is_method_not_found(
+        AcpError("foo/unknown", {"code": -32601, "message": "Method not found"})
+    )
+    assert AcpClient._is_method_not_found(
+        AcpError("session/resume", {"code": -32602, "message": "not found"})
+    )
+    assert not AcpClient._is_method_not_found(
+        AcpError("session/new", {"code": -32602, "message": "not found"})
+    )
+    assert not AcpClient._is_method_not_found(
+        AcpError("session/new", {"code": -32602, "message": "session/resume not found"})
     )
 
 

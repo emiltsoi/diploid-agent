@@ -3,6 +3,7 @@
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -2411,3 +2412,77 @@ def test_handle_update_starts_worker_and_queues_messages(tmp_path: Path) -> None
 
     assert "reply: first" in sent
     assert "reply: second" in sent
+
+
+def test_handle_update_routes_graceful_restart_command(tmp_path: Path) -> None:
+    """/graceful-restart without an argument uses the runtime persona name."""
+    runtime = _FakeConfigRuntime()
+    runtime.config = SimpleNamespace(persona=SimpleNamespace(name="test-pilot"))
+    poller = TelegramPoller(
+        token="dummy",
+        runtime=runtime,
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    sent: list[tuple[int, str, int | None]] = []
+
+    def fake_send(
+        chat_id: int,
+        text: str,
+        *,
+        reply_to_message_id: int | None = None,
+        first_message_id: int | None = None,
+    ) -> None:
+        sent.append((chat_id, text, reply_to_message_id))
+
+    poller._send_text = fake_send
+    poller._harness_graceful_restart = lambda chat_id, service: {
+        "reply": f"Restarting {service}",
+        "notice": None,
+    }
+    update = _update(
+        message={
+            "message_id": 1,
+            "chat": {"id": 12345, "type": "private"},
+            "from": {"id": 1, "is_bot": False},
+            "text": "/graceful-restart",
+        }
+    )
+    poller._handle_update(update)
+    assert sent == [(12345, "Restarting test-pilot.service", 1)]
+
+
+def test_handle_update_routes_graceful_restart_with_explicit_service(tmp_path: Path) -> None:
+    """/graceful-restart with an explicit service name uses that name."""
+    runtime = _FakeConfigRuntime()
+    runtime.config = SimpleNamespace(persona=SimpleNamespace(name="test-pilot"))
+    poller = TelegramPoller(
+        token="dummy",
+        runtime=runtime,
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    sent: list[tuple[int, str, int | None]] = []
+
+    def fake_send(
+        chat_id: int,
+        text: str,
+        *,
+        reply_to_message_id: int | None = None,
+        first_message_id: int | None = None,
+    ) -> None:
+        sent.append((chat_id, text, reply_to_message_id))
+
+    poller._send_text = fake_send
+    poller._harness_graceful_restart = lambda chat_id, service: {
+        "reply": f"Restarting {service}",
+        "notice": None,
+    }
+    update = _update(
+        message={
+            "message_id": 1,
+            "chat": {"id": 12345, "type": "private"},
+            "from": {"id": 1, "is_bot": False},
+            "text": "/graceful-restart my-service.service",
+        }
+    )
+    poller._handle_update(update)
+    assert sent == [(12345, "Restarting my-service.service", 1)]

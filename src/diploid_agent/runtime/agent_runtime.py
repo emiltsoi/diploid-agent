@@ -2656,7 +2656,8 @@ class AgentRuntime(RuntimeAPI):
 
         Notifies plugins with a non-mesh wake event so the mesh plugin does not
         overwrite `current_mesh` for terminal messages, and appends a transcript
-        note so the context is not lost.
+        note so the context is not lost. This deliberately does not enqueue a
+        wake because a DSN must not trigger a model turn.
         """
         with self._lock:
             record = self._active_record(chat_id)

@@ -2432,7 +2432,12 @@ class TelegramPoller:
             result = self._harness_restart(chat_id)
             self._send_result(chat_id, result, reply_to_message_id=chat_input.message_id)
         elif command == "/graceful-restart":
-            service = arg or f"{self.config.persona.name}.service"
+            if arg:
+                service = arg
+            elif self.runtime is not None:
+                service = f"{self.runtime.config.persona.name}.service"
+            else:
+                service = "diploid-agent.service"
             result = self._harness_graceful_restart(chat_id, service)
             self._send_result(chat_id, result, reply_to_message_id=chat_input.message_id)
         elif command == "/sessions":

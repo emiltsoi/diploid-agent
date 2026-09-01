@@ -1408,7 +1408,10 @@ if __name__ == "__main__":
         if exc.code == -32601:
             return True
         msg = str(exc.message or "").lower()
-        return "method not found" in msg or "not found" in msg and "session/resume" in str(exc.method or "").lower()
+        return (
+            "method not found" in msg
+            or ("not found" in msg and "session/resume" in str(exc.method or "").lower())
+        )
 
     async def _send_cancel_notification(self, session_id: str) -> None:
         """Send a fire-and-forget `session/cancel` notification."""
