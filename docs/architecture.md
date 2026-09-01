@@ -19,7 +19,7 @@
                        │
                        ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ runtime/agent_runtime.py (AgentRuntime)                                  │
+│ runtime/agent_runtime.py (thin orchestrator)                            │
 │  - sessions.jsonl (registry)                                             │
 │  - sessions/<chat>/.archive/ (session history)                           │
 │  - wake_queue.jsonl (pending wakes)                                      │
@@ -28,9 +28,24 @@
 │  - MemoryManager                                                         │
 │  - McpManager                                                            │
 │  - SkillManager                                                          │
-└──────────────────────┬───────────────────────────────┬───────────────────┘
-                       │                               │
-                       ▼                               ▼
+└──────────┬───────────────────────────────────────────────────────────────┘
+           │                    │
+           ▼                    ▼
+┌───────────────────────┐    ┌──────────────────────────────────────────┐
+│ runtime/*.py          │    │ turn/ (per-turn ACP engine)              │
+│  store.py             │    │  controller.py — turn coordinator        │
+│  metrics.py           │    │  process.py — main process() turn loop   │
+│  config_manager.py    │    │  session.py — new/resume/branch          │
+│  outbox.py            │    │  rehydrate.py — stale-session recovery   │
+│  mcp_skills.py        │    │  dispatch.py — background continue-turn  │
+│  plugins.py           │    │  notifier.py — stream/outbox heartbeat   │
+│  prompts.py           │    └──────────────────────────────────────────┘
+│  subagent.py          │
+│  planning.py          │
+│  actions.py           │
+└──────────┬────────────┘
+           │
+           ▼
 ┌──────────────────────┐     ┌──────────────────────────────────────────┐
 │ acp_client/          │     │ memory.py / memory_mcp.py                │
 │  client.py           │     │ (file or Hindsight backend)              │
@@ -53,12 +68,12 @@
 
 ### `AgentRuntime` (`runtime/agent_runtime.py`)
 
-The core state machine.
+The thin core orchestrator.
 
-- Owns `sessions.jsonl`, the chat registry.
-- Creates or resumes ACP engine sessions.
+- Owns `sessions.jsonl` through `runtime/store.py` (`ChatSessionStore`).
+- Creates or resumes ACP engine sessions by delegating to `turn/`.
 - Calls `MemoryManager` to retain turns and recall context.
-- Handles model switching by starting a new engine session.
+- Delegates metrics, config, outbox, MCP/skills, plugins, prompts, subagents, plans, and public actions to focused `runtime/*.py` collaborators.
 
 ### `AcpClient` (`acp_client/`)
 
@@ -124,6 +139,17 @@ and `MEMORY.md`) are owned by the runtime or by plugins. `MEMORY.md` is loaded
 and capped by `MemoryManager` during prompt assembly. Optional reference docs
 such as `references/*.md` are loaded by the plugin or skill that needs them, not
 by the composer.
+
+### `turn/`
+
+The ACP per-turn engine, extracted from the former `runtime/turn_controller.py`.
+
+- `turn/controller.py` — thin turn coordinator; owns `TurnProcess`, `TurnSession`, `TurnRehydrate`, and `TurnDispatch`.
+- `turn/process.py` — main `process()` ACP turn loop, including `_NotifyStream` streaming and placeholder editing.
+- `turn/session.py` — `switch_model`, `new_session`, `resume_session`, `branch_session`, and session activation helpers.
+- `turn/rehydrate.py` — stale session recovery, ACP `session/resume` fallback, and prompt rehydration.
+- `turn/dispatch.py` — background dispatch `dispatch()` and `continue_turn()` when a subagent or background task completes.
+- `turn/notifier.py` — `_NotifyStream` and `_OutboxHeartbeat` used by `process` and `continue_turn`.
 
 ### `transport/http/` and `transport/telegram/`
 

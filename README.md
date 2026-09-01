@@ -196,11 +196,29 @@ more value from a subscription you already hold.
 
 ## Source layout
 
-The top-level packages were split in Phase 4/5 so each major responsibility
-lives in a focused module:
+The top-level packages were split in Phase 4/5 and Phase 6 so each major
+responsibility lives in a focused module:
 
-- `diploid_agent/runtime/agent_runtime.py` — the service container and turn
-  orchestrator (the old `ConversationHarness`).
+- `diploid_agent/runtime/agent_runtime.py` — the thin service container and
+  turn orchestrator (the old `ConversationHarness`).
+- `diploid_agent/runtime/*.py` — focused runtime collaborators:
+  - `store.py` — chat/session persistence.
+  - `metrics.py` — metrics, health, and prometheus formatting.
+  - `config_manager.py` — live runtime configuration overrides.
+  - `outbox.py` — per-chat outbox and notification delivery.
+  - `mcp_skills.py` — MCP and skill enablement.
+  - `plugins.py` — plugin lifecycle, incidents, and sandbox.
+  - `prompts.py` — first/follow-up prompt building and model resolution.
+  - `subagent.py` — background subagent start/completion/status.
+  - `planning.py` — plan and dispatch wake helpers.
+  - `actions.py` — public command-style actions.
+- `diploid_agent/turn/` — ACP per-turn engine:
+  - `controller.py` — turn coordinator.
+  - `process.py` — main `process()` turn loop.
+  - `session.py` — new/resume/branch session management.
+  - `rehydrate.py` — stale session recovery and ACP resume.
+  - `dispatch.py` — background dispatch and continue-turn.
+  - `notifier.py` — streaming `_NotifyStream` and `_OutboxHeartbeat`.
 - `diploid_agent/acp_client/` — ACP JSON-RPC transport and process lifecycle:
   - `client.py` — public `AcpClient` session/prompt API.
   - `transport.py` — low-level `AcpTransport` (subprocess, JSON-RPC reader).
