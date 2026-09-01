@@ -10,10 +10,8 @@ from __future__ import annotations
 import asyncio
 import atexit
 import concurrent.futures
-import json
 import logging
 import os
-import signal
 import threading
 import time
 from collections.abc import Callable
@@ -30,6 +28,7 @@ from diploid_agent.acp_client.errors import (
     _acp_error_from_response,
 )
 from diploid_agent.acp_client.sandbox import AcpSandbox
+from diploid_agent.acp_client.transport import AcpTransport
 from diploid_agent.acp_client.types import AcpPromptResult, _Prompt
 from diploid_agent.acp_client.utils import (
     _devin_default_start_args,
@@ -49,6 +48,19 @@ _ACP_MODE_MAP = {
     "dangerous": "bypass",
     "bypass": "bypass",
 }
+
+
+class _TransportAttr:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def __get__(self, instance: AcpClient | None, owner: type | None = None) -> Any:
+        if instance is None:
+            raise AttributeError(self.name)
+        return getattr(instance._transport, self.name)
+
+    def __set__(self, instance: AcpClient, value: Any) -> None:
+        setattr(instance._transport, self.name, value)
 
 
 class AcpClient:
@@ -96,33 +108,29 @@ class AcpClient:
                 "WINDSURF_API_KEY/ACP_API_KEY in environment."
             )
 
-        # Background loop state.
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._thread: threading.Thread | None = None
-        self._proc: asyncio.subprocess.Process | None = None
-        self._reader_task: asyncio.Task[None] | None = None
-        self._stderr_task: asyncio.Task[None] | None = None
-        self._watchdog = PromptWatchdog(self)
-        self._watchdog_interval = watchdog_interval
-        self._watchdog_timeout = watchdog_timeout
-        self._last_stdout_at: float = 0.0
-        self._last_progress_at: float = 0.0
-        self._last_request_at: float = 0.0
-        self._last_control_call_deadline: float = 0.0
-        self._inflight_future: concurrent.futures.Future[Any] | None = None
-        self._inflight_deadline: float = 0.0
+        # Session/prompt state.
         self._next_id = 0
-        self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._active_prompts: dict[str, _Prompt] = {}
         self._session_models: dict[str, str] = {}
         self._pending_cancels: set[str] = set()
-        self._lock = threading.RLock()
-        self._initialized = False
-        self._transport_healthy = False
-        self._control_timeout = control_timeout
-        self._startup_timeout = startup_timeout
         self._model_options: list[str] | None = None
         self._mcp_servers: list[dict[str, Any]] = []
+
+        # Shared lock.
+        self._lock = threading.RLock()
+
+        # Low-level transport state.
+        self._transport = AcpTransport(self)
+
+        # Timing and control configuration.
+        self._control_timeout = control_timeout
+        self._startup_timeout = startup_timeout
+        self._watchdog_interval = watchdog_interval
+        self._watchdog_timeout = watchdog_timeout
+
+        # Restart backoff.
+        self._max_restarts = max(0, max_restarts)
+        self._restart_backoff_window = max(1.0, restart_backoff_window)
 
         # Service restart support: the child can request a controlled restart
         # through a private Unix socket instead of killing the parent directly.
@@ -136,13 +144,31 @@ class AcpClient:
             watchdog_timeout=watchdog_timeout,
         )
 
-        # Restart backoff: avoid an infinite kill/restart loop when the ACP child
-        # cannot be made healthy.
-        self._max_restarts = max(0, max_restarts)
-        self._restart_backoff_window = max(1.0, restart_backoff_window)
-        self._restart_history: list[float] = []
+        self._watchdog = PromptWatchdog(self)
 
         atexit.register(self.close)
+
+    # ------------------------------------------------------------------
+    # Backward-compatible aliases for transport state.
+
+    _loop = _TransportAttr("_loop")
+    _thread = _TransportAttr("_thread")
+    _proc = _TransportAttr("_proc")
+    _reader_task = _TransportAttr("_reader_task")
+    _stderr_task = _TransportAttr("_stderr_task")
+    _inflight_future = _TransportAttr("_inflight_future")
+    _inflight_deadline = _TransportAttr("_inflight_deadline")
+    _last_stdout_at = _TransportAttr("_last_stdout_at")
+    _last_progress_at = _TransportAttr("_last_progress_at")
+    _last_request_at = _TransportAttr("_last_request_at")
+    _last_control_call_deadline = _TransportAttr("_last_control_call_deadline")
+    _pending = _TransportAttr("_pending")
+    _transport_healthy = _TransportAttr("_transport_healthy")
+    _initialized = _TransportAttr("_initialized")
+    _restart_history = _TransportAttr("_restart_history")
+
+    # ------------------------------------------------------------------
+    # Watchdog and control aliases.
 
     @property
     def _control_socket_path(self) -> Path:
@@ -229,21 +255,9 @@ class AcpClient:
         return self._run(self._list_models(), timeout=60.0)
 
     def health(self) -> bool:
-        """Return True if the ACP transport is initialized and healthy.
-
-        Avoid making a live ACP call here: the event loop may be busy with a
-        long prompt or a slow ``session/new``.  Those calls have their own
-        timeouts; a blocking health probe would only cause the harness
-        watchdog to misfire and restart a legitimately busy service.
-        """
+        """Return True if the ACP transport is initialized and healthy."""
         with self._lock:
-            if not self._initialized or self._proc is None or self._proc.returncode is not None:
-                return False
-            if self._inflight_future is not None and not self._inflight_future.done():
-                now = time.monotonic()
-                if now <= self._inflight_deadline:
-                    return True
-            return self._transport_healthy
+            return self._transport.healthy()
 
     def session_alive(self, session_id: str) -> bool:
         """Probe whether an ACP session id is still valid."""
@@ -341,6 +355,7 @@ class AcpClient:
                     future: concurrent.futures.Future[Any] = asyncio.run_coroutine_threadsafe(
                         self._close_transport(), self._loop
                     )
+
                     def _stop_loop_soon(_: Any) -> None:
                         if self._loop is not None and self._loop.is_running():
                             try:
@@ -384,110 +399,35 @@ class AcpClient:
                 self._sandbox.cleanup()
                 self._control.close()
 
+    # ---------------------------------------------------------------- internal
+
     def _check_restart_backoff(self) -> None:
         """Raise AcpTransportError if we have restarted too many times recently."""
-        now = time.monotonic()
-        cutoff = now - self._restart_backoff_window
-        self._restart_history = [t for t in self._restart_history if t > cutoff]
-        if self._max_restarts and len(self._restart_history) >= self._max_restarts:
-            raise AcpTransportError(
-                "acp.restart",
-                msg=(
-                    f"ACP transport has been restarted {len(self._restart_history)} times "
-                    f"in the last {self._restart_backoff_window}s; giving up"
-                ),
-            )
+        self._transport._check_restart_backoff()
 
     def _record_restart_attempt(self) -> None:
         """Record that we are about to (re)start the ACP transport."""
-        now = time.monotonic()
-        cutoff = now - self._restart_backoff_window
-        self._restart_history = [t for t in self._restart_history if t > cutoff]
-        self._restart_history.append(now)
+        self._transport._record_restart_attempt()
 
     def _unblock_inflight(self, reason: str) -> None:
-        """Set an exception on the in-flight _run future and cancel active prompts.
+        """Set an exception on the in-flight _run future and cancel active prompts."""
+        self._transport._unblock_inflight(reason)
 
-        This must be called before killing the ACP process so the synchronous
-        caller blocked in _run() returns instead of hanging.
-        """
-        with self._lock:
-            inflight = self._inflight_future
-            if inflight is not None and not inflight.done():
-                try:
-                    inflight.set_exception(TimeoutError(reason))
-                except Exception:
-                    logger.exception("Failed to interrupt in-flight ACP future")
+    def _kill_process_group(self, proc: asyncio.subprocess.Process) -> None:
+        """Kill the child and any spawned descendants."""
+        self._transport._kill_process_group(proc)
 
-            # Abort any pending request futures so _send() does not hang.
-            exc = AcpTransportError("acp.transport", msg=reason)
-            for req_id, future in list(self._pending.items()):
-                if not future.done():
-                    try:
-                        future.set_exception(exc)
-                    except Exception:
-                        logger.exception("Failed to unblock pending ACP request %s", req_id)
-            self._pending.clear()
+    def _run(self, coro: Any, timeout: float | None = None) -> Any:
+        """Run a coroutine on the background loop and block for the result."""
+        return self._transport.run(coro, timeout=timeout)
 
-            for prompt in list(self._active_prompts.values()):
-                prompt.cancelled = True
-                prompt.timed_out = True
-                if not prompt.cancel_done.done():
-                    prompt.cancel_done.set_result(None)
+    async def _start_transport(self) -> None:
+        """Start the ACP subprocess and run the initialize handshake."""
+        await self._transport._start_transport()
 
-            def _cancel_all() -> None:
-                for prompt in list(self._active_prompts.values()):
-                    if self._loop is not None:
-                        self._loop.create_task(self._send_cancel_notification(prompt.session_id))
-
-            if self._loop is not None:
-                try:
-                    self._loop.call_soon_threadsafe(_cancel_all)
-                except Exception:
-                    logger.exception("Failed to schedule ACP cancel notifications")
-
-    def restart_transport(self) -> None:
-        """Kill the ACP subprocess and start a fresh one."""
-        logger.warning("Restarting ACP transport")
-        self._check_restart_backoff()
-        self._record_restart_attempt()
-        if self.metrics is not None:
-            self.metrics.inc("acp_restarts_total")
-        self._unblock_inflight("ACP transport restarted")
-        self.close()
-        self._ensure_started()
-
-    # ---------------------------------------------------------------- internal
-
-    def _is_transport_healthy(self) -> bool:
-        """Check whether the running ACP child and event loop are still usable."""
-        if not self._initialized:
-            return False
-        if self._loop is None or self._loop.is_closed() or not self._loop.is_running():
-            return False
-        if self._proc is None:
-            return False
-        return self._proc.returncode is None
-
-    def _cleanup_stale_transport(self) -> None:
-        """Kill a dead child and stop its event loop so a fresh one can start.
-
-        This is used when ``_ensure_started`` discovers the previously started
-        transport is no longer usable but was not fully torn down.
-        """
-        if self._proc is not None:
-            if self._proc.returncode is None:
-                try:
-                    self._kill_process_group(self._proc)
-                except OSError:
-                    logger.warning("Failed to kill stale ACP process %s", self._proc.pid)
-            self._proc = None
-        if self._loop is not None and self._loop.is_running():
-            try:
-                self._loop.call_soon_threadsafe(self._loop.stop)
-            except RuntimeError:
-                logger.warning("Failed to stop stale ACP event loop")
-        self._watchdog.stop()
+    async def _close_transport(self) -> None:
+        """Close the ACP subprocess and cancel I/O tasks."""
+        await self._transport.close()
 
     def _ensure_started(
         self,
@@ -504,8 +444,10 @@ class AcpClient:
 
         while True:
             with self._lock:
-                if self._is_transport_healthy():
-                    if self._sandbox.mcp_servers_key(target) == self._sandbox.mcp_servers_key(self._mcp_servers):
+                if self._transport._is_transport_healthy():
+                    if self._sandbox.mcp_servers_key(target) == self._sandbox.mcp_servers_key(
+                        self._mcp_servers
+                    ):
                         self._watchdog.start()
                         return
                     # MCP list changed; restart outside the lock.
@@ -516,7 +458,7 @@ class AcpClient:
                         logger.warning(
                             "ACP transport was marked initialized but is not healthy; resetting"
                         )
-                        self._cleanup_stale_transport()
+                        self._transport._cleanup_stale_transport()
 
                     self._initialized = False
                     self._transport_healthy = False
@@ -564,311 +506,33 @@ class AcpClient:
                 self._transport_healthy = True
             return
 
-    def _run(self, coro: Any, timeout: float | None = None) -> Any:
-        """Run a coroutine on the background loop and block for the result."""
-        if self._loop is None:
-            raise RuntimeError("ACP client not started")
-        if timeout is None:
-            timeout = self.timeout
+    def restart_transport(self) -> None:
+        """Kill the ACP subprocess and start a fresh one."""
+        logger.warning("Restarting ACP transport")
+        self._check_restart_backoff()
+        self._record_restart_attempt()
+        if self.metrics is not None:
+            self.metrics.inc("acp_restarts_total")
+        self._unblock_inflight("ACP transport restarted")
+        self.close()
+        self._ensure_started()
 
-        deadline = time.monotonic() + timeout if timeout is not None else float("inf")
-        result_timeout = timeout + 5.0 if timeout is not None else None
-        future: concurrent.futures.Future[Any] = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        with self._lock:
-            self._inflight_future = future
-            self._inflight_deadline = deadline
-            self._watchdog.start()
-        try:
-            result = future.result(timeout=result_timeout)
-            self._transport_healthy = True
-            return result
-        except TimeoutError as exc:
-            self._transport_healthy = False
-            if self.metrics is not None:
-                self.metrics.inc("acp_transport_errors_total", reason="timeout")
-            raise AcpTransportError(
-                getattr(coro, "__name__", "acp.run"),
-                msg=(
-                    f"ACP call timed out after {timeout}s"
-                    if timeout is not None
-                    else "ACP call timed out"
-                ),
-            ) from exc
-        except AcpError as exc:
-            if isinstance(exc, AcpTransportError):
-                self._transport_healthy = False
-            raise
-        except RuntimeError as exc:
-            # Anything that is still a plain RuntimeError at this point is
-            # unexpected; treat it as a transport failure so the caller can
-            # restart cleanly instead of crashing the service child.
-            self._transport_healthy = False
-            raise AcpTransportError(
-                getattr(coro, "__name__", "acp.run"),
-                msg=str(exc),
-            ) from exc
-        except (OSError, ConnectionError) as exc:
-            # Broken pipes and closed transports surface as OS-level errors.
-            # Convert them to transport errors so the harness treats them as
-            # recoverable rather than crashing the service child.
-            self._transport_healthy = False
-            raise AcpTransportError(
-                getattr(coro, "__name__", "acp.run"),
-                msg=f"ACP transport IO error: {exc}",
-            ) from exc
-        except Exception:
-            self._transport_healthy = False
-            raise
-        finally:
-            with self._lock:
-                self._inflight_future = None
-                self._inflight_deadline = 0.0
+    # ---------------------------------------------------------------- JSON-RPC
 
-    async def _start_transport(self) -> None:
-        env = os.environ.copy()
-        env["WINDSURF_API_KEY"] = self._api_key
-        env["ACP_API_KEY"] = self._api_key
-
-        # A standalone `devin acp` must not believe it is inside the
-        # Windsurf IDE, or it will wait for the IDE to authenticate.
-        env.pop("ACP_BACKEND", None)
-        env.pop("WINDSURF_IDE_TYPE", None)
-        env.pop("WINDSURF_EXT_HOST_PID", None)
-
-        # Use an isolated HOME to avoid loading user/channel default MCP
-        # configs that can block `devin acp` startup (e.g. `lean-ctx`).
-        if self._sandbox.devin_home is not None:
-            env["HOME"] = str(self._sandbox.devin_home)
-            env["XDG_CONFIG_HOME"] = str(self._sandbox.devin_home / ".config")
-            env["XDG_DATA_HOME"] = os.environ.get(
-                "XDG_DATA_HOME",
-                str(Path.home() / ".local" / "share"),
-            )
-            env["XDG_CACHE_HOME"] = os.environ.get(
-                "XDG_CACHE_HOME",
-                str(Path.home() / ".cache"),
-            )
-            # Isolate the child from the user's systemd/D-Bus session so it cannot
-            # run raw `systemctl --user restart ...` directly. Restarts go through
-            # the fake binaries in .local/bin and the harness control socket.
-            env["XDG_RUNTIME_DIR"] = str(self._sandbox.devin_home / ".run")
-            env.pop("DBUS_SESSION_BUS_ADDRESS", None)
-            env.pop("DBUS_SYSTEM_BUS_ADDRESS", None)
-            env.update(self._control.env())
-
-            # Prepend the fake binary directory to PATH.
-            fake_bin = str(self._sandbox.devin_home / ".local" / "bin")
-            env["PATH"] = fake_bin + os.pathsep + env.get("PATH", "")
-
-        self._proc = await asyncio.create_subprocess_exec(
-            str(self.agent_bin),
-            *self.start_args,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-            start_new_session=True,
-        )
-
-        self._reader_task = asyncio.create_task(self._reader())
-        self._stderr_task = asyncio.create_task(self._stderr_drain())
-
-        self._watchdog.start()
-
-        init = await self._call(
-            "initialize",
-            {
-                "protocolVersion": 1,
-                "clientCapabilities": {
-                    "fs": {"readTextFile": False, "writeTextFile": False},
-                    "terminal": False,
-                },
-                "clientInfo": {
-                    "name": "diploid-agent",
-                    "version": "0.1.0",
-                },
-            },
-            timeout=self._startup_timeout,
-        )
-        logger.info(
-            "ACP transport ready: %s v%s",
-            init["agentInfo"].get("title", "Devin"),
-            init["agentInfo"].get("version", "?"),
-        )
-
-    async def _reader(self) -> None:
-        """Read JSON-RPC lines from `devin acp` stdout and route them."""
-        while True:
-            if self._proc is None or self._proc.stdout is None:
-                break
-            try:
-                line = await self._proc.stdout.readline()
-            except (OSError, ValueError, RuntimeError) as exc:
-                logger.debug("ACP reader closed: %s", exc)
-                break
-            if not line:
-                break
-            logger.debug("ACP RECV: %s", line.decode().strip()[:200])
-
-            with self._lock:
-                self._last_stdout_at = time.monotonic()
-
-            try:
-                msg = json.loads(line.decode())
-            except json.JSONDecodeError:
-                continue
-
-            # Agent-to-client request (e.g. permission prompt).
-            if "method" in msg and "id" in msg:
-                await self._handle_request(msg)
-                continue
-
-            # Notification.
-            if "id" not in msg:
-                if msg.get("method") == "session/update":
-                    self._route_update(msg)
-                else:
-                    logger.debug("ACP notification: %s", msg.get("method"))
-                continue
-
-            # Response to one of our calls.
-            future = self._pending.pop(msg["id"], None)
-            if future is not None and not future.done():
-                future.set_result(msg)
-                self._last_progress_at = time.monotonic()
-
-    async def _stderr_drain(self) -> None:
-        """Discard stderr so the ACP process never blocks on a full pipe."""
-        if self._proc is None or self._proc.stderr is None:
-            return
-        while True:
-            try:
-                data = await self._proc.stderr.read(8192)
-            except (OSError, ValueError, RuntimeError):
-                break
-            if not data:
-                break
+    async def _call(
+        self,
+        method: str,
+        params: Any,
+        timeout: float | None = None,
+    ) -> Any:
+        """Send a JSON-RPC request and return the result."""
+        return await self._transport.call(method, params, timeout=timeout)
 
     def _route_update(self, msg: dict[str, Any]) -> None:
         """Route a `session/update` notification to its in-flight prompt."""
-        params = msg.get("params", {})
-        session_id = params.get("sessionId")
-        update = params.get("update", {})
-        if not session_id:
-            return
+        self._transport._route_update(msg)
 
-        with self._lock:
-            self._last_progress_at = time.monotonic()
-
-        prompt = self._active_prompts.get(session_id)
-        if prompt is None:
-            # Fallback: if only one prompt is active, route to it.
-            if len(self._active_prompts) == 1:
-                prompt = next(iter(self._active_prompts.values()))
-            else:
-                logger.debug("No prompt for update session %s", session_id)
-                return
-
-        prompt.updates.append(update)
-        if prompt.on_update:
-            try:
-                prompt.on_update(update)
-            except Exception:
-                logger.exception("ACP on_update failed")
-
-        def _text_from_content(content: Any) -> list[str]:
-            """Return all text blocks from an ACP content payload."""
-            if isinstance(content, list):
-                return [b.get("text", "") for b in content if b.get("type") == "text"]
-            if content.get("type") == "text":
-                return [content.get("text", "")]
-            return []
-
-        kind = update.get("sessionUpdate")
-        if kind in ("agent_message", "agent_message_chunk"):
-            for text in _text_from_content(update.get("content", {})):
-                if text:
-                    prompt.chunks.append(text)
-                    if prompt.on_chunk:
-                        try:
-                            prompt.on_chunk(text)
-                        except Exception:
-                            logger.exception("ACP on_chunk failed")
-
-    async def _handle_request(self, msg: dict[str, Any]) -> None:
-        method = msg["method"]
-        req_id = msg["id"]
-        params = msg.get("params", {})
-
-        if method == "session/request_permission":
-            options = params.get("options", [])
-            option_id = options[0]["optionId"] if options else "allow"
-            await self._respond(
-                req_id,
-                {"outcome": {"outcome": "selected", "optionId": option_id}},
-            )
-        else:
-            await self._respond(
-                req_id,
-                {"error": {"code": -32601, "message": f"Method not found: {method}"}},
-            )
-
-    async def _respond(self, req_id: int, result: Any) -> None:
-        await self._send(
-            {"jsonrpc": "2.0", "id": req_id, "result": result},
-            timeout=self._control_timeout,
-        )
-
-    async def _call(self, method: str, params: Any, timeout: float | None = None) -> Any:
-        self._next_id += 1
-        msg_id = self._next_id
-        msg = {
-            "jsonrpc": "2.0",
-            "id": msg_id,
-            "method": method,
-            "params": params,
-        }
-        future = self._loop.create_future()
-        self._pending[msg_id] = future
-        call_timeout = timeout or self._control_timeout
-        with self._lock:
-            self._last_request_at = time.monotonic()
-            self._last_control_call_deadline = time.monotonic() + call_timeout
-        try:
-            await self._send(msg, timeout=timeout)
-            with self._lock:
-                # _send succeeded; reset the per-call deadline for the response wait.
-                self._last_control_call_deadline = time.monotonic() + call_timeout
-            resp = await asyncio.wait_for(future, timeout=call_timeout)
-        except TimeoutError:
-            self._pending.pop(msg_id, None)
-            raise
-        finally:
-            with self._lock:
-                self._last_control_call_deadline = 0.0
-        if "error" in resp:
-            raise _acp_error_from_response(method, resp["error"])
-        return resp.get("result")
-
-    async def _send(self, msg: dict[str, Any], timeout: float | None = None) -> None:
-        if self._proc is None or self._proc.stdin is None:
-            raise AcpTransportError("acp.send", msg="ACP process not running")
-        data = (json.dumps(msg, ensure_ascii=False) + "\n").encode()
-        logger.debug("ACP SEND: %s", data.decode().strip()[:200])
-        self._proc.stdin.write(data)
-        try:
-            await asyncio.wait_for(
-                self._proc.stdin.drain(),
-                timeout=timeout or self._control_timeout,
-            )
-            with self._lock:
-                self._last_request_at = time.monotonic()
-        except TimeoutError:
-            logger.warning(
-                "ACP send timed out after %ss",
-                timeout or self._control_timeout,
-            )
-            raise
+    # ---------------------------------------------------------------- session helpers
 
     @staticmethod
     def _is_stale_session_error(exc: BaseException) -> bool:
@@ -903,7 +567,7 @@ class AcpClient:
 
     async def _send_cancel_notification(self, session_id: str) -> None:
         """Send a fire-and-forget `session/cancel` notification."""
-        await self._send(
+        await self._transport._send(
             {
                 "jsonrpc": "2.0",
                 "method": "session/cancel",
@@ -1199,7 +863,7 @@ class AcpClient:
 
         timeout_task: asyncio.Task[None] | None = None
         try:
-            await self._send(
+            await self._transport._send(
                 {
                     "jsonrpc": "2.0",
                     "id": prompt_id,
@@ -1334,37 +998,3 @@ class AcpClient:
             await self._send_cancel_notification(prompt.session_id)
         except Exception:
             logger.exception("Failed to send soft timeout cancel for %s", prompt.session_id)
-
-    def _kill_process_group(self, proc: asyncio.subprocess.Process) -> None:
-        """Kill the child and any spawned descendants."""
-        try:
-            proc.kill()
-            os.killpg(proc.pid, signal.SIGKILL)
-        except (ProcessLookupError, OSError):
-            # Already gone or process group no longer valid.
-            pass
-
-    async def _close_transport(self) -> None:
-        if self._proc is not None and self._proc.returncode is None:
-            self._proc.terminate()
-            try:
-                await asyncio.wait_for(self._proc.wait(), timeout=5.0)
-            except TimeoutError:
-                self._kill_process_group(self._proc)
-
-        # Cancel reader and stderr drain so the loop does not keep them alive.
-        for task in (self._reader_task, self._stderr_task):
-            if task is not None and not task.done():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug("ACP task %s ended with %s", task.get_name(), exc)
-
-        # Any request futures that have not been resolved by the reader should
-        # be aborted now, including in-flight _run() callers.
-        self._unblock_inflight("ACP transport closed")
-
-
