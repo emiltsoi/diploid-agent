@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from fastapi import FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request, Response, status
 
 from diploid_agent.config import (
     Config,
@@ -33,3 +33,21 @@ def register_mesh(
     async def openclaw_mesh_webhook(request: Request) -> Response:
         """OpenClaw-compatible mesh receive alias."""
         return await runtime.handle_ingress("mesh", request)
+
+    @app.post(
+        "/mesh/{chat_id}/notify",
+        status_code=status.HTTP_202_ACCEPTED,
+        dependencies=[Depends(_require_api_key)],
+    )
+    async def mesh_notify(chat_id: str, req: MeshNotifyRequest) -> dict[str, str]:
+        """Mirror a successfully sent mesh message to Telegram as a system notice."""
+        runtime._float_mesh_to_telegram(
+            chat_id,
+            sender=req.sender,
+            recipient=req.recipient,
+            body=req.body,
+            action=req.action,
+            reply=req.reply,
+            msg_id=req.msg_id,
+        )
+        return {"status": "accepted"}

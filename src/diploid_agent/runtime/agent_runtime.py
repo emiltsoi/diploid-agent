@@ -386,6 +386,37 @@ class AgentRuntime(RuntimeAPI):
         """Send a final ChatResult through the configured delivery channel."""
         self._outbox._deliver_chat_result(chat_id, chat_result)
 
+    def _float_mesh_to_telegram(
+        self,
+        chat_id: str,
+        sender: str,
+        recipient: str,
+        body: str,
+        action: str,
+        reply: str,
+        msg_id: str,
+    ) -> None:
+        """Mirror a sent mesh message to Telegram as a system notice if enabled."""
+        if not self.config.harness.notifications.mesh_telegram_float:
+            return
+        if not self.config.harness.notifications.enabled:
+            return
+
+        stripped = chat_id.lstrip("-")
+        if not stripped.isdigit():
+            return
+
+        text = f"System: [mesh] {sender} \u2192 {recipient}: {body}"
+        if action:
+            text += f" (action={action})"
+        if reply:
+            text += f" (reply={reply})"
+        if msg_id:
+            text += f" (id={msg_id})"
+
+        chat_result = ChatResult(reply=text)
+        self._deliver_chat_result(chat_id, chat_result)
+
     def outbox_pop(
         self,
         chat_id: str | None = None,

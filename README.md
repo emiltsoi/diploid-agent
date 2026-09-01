@@ -143,6 +143,8 @@ Browse the docs as a searchable site: **https://emiltsoi.github.io/diploid-agent
 - Exposes MCP tools (`mesh_send`, `mesh_list`, `mesh_register`, `mesh_sync`, `mesh_publish`, `mesh_health`, `mesh_deregister`).
 - Enforces `reply=yes/no/end` semantics: `reply=no` nudges the model to avoid replying, `reply=end` hard-blocks `mesh_send`, and DSNs are recorded without a turn.
 - Nudges and hard-caps `mesh_send` calls per ACP turn via `harness.mesh.max_sends_per_turn` and `harness.mesh.max_message_in_turn_suggestion`.
+- Strengthens prompt discipline with a top-of-prompt `SYSTEM — MESH REPLY RULE` CTA that commands the agent to use `mesh_send` for replies and to keep mesh content out of normal assistant text.
+- Can mirror sent mesh messages back to Telegram as `System: [mesh] ...` notices via `harness.notifications.mesh_telegram_float`.
 - Shares the same `mesh-peer-registry` and local vault format with [`hermes-mesh`](https://github.com/emiltsoi/hermes-mesh) and [`openclaw-mesh`](https://github.com/emiltsoi/openclaw-mesh), so a diploid agent can exchange messages with Hermes and OpenClaw agents using the same envelope and signatures.
 
 See [`docs/mesh.md`](docs/mesh.md) and the [`diploid-mesh` README](https://github.com/emiltsoi/diploid-mesh/blob/main/README.md) for install, vault setup, and `harness.yaml` configuration.

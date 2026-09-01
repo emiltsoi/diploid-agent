@@ -62,6 +62,11 @@ placeholder is updated with a liveness suffix such as `(still working, 1m
 `⏳ Still thinking... (1m 30s)` result to the outbox after 30 seconds, and every
 90 seconds after that, so the user knows the agent is alive.
 
+The same outbox path is used for the optional mesh Telegram float. When
+`harness.notifications.mesh_telegram_float` is `true`, the harness inserts a
+system message such as `System: [mesh] aurelia → vesper: pong` into the outbox
+after the agent calls `mesh_send` successfully.
+
 ## Service restart notice
 
 When the systemd service restarts, the harness sends a direct message to each

@@ -37,6 +37,7 @@ __all__ = [
     "DispatchRequest",
     "GracefulRestartRequest",
     "McpCommandRequest",
+    "MeshNotifyRequest",
     "OutboxResponse",
     "PlanCreateRequest",
     "PlanCreateTask",
@@ -181,6 +182,15 @@ class RetainRequest(BaseModel):
     content: str
     tags: list[str] = Field(default_factory=list)
     context: str | None = None
+
+
+class MeshNotifyRequest(BaseModel):
+    sender: str
+    recipient: str
+    body: str
+    action: str = ""
+    reply: str = ""
+    msg_id: str = ""
 
 
 class McpCommandRequest(BaseModel):

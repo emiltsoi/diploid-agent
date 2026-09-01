@@ -62,3 +62,46 @@ close while the hard cap prevents runaway loops.
 The per-turn budget is tracked by `MeshSendTracker` inside the `diploid-mesh`
 MCP server. It reads the in-flight mesh message from `chat_mesh_state.json` and
 queries the harness `GET /turn/{chat_id}` endpoint.
+
+## Prompt discipline for mesh replies
+
+The mesh plugin injects two layers of instruction so the agent cannot mistake a
+mesh message for a normal Telegram user message:
+
+1. The `mesh` prompt slot contains the `MESH_CONTRACT` with examples of a good
+   `mesh_send` call and a bad one (writing the mesh payload as assistant text).
+2. When a mesh message is active, `DiploidMeshPlugin.after_prompt_built` prepends
+   a top-of-prompt `SYSTEM — MESH REPLY RULE` block that explicitly commands the
+   agent to use `mesh_send`, not to put mesh content in the final assistant text,
+   and to close the thread with `reply=end` when done.
+
+For `reply=end` the CTA becomes a silence rule; for `reply=no` it says the
+message is one-way and only a tool reply is allowed if the agent chooses to
+respond.
+
+## Floating mesh traffic to Telegram
+
+When `harness.notifications.mesh_telegram_float` is `true`, the `diploid-mesh`
+MCP server notifies the harness after every successful `mesh_send`. The harness
+delivers a system message to the chat's Telegram thread, e.g.:
+
+```
+System: [mesh] aurelia → vesper: pong (action=info) (reply=end) (id=<msg_id>)
+```
+
+This keeps the human operator aware of mesh content without depending on the
+agent to repeat it in assistant text. Set it in `runtime-overrides.yaml`:
+
+```yaml
+notifications:
+  enabled: true
+  mesh_telegram_float: true
+```
+
+The delivery method follows `harness.notifications.outbox_delivery`:
+
+- `true` (recommended): the float is enqueued in the per-chat outbox and sent by
+  the Telegram `DeliveryWorker`.
+- `false`: the float is sent immediately with `notifier.send()`. This works but
+  can race with streaming edits; use `outbox_delivery: true` for the cleanest
+  behaviour.
