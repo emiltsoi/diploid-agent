@@ -476,15 +476,15 @@ def test_sandbox_systemctl_wrapper_routes_to_harness(monkeypatch, tmp_path: Path
 
     client = AcpClient(agent_bin="/bin/true", api_key="test-key", on_service_restart=_on_restart)
     try:
-        client._prepare_devin_home()
-        assert client._devin_home is not None
+        client._sandbox.prepare()
+        assert client._sandbox.devin_home is not None
 
-        wrapper = client._devin_home / ".local" / "bin" / "systemctl"
+        wrapper = client._sandbox.devin_home / ".local" / "bin" / "systemctl"
         assert wrapper.exists() and os.access(wrapper, os.X_OK)
 
         env = os.environ.copy()
         env["DIPLOID_CONTROL_SOCKET"] = str(client._control_socket_path)
-        env["PATH"] = f"{client._devin_home / '.local' / 'bin'}{os.pathsep}{env.get('PATH', '')}"
+        env["PATH"] = f"{client._sandbox.devin_home / '.local' / 'bin'}{os.pathsep}{env.get('PATH', '')}"
         env.pop("DBUS_SESSION_BUS_ADDRESS", None)
         env.pop("DBUS_SYSTEM_BUS_ADDRESS", None)
 
@@ -529,9 +529,9 @@ def test_watchdog_kills_stuck_control_call() -> None:
 def test_normalize_mcp_servers_drops_lean_ctx(tmp_path: Path) -> None:
     """lean-ctx entries are stripped because the shared daemon is not used."""
     client = AcpClient(agent_bin="/bin/true", api_key="test-key")
-    client._devin_home = tmp_path
+    client._sandbox.devin_home = tmp_path
 
-    out = client._normalize_mcp_servers(
+    out = client._sandbox.normalize_mcp_servers(
         [
             {
                 "name": "lean-ctx",
