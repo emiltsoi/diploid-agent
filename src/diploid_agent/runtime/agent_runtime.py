@@ -105,24 +105,6 @@ def _is_telegram_chat_id(chat_id: str) -> bool:
     return stripped.isdigit()
 
 
-def _run_unlocked(method: Callable[..., Any]) -> Callable[..., Any]:
-    """Run a method while releasing the harness RLock during its execution.
-
-    For use inside @_locked methods to avoid holding the global lock while
-    a long ACP call is in flight.
-    """
-
-    @functools.wraps(method)
-    def wrapper(self: AgentRuntime, *args, **kwargs):
-        self._lock.release()
-        try:
-            return method(self, *args, **kwargs)
-        finally:
-            self._lock.acquire()
-
-    return wrapper
-
-
 class AgentRuntime(RuntimeAPI):
     """Persistent chat runtime backed by Devin ACP."""
 
@@ -341,13 +323,24 @@ class AgentRuntime(RuntimeAPI):
 
         # Schedule the actual service restart with a short delay so the in-flight
         # reply can be sent before the process goes down.
+        self._schedule_systemd_restart(service, delay=10.0, chat_id=None, reason=reason)
+
+    def _schedule_systemd_restart(
+        self,
+        service: str,
+        delay: float,
+        chat_id: str | None,
+        reason: str,
+    ) -> None:
+        """Run a short-delayed systemd-run that restarts the named service."""
+
         def _do_restart() -> None:
             try:
                 subprocess.Popen(
                     [
                         "systemd-run",
                         "--user",
-                        "--on-active=10s",
+                        f"--on-active={delay}s",
                         "--timer-property=AccuracySec=1s",
                         "/usr/bin/systemctl",
                         "--user",
@@ -358,7 +351,15 @@ class AgentRuntime(RuntimeAPI):
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
-                logger.info("Scheduled graceful restart of %s in 10s", service)
+                if chat_id is not None:
+                    logger.info(
+                        "Scheduled graceful restart of %s in %ss (from chat %s)",
+                        service,
+                        delay,
+                        chat_id,
+                    )
+                else:
+                    logger.info("Scheduled graceful restart of %s in %ss", service, delay)
             except Exception:
                 logger.exception("Failed to schedule graceful restart of %s", service)
 
@@ -410,16 +411,25 @@ class AgentRuntime(RuntimeAPI):
             self._outbox.append((chat_id, chat_result))
             self._outbox_condition.notify_all()
 
+    def _safe_notifier_send(self, chat_id: str, text: str, notifier: Notifier | None = None) -> None:
+        """Send a notification, swallowing exceptions and logging them."""
+        if not text:
+            return
+        notifier = notifier or self.notifier
+        if notifier is None:
+            return
+        try:
+            notifier.send(chat_id, text)
+        except Exception:
+            logger.exception("Failed to send notification to %s", chat_id)
+
     def _deliver_chat_result(self, chat_id: str, chat_result: ChatResult) -> None:
         """Send a final ChatResult through the configured delivery channel."""
         if self._outbox_delivery_enabled:
             self._enqueue_outbox(chat_id, chat_result)
             return
         if self.config.harness.notifications.enabled and chat_result.reply:
-            try:
-                self.notifier.send(chat_id, chat_result.reply)
-            except Exception:
-                logger.exception("Failed to send chat result for %s", chat_id)
+            self._safe_notifier_send(chat_id, chat_result.reply)
 
     def outbox_pop(
         self,
@@ -1239,10 +1249,7 @@ class AgentRuntime(RuntimeAPI):
             return
 
         for chat_id in chat_ids:
-            try:
-                notifier.send(str(chat_id), text)
-            except Exception:
-                logger.exception("Failed to send restart notice for %s", chat_id)
+            self._safe_notifier_send(str(chat_id), text, notifier=notifier)
 
     def _create_direct_notifier(self) -> Notifier:
         """Create a notifier that bypasses the outbox if possible."""
@@ -1321,6 +1328,25 @@ class AgentRuntime(RuntimeAPI):
         """Return the current live task configuration."""
         return self.config.harness.task
 
+    def _update_config_section(
+        self,
+        current: Any,
+        new: Any,
+        *,
+        success: str,
+        post: Callable[[], None] | None = None,
+        error: str = "Config updated in memory but persistence failed",
+    ) -> str:
+        """Apply a partial update to a config section and persist overrides."""
+        with self._lock:
+            for field in new.model_fields_set:
+                setattr(current, field, getattr(new, field))
+            if post is not None:
+                post()
+            if not self._save_runtime_overrides():
+                raise ConfigPersistenceError(error)
+            return success
+
     def update_task_config(self, task_config: TaskConfig) -> str:
         """Update the live task configuration, resize the worker pool, and persist.
 
@@ -1334,14 +1360,13 @@ class AgentRuntime(RuntimeAPI):
             ConfigPersistenceError: If the in-memory update succeeds but the
                 runtime-overrides file cannot be written.
         """
-        with self._lock:
-            current = self.config.harness.task
-            for field in task_config.model_fields_set:
-                setattr(current, field, getattr(task_config, field))
-            self.task_engine.reconfigure()
-            if not self._save_runtime_overrides():
-                raise ConfigPersistenceError("Task config updated in memory but persistence failed")
-            return "Task config updated"
+        return self._update_config_section(
+            self.config.harness.task,
+            task_config,
+            success="Task config updated",
+            post=self.task_engine.reconfigure,
+            error="Task config updated in memory but persistence failed",
+        )
 
     def _load_runtime_overrides(self) -> None:
         """Load persisted runtime config overrides."""
@@ -1458,16 +1483,13 @@ class AgentRuntime(RuntimeAPI):
             ConfigPersistenceError: If the in-memory update succeeds but the
                 runtime-overrides file cannot be written.
         """
-        with self._lock:
-            current = self.config.harness.notifications
-            for field in notifications_config.model_fields_set:
-                setattr(current, field, getattr(notifications_config, field))
-            self.notifier = self._create_notifier()
-            if not self._save_runtime_overrides():
-                raise ConfigPersistenceError(
-                    "Notifications config updated in memory but persistence failed"
-                )
-            return "Notifications config updated"
+        return self._update_config_section(
+            self.config.harness.notifications,
+            notifications_config,
+            success="Notifications config updated",
+            post=lambda: setattr(self, "notifier", self._create_notifier()),
+            error="Notifications config updated in memory but persistence failed",
+        )
 
     def get_timer_config(self) -> TimerConfig:
         """Return the current live timer configuration."""
@@ -1483,15 +1505,12 @@ class AgentRuntime(RuntimeAPI):
             ConfigPersistenceError: If the in-memory update succeeds but the
                 runtime-overrides file cannot be written.
         """
-        with self._lock:
-            current = self.config.harness.timer
-            for field in timer_config.model_fields_set:
-                setattr(current, field, getattr(timer_config, field))
-            if not self._save_runtime_overrides():
-                raise ConfigPersistenceError(
-                    "Timer config updated in memory but persistence failed"
-                )
-            return "Timer config updated"
+        return self._update_config_section(
+            self.config.harness.timer,
+            timer_config,
+            success="Timer config updated",
+            error="Timer config updated in memory but persistence failed",
+        )
 
     def get_waker_config(self) -> WakerConfig:
         """Return the current live waker configuration."""
@@ -1507,15 +1526,12 @@ class AgentRuntime(RuntimeAPI):
             ConfigPersistenceError: If the in-memory update succeeds but the
                 runtime-overrides file cannot be written.
         """
-        with self._lock:
-            current = self.config.harness.waker
-            for field in waker_config.model_fields_set:
-                setattr(current, field, getattr(waker_config, field))
-            if not self._save_runtime_overrides():
-                raise ConfigPersistenceError(
-                    "Waker config updated in memory but persistence failed"
-                )
-            return "Waker config updated"
+        return self._update_config_section(
+            self.config.harness.waker,
+            waker_config,
+            success="Waker config updated",
+            error="Waker config updated in memory but persistence failed",
+        )
 
     def get_telegram_config(self) -> TelegramConfig:
         """Return the current live Telegram configuration."""
@@ -1532,16 +1548,13 @@ class AgentRuntime(RuntimeAPI):
             ConfigPersistenceError: If the in-memory update succeeds but the
                 runtime-overrides file cannot be written.
         """
-        with self._lock:
-            current = self.config.harness.telegram
-            for field in telegram_config.model_fields_set:
-                setattr(current, field, getattr(telegram_config, field))
-            self.notifier = self._create_notifier()
-            if not self._save_runtime_overrides():
-                raise ConfigPersistenceError(
-                    "Telegram config updated in memory but persistence failed"
-                )
-            return "Telegram config updated"
+        return self._update_config_section(
+            self.config.harness.telegram,
+            telegram_config,
+            success="Telegram config updated",
+            post=lambda: setattr(self, "notifier", self._create_notifier()),
+            error="Telegram config updated in memory but persistence failed",
+        )
 
     def get_plugins_config(self) -> list[PluginConfig]:
         """Return the current live plugin list."""
@@ -2726,28 +2739,7 @@ class AgentRuntime(RuntimeAPI):
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Failed to record restart incident for %s: %s", chat_id, exc)
 
-        def _do_restart() -> None:
-            try:
-                subprocess.Popen(
-                    [
-                        "systemd-run",
-                        "--user",
-                        "--on-active=5s",
-                        "--timer-property=AccuracySec=1s",
-                        "/usr/bin/systemctl",
-                        "--user",
-                        "restart",
-                        service,
-                    ],
-                    start_new_session=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                logger.info("Scheduled graceful restart of %s in 5s (from chat %s)", service, chat_id)
-            except Exception:
-                logger.exception("Failed to schedule graceful restart of %s", service)
-
-        threading.Thread(target=_do_restart, daemon=True).start()
+        self._schedule_systemd_restart(service, delay=5.0, chat_id=chat_id, reason=reason)
 
         return ChatResult(
             reply=f"Restarting {service}. I'll be back in a moment.",
@@ -3069,10 +3061,7 @@ class AgentRuntime(RuntimeAPI):
         if self._outbox_delivery_enabled:
             self._enqueue_outbox(chat_id, chat_result)
             return
-        try:
-            self.notifier.send(chat_id, text)
-        except Exception:
-            logger.exception("Failed to send timeout notification for subagent %s", dispatch_id)
+        self._safe_notifier_send(chat_id, text)
 
     def _subagent_status_name(self, task: Task, dispatch: Dispatch | None) -> str:
         """Map a subagent task/dispatch to a simple status string."""
