@@ -9,7 +9,10 @@ from diploid_agent.config import (
 )
 from diploid_agent.transport.base import RuntimeAPI
 from diploid_agent.transport.command_handler import CommandHandler
-from diploid_agent.transport.http.models import *
+from diploid_agent.transport.http.models import (
+    MeshChatMapRequest,
+    MeshNotifyRequest,
+)
 
 
 def register_mesh(
@@ -33,6 +36,21 @@ def register_mesh(
     async def openclaw_mesh_webhook(request: Request) -> Response:
         """OpenClaw-compatible mesh receive alias."""
         return await runtime.handle_ingress("mesh", request)
+
+    @app.post(
+        "/mesh/chat-map",
+        dependencies=[Depends(_require_api_key)],
+    )
+    async def mesh_chat_map(req: MeshChatMapRequest) -> dict:
+        """Update the mesh chat mapping for sessions or per-sender routing."""
+        return command_handler.call(
+            method="update_mesh_chat_map",
+            chat_map=req.chat_map,
+            chat_mapping=req.chat_mapping,
+            fallback_chat_id=req.fallback_chat_id,
+            requires_chat_id=False,
+            catch=False,
+        )
 
     @app.post(
         "/mesh/{chat_id}/notify",
