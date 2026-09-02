@@ -256,3 +256,40 @@ def test_skill_manager_match_skills_respects_enabled_set(tmp_path: Path) -> None
     )
     assert manager.match_skills("please model review this repo", enabled={"review"}) == set()
     assert manager.match_skills("please model review this repo") == {"model-review"}
+
+
+def test_skill_manager_expands_templates(tmp_path: Path) -> None:
+    """Skill content placeholders are expanded from active persona and chat context."""
+    shared = tmp_path / "personas" / "shared"
+    shared.mkdir(parents=True)
+    _write_skill(
+        shared / "skills",
+        "continuity",
+        "---\nname: continuity\n---\n\n"
+        "Read {profile_root}/MEMORY.md and {sessions_root}/{chat_id}/chat_MEMORY.md.\n",
+    )
+    sessions = tmp_path / "sessions"
+    sessions.mkdir(parents=True)
+
+    manager = SkillManager(
+        personas_root=tmp_path / "personas",
+        shared_root=shared,
+        chat_cwd_root=sessions,
+        active_persona="aurelia",
+        persona_profile_root="~/.devin/personas/aurelia",
+    )
+
+    skill = manager.skill("continuity", "chat-1")
+    assert skill is not None
+    assert "aurelia/MEMORY.md" in skill.content
+    assert "chat-1/chat_MEMORY.md" in skill.content
+    assert "{profile_root}" not in skill.content
+    assert "{chat_id}" not in skill.content
+
+    cwd = tmp_path / "sessions" / "chat-1"
+    cwd.mkdir(parents=True)
+    manager.sync_to_chat("chat-1", cwd, enabled={"continuity"})
+
+    synced = (cwd / ".devin" / "skills" / "continuity" / "SKILL.md").read_text()
+    assert "aurelia/MEMORY.md" in synced
+    assert "chat-1/chat_MEMORY.md" in synced

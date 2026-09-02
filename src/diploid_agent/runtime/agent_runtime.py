@@ -210,6 +210,8 @@ class AgentRuntime(RuntimeAPI):
             personas_root=Path(self.config.persona.profile_root).parent,
             shared_root=self.config.harness.skills.shared_root,
             chat_cwd_root=self.sessions_root,
+            active_persona=self.config.persona.name,
+            persona_profile_root=self.config.persona.profile_root,
         )
         self._mcp_skills = RuntimeMcpSkills(self)
         self._runtime_plugins = RuntimePlugins(self)

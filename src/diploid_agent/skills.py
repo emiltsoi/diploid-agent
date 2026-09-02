@@ -27,6 +27,7 @@ class Skill:
     permissions: dict[str, Any] = field(default_factory=dict)
     triggers: list[str] = field(default_factory=lambda: ["user", "model"])
     content: str = ""
+    front_matter: str = ""
 
     def to_request(self) -> dict[str, Any]:
         return {
@@ -38,6 +39,10 @@ class Skill:
             "content": self.content,
         }
 
+    def to_file(self) -> str:
+        """Reassemble the full SKILL.md text, including front matter."""
+        return f"---\n{self.front_matter}\n---\n\n{self.content}"
+
 
 class SkillManager:
     """Discover and sync skills into a chat workspace."""
@@ -47,10 +52,16 @@ class SkillManager:
         personas_root: Path,
         shared_root: Path,
         chat_cwd_root: Path | None = None,
+        active_persona: str | None = None,
+        persona_profile_root: Path | str | None = None,
     ):
         self.personas_root = Path(personas_root)
         self.shared_root = Path(shared_root)
         self.chat_cwd_root = Path(chat_cwd_root) if chat_cwd_root else None
+        self.active_persona = active_persona
+        self.persona_profile_root = (
+            Path(persona_profile_root).expanduser() if persona_profile_root else None
+        )
 
     def _chat_skill_root(self, chat_id: str) -> Path | None:
         if self.chat_cwd_root is None:
@@ -71,8 +82,9 @@ class SkillManager:
                     dirs.append(persona_dir / "skills")
         return dirs
 
-    @staticmethod
-    def _load_skill(path: Path, source: str) -> Skill | None:
+    def _load_skill(
+        self, path: Path, source: str, chat_id: str | None = None
+    ) -> Skill | None:
         if not path.is_dir():
             return None
         skill_md = path / "SKILL.md"
@@ -90,6 +102,7 @@ class SkillManager:
             return None
         if not isinstance(front, dict):
             return None
+        content = self._expand_content(parts[1].strip(), chat_id)
         return Skill(
             name=front.get("name", path.name),
             source=source,
@@ -102,8 +115,39 @@ class SkillManager:
             allowed_tools=front.get("allowed-tools", []),
             permissions=front.get("permissions", {}),
             triggers=front.get("triggers", ["user", "model"]),
-            content=parts[1].strip(),
+            content=content,
+            front_matter=parts[0].strip(),
         )
+
+    def _template_vars(self, chat_id: str | None) -> dict[str, str | None]:
+        """Return template variables for skill content expansion."""
+        vars: dict[str, str | None] = {}
+        if self.active_persona:
+            vars["persona"] = self.active_persona
+        if self.persona_profile_root:
+            vars["profile_root"] = str(self.persona_profile_root)
+        elif self.active_persona:
+            vars["profile_root"] = str(self.personas_root / self.active_persona)
+        if chat_id:
+            vars["chat_id"] = chat_id
+        if self.chat_cwd_root:
+            vars["sessions_root"] = str(self.chat_cwd_root)
+        return vars
+
+    def _expand_content(self, content: str, chat_id: str | None) -> str:
+        """Replace known {placeholders} in skill content with template vars."""
+        template_vars = self._template_vars(chat_id)
+        if not template_vars:
+            return content
+
+        def _repl(match: re.Match) -> str:
+            key = match.group(1)
+            value = template_vars.get(key)
+            if value is None:
+                return match.group(0)
+            return str(value)
+
+        return re.sub(r"\{(\w+)\}", _repl, content)
 
     def list_skills(self, chat_id: str | None = None) -> list[Skill]:
         """Return all available skills, chat-scoped first."""
@@ -118,7 +162,7 @@ class SkillManager:
             for path in root.iterdir():
                 if not path.is_dir():
                     continue
-                skill = self._load_skill(path, source)
+                skill = self._load_skill(path, source, chat_id)
                 if skill and skill.name not in seen:
                     seen.add(skill.name)
                     skills.append(skill)
@@ -145,7 +189,7 @@ class SkillManager:
                 continue
             skill_target = target / name
             skill_target.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(skill.path, skill_target / "SKILL.md")
+            (skill_target / "SKILL.md").write_text(skill.to_file(), encoding="utf-8")
 
     def create_chat_skill(self, chat_id: str, name: str, content: str) -> Path:
         if self.chat_cwd_root is None:
