@@ -307,9 +307,10 @@ class MeshConfig(BaseModel):
     route: str = "receive"
     sign_timestamp: bool = True
     allow_loopback: bool = False
-    chat_mapping: Literal["per_sender", "single"] = "per_sender"
+    chat_mapping: Literal["per_sender", "single", "session"] = "per_sender"
     fallback_chat_id: str = "mesh:inbox"
     chat_map: dict[str, str] = Field(default_factory=dict)
+    auto_join: bool = False
     ingress_module: str = "diploid_mesh.ingress"
     mcp_enabled: bool = True
     replay_window_ttl: float = 300.0

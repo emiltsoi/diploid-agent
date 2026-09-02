@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -191,6 +191,12 @@ class MeshNotifyRequest(BaseModel):
     action: str = ""
     reply: str = ""
     msg_id: str = ""
+
+
+class MeshChatMapRequest(BaseModel):
+    chat_map: dict[str, str] | None = None
+    chat_mapping: Literal["per_sender", "single", "session"] | None = None
+    fallback_chat_id: str | None = None
 
 
 class McpCommandRequest(BaseModel):

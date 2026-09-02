@@ -13,10 +13,11 @@ import uuid
 from collections import deque
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from diploid_agent.config import (
     Config,
+    ConfigPersistenceError,
     NotificationsConfig,
     PluginConfig,
     TaskConfig,
@@ -1411,6 +1412,25 @@ class AgentRuntime(RuntimeAPI):
     ) -> ChatResult:
         """Persist a terminal mesh message (e.g. a DSN) without running a turn."""
         return self._actions.record_mesh_message(chat_id, display_text, mesh_payload)
+
+    def update_mesh_chat_map(
+        self,
+        chat_map: dict[str, str] | None = None,
+        chat_mapping: Literal["per_sender", "single", "session"] | None = None,
+        fallback_chat_id: str | None = None,
+    ) -> dict:
+        """Update the live mesh chat mapping and persist runtime overrides."""
+        with self._lock:
+            mesh = self.config.harness.mesh
+            if chat_map is not None:
+                mesh.chat_map.update(chat_map)
+            if chat_mapping is not None:
+                mesh.chat_mapping = chat_mapping
+            if fallback_chat_id is not None:
+                mesh.fallback_chat_id = fallback_chat_id
+            if not self._save_runtime_overrides():
+                raise ConfigPersistenceError("Mesh chat map updated in memory but persistence failed")
+            return self.get_config()
 
     def graceful_service_restart(
         self,
