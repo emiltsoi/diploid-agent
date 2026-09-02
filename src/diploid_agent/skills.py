@@ -82,9 +82,7 @@ class SkillManager:
                     dirs.append(persona_dir / "skills")
         return dirs
 
-    def _load_skill(
-        self, path: Path, source: str, chat_id: str | None = None
-    ) -> Skill | None:
+    def _load_skill(self, path: Path, source: str, chat_id: str | None = None) -> Skill | None:
         if not path.is_dir():
             return None
         skill_md = path / "SKILL.md"
