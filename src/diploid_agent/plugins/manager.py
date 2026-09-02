@@ -484,15 +484,18 @@ class PluginManager:
         rehydrated: bool = False,
         last_blocks: dict[tuple[str, str], str | None] | None = None,
         last_prompt_time: float | None = None,
+        force_slots: set[str] | None = None,
     ) -> dict[str, list[str]]:
+        force_slots = force_slots or set()
         for plugin in self._plugins_for(chat_id):
-            if plugin.first_prompt_only and not is_first and not rehydrated:
+            slot = plugin.prompt_slot
+            force = slot in force_slots
+            if plugin.first_prompt_only and not is_first and not rehydrated and not force:
                 continue
 
-            slot = plugin.prompt_slot
             key = (plugin.name, slot)
 
-            if not is_first and last_blocks is not None:
+            if not is_first and not force and last_blocks is not None:
                 changed = plugin.prompt_block_changed(last_prompt_time)
                 if changed is not None and not changed:
                     continue
@@ -504,7 +507,7 @@ class PluginManager:
                 continue
 
             if not is_first and last_blocks is not None:
-                if block == last_blocks.get(key):
+                if not force and block == last_blocks.get(key):
                     continue
                 last_blocks[key] = block
             elif is_first and last_blocks is not None:

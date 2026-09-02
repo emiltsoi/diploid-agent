@@ -181,6 +181,7 @@ class TurnProcess:
             model_changed = record is not None and use_model != current_model
             previous_skills = set(record.enabled_skills or []) if record else set()
             skills_changed = record is not None and previous_skills != active_skill_names
+            force_new_session = False
 
             if record is None or model_changed or hard_timeout_before or skills_changed:
                 if record and (model_changed or hard_timeout_before or skills_changed):
@@ -224,6 +225,7 @@ class TurnProcess:
                 )
                 prompt = pctx.prompt
                 use_model = pctx.model or use_model
+                force_new_session = pctx.force_new_session
                 active = ActiveTurn(chat_id, record.session_id, user_message, time.time())
                 self._seed_active_turn(active, wake_event)
                 self.runtime._active_turns[chat_id] = active
@@ -318,7 +320,11 @@ class TurnProcess:
                     prompt=prompt,
                     cwd=self.runtime._chat_dir(chat_id),
                     model=use_model,
-                    mcp_servers=self.runtime._active_mcp_servers(chat_id) if is_new else None,
+                    mcp_servers=(
+                        self.runtime._active_mcp_servers(chat_id)
+                        if is_new or force_new_session
+                        else None
+                    ),
                     soft_timeout=self.runtime.config.engine.soft_timeout,
                 )
                 call_ctx = self.runtime._plugins.before_engine_call(
@@ -326,7 +332,7 @@ class TurnProcess:
                     EngineCallContext(
                         chat_id=chat_id,
                         request=request,
-                        session_id=None if is_new else old_record.session_id,
+                        session_id=(None if is_new or force_new_session else old_record.session_id),
                         record=record,
                         on_chunk=_on_chunk,
                         on_update=_on_update,
@@ -344,7 +350,7 @@ class TurnProcess:
                     is_short_circuit = True
                 else:
                     is_short_circuit = False
-                    if is_new:
+                    if is_new or force_new_session:
                         result = self.runtime.call_engine_unlocked(
                             self.runtime.engine.prompt,
                             call_ctx.request,

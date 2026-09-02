@@ -342,6 +342,13 @@ class HarnessConfig(BaseModel):
     instance_ttl_seconds: float = 60.0
     listen_host: str = "127.0.0.1"
     listen_port: int = 4003
+    # Soul re-injection thresholds.  When the context window is under pressure,
+    # the harness re-injects cheap identity slots; at high pressure it also
+    # re-injects memory and may start a fresh ACP session.
+    reinject_soul_threshold: float = 0.7  # cumulative context pressure
+    reinject_soul_input_threshold: float = 0.6  # last-turn input pressure
+    reinject_soul_full_threshold: float = 0.9  # force full soul + fresh session
+    reinject_soul_turns: int = 20  # fallback turn budget when window is unknown
     session_prune_enabled: bool = True
     session_prune_days: int = 14
     plugin_paths: list[Path] = Field(default_factory=lambda: [Path("~/.devin/plugins")])

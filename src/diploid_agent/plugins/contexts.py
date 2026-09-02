@@ -21,6 +21,7 @@ class PromptContext:
     memory_flags: dict[str, bool]
     slots: dict[str, list[str]]
     model: str | None = None
+    force_new_session: bool = False
 
 
 @dataclass

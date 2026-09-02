@@ -39,6 +39,18 @@ logger = logging.getLogger(__name__)
 class ContextBuilder:
     """Assemble first-turn and follow-up prompts from persona, memory, and slots."""
 
+    # Plugin slots that are cheap and identity-defining; they are forced into
+    # the prompt whenever the ACP session is under context pressure.
+    SOUL_SLOTS: frozenset[str] = frozenset(
+        {
+            "self_narrative",
+            "self_state",
+            "body",
+            "wake",
+            "mesh",
+        }
+    )
+
     def __init__(
         self,
         config: Config,
@@ -46,12 +58,14 @@ class ContextBuilder:
         memory_factory: Callable[[str], MemoryManager],
         skill_manager: SkillManager | None = None,
         active_skill_names: Callable[[str], set[str]] | None = None,
+        context_window_fn: Callable[[str], int | None] | None = None,
     ) -> None:
         self.config = config
         self.plugin_manager = plugin_manager
         self.memory_factory = memory_factory
         self.skill_manager = skill_manager
         self.active_skill_names = active_skill_names
+        self.context_window_fn = context_window_fn
         # Shared per-chat metrics store.  The harness sets this to its own dict.
         self.metrics: dict[str, dict[str, Any]] = {}
         # Per-chat cache of the last injected plugin blocks and file mtimes. This
@@ -60,6 +74,9 @@ class ContextBuilder:
         self._last_blocks: dict[str, dict[tuple[str, str], str | None]] = {}
         self._last_file_mtimes: dict[str, dict[str, float]] = {}
         self._last_prompt_time: dict[str, float] = {}
+        # Last turn number at which we injected a full soul, used for the turn
+        # budget fallback when the model's context window is unknown.
+        self._last_full_soul_turn: dict[str, int] = {}
 
     # ---------------------------------------------------------------- helpers
 
@@ -68,6 +85,7 @@ class ContextBuilder:
         self._last_blocks[chat_id] = {}
         self._last_file_mtimes[chat_id] = {}
         self._last_prompt_time[chat_id] = 0.0
+        self._last_full_soul_turn[chat_id] = 0
 
     def _file_changed(self, chat_id: str, path: Path | None) -> bool:
         """Return True if `path` has been modified since the last prompt."""
@@ -83,6 +101,78 @@ class ContextBuilder:
         if chat_id not in self._last_file_mtimes:
             self._last_file_mtimes[chat_id] = {}
         self._last_file_mtimes[chat_id][str(path)] = path.stat().st_mtime
+
+    def _context_window_for(self, model: str | None) -> int | None:
+        """Resolve the context window for a model, if known."""
+        if self.context_window_fn is not None and model:
+            return self.context_window_fn(model)
+        return self.config.engine.context_window
+
+    def _context_pressure(self, record: SessionRecord | None) -> dict[str, Any]:
+        """Return context-window pressure metrics for the current record.
+
+        Uses the cumulative token count as the primary pressure signal and the
+        last turn's input tokens as the secondary signal.  When the context
+        window size is unknown, both percentages are zero.
+        """
+        context_window = self._context_window_for(record.model if record else None)
+        cumulative = record.cumulative_metrics if record else {}
+        last_turn = record.last_turn_metrics if record else {}
+
+        result: dict[str, Any] = {
+            "context_window": context_window,
+            "cumulative_ratio": 0.0,
+            "input_ratio": 0.0,
+        }
+        if not context_window:
+            return result
+
+        total = cumulative.get("total_tokens", 0) or 0
+        input_tokens = last_turn.get("input_tokens", 0) or 0
+        result["cumulative_ratio"] = round(total / context_window, 4)
+        result["input_ratio"] = round(input_tokens / context_window, 4)
+        return result
+
+    def _soul_mode(
+        self,
+        chat_id: str,
+        record: SessionRecord | None,
+        rehydrated: bool,
+    ) -> tuple[str, bool]:
+        """Decide whether to inject a small soul, full soul, or nothing new.
+
+        Returns a tuple of (soul_mode, force_new_session) where soul_mode is
+        one of "normal", "small", "full".  force_new_session is True when the
+        context window is so full that we should start a fresh ACP child.
+        """
+        if record is None:
+            return "normal", False
+        if rehydrated:
+            return "full", False
+
+        pressure = self._context_pressure(record)
+        context_window = pressure["context_window"]
+        cumulative_ratio = pressure["cumulative_ratio"]
+        input_ratio = pressure["input_ratio"]
+
+        thresholds = self.config.harness
+        if cumulative_ratio > thresholds.reinject_soul_full_threshold:
+            return "full", True
+
+        last_full = self._last_full_soul_turn.get(chat_id, 0)
+        turn_number = record.turn_number or 0
+        turns_since = turn_number - last_full
+
+        if context_window and (
+            cumulative_ratio > thresholds.reinject_soul_threshold
+            or input_ratio > thresholds.reinject_soul_input_threshold
+        ):
+            return "small", False
+
+        if not context_window and turns_since > thresholds.reinject_soul_turns:
+            return "small", False
+
+        return "normal", False
 
     def generate_label(self, chat_id: str, user_message: str) -> str:
         """Auto-generate a short label from the first user message."""
@@ -605,13 +695,16 @@ class ContextBuilder:
         wake_event: WakeEvent | None = None,
         other_instance_running: bool = False,
     ) -> PromptContext:
-        """Build a follow-up prompt with a short identity anchor and changed state.
+        """Build a follow-up prompt, re-injecting the soul when context pressure rises.
 
-        The ACP session already holds the full persona and prior conversation, so
-        follow-ups only need a linked identity anchor and the user message. Long-
-        term recall, persona memory, chat memory, and plugin blocks are only
-        re-injected when they have changed since the last prompt.
+        The ACP session holds the full persona and prior conversation, so follow-
+        ups normally only need a linked identity anchor and the user message. When
+        the context window is under pressure, the cheap identity slots (self_state,
+        body, wake, mesh, self_narrative) are forced into the prompt. When the
+        window is very full, the full soul (persona memory, chat memory, recall)
+        is re-injected and a fresh ACP session is requested for the next turn.
         """
+        soul_mode, force_new_session = self._soul_mode(chat_id, record, rehydrated)
         if wake_event is not None:
             self.plugin_manager.on_waking(
                 chat_id,
@@ -641,7 +734,8 @@ class ContextBuilder:
         )
         anchor = identity_anchor(self.config.persona)
         mgr = self.memory_factory(chat_id)
-        if self.config.harness.memory.recall_on_follow_up:
+        # Recall is expensive; only run on full soul or when explicitly enabled.
+        if soul_mode == "full" or self.config.harness.memory.recall_on_follow_up:
             recall = mgr.recall_context(formatted, model=effective_model)
         else:
             recall = RecallResult(
@@ -654,9 +748,10 @@ class ContextBuilder:
             )
         chat_status = mgr.chat_memory_status()
 
-        # Only load persona memory if the file has changed since the last prompt.
+        # Load persona memory on full soul (rehydration or high pressure) and
+        # when the file has changed since the last prompt.
         persona_memory_path = mgr.persona_memory_path
-        if self._file_changed(chat_id, persona_memory_path):
+        if soul_mode == "full" or self._file_changed(chat_id, persona_memory_path):
             pm = mgr.persona_memory(self.config.harness.memory.max_persona_memory_chars)
             self._record_file(chat_id, persona_memory_path)
         else:
@@ -712,8 +807,25 @@ class ContextBuilder:
                 "long-term chat memory have been re-injected into the prompt."
             )
 
-        if notice or rehydration_notice:
-            parts = [p for p in [rehydration_notice, notice] if p]
+        soul_notice = ""
+        if force_new_session:
+            soul_notice = (
+                "Context window is nearly full. This prompt includes the full soul "
+                "and a fresh ACP session will be started."
+            )
+        elif soul_mode == "small":
+            soul_notice = (
+                "Context pressure is high. Re-injecting the cheap soul slots "
+                "(self_state, body, wake, mesh, self_narrative) to keep continuity."
+            )
+        elif soul_mode == "full":
+            soul_notice = (
+                "Re-injecting the full soul: persona memory, chat memory, recall, "
+                "and identity slots."
+            )
+
+        if notice or rehydration_notice or soul_notice:
+            parts = [p for p in [rehydration_notice, soul_notice, notice] if p]
             slots["system_notice"].append("## System notice\n\n" + "\n\n".join(parts))
         if persona.memory_text:
             slots["memory"].append(
@@ -722,14 +834,18 @@ class ContextBuilder:
         if recall.text:
             slots["recall"].append("## Chat memory\n\n" + recall.text)
 
-        # Only load the on-disk chat memory if it has changed.
+        # Load on-disk chat memory on full soul and when the file has changed.
         chat_mem = None
         chat_memory_path = mgr.chat_memory_path
-        if self._file_changed(chat_id, chat_memory_path):
+        if soul_mode == "full" or self._file_changed(chat_id, chat_memory_path):
             chat_mem = mgr.chat_memory_block()
             self._record_file(chat_id, chat_memory_path)
         if chat_mem:
             slots["chat_memory"].append("## Chat memory (on disk)\n\n" + chat_mem)
+
+        # Force cheap soul slots under pressure so they survive compression.
+        # Full soul also re-injects the cheap slots in case they were skipped.
+        force_slots = self.SOUL_SLOTS if soul_mode in ("small", "full") else None
 
         self.plugin_manager.fill_prompt_slots(
             chat_id,
@@ -738,9 +854,12 @@ class ContextBuilder:
             rehydrated=build_ctx.rehydrated,
             last_blocks=self._last_blocks[chat_id],
             last_prompt_time=self._last_prompt_time.get(chat_id),
+            force_slots=force_slots,
         )
 
         self._last_prompt_time[chat_id] = time.time()
+        if soul_mode == "full" and record is not None:
+            self._last_full_soul_turn[chat_id] = record.turn_number
 
         if build_ctx.continuation_anchor:
             slots["continuation"].append(build_ctx.continuation_anchor)
@@ -783,5 +902,12 @@ class ContextBuilder:
         }
 
         prompt = "\n\n".join(parts)
-        pctx = PromptContext(prompt, notice, flags, slots, model=effective_model)
+        pctx = PromptContext(
+            prompt,
+            notice,
+            flags,
+            slots,
+            model=effective_model,
+            force_new_session=force_new_session,
+        )
         return self.plugin_manager.after_prompt_built(chat_id, pctx)

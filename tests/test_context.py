@@ -547,3 +547,110 @@ def test_build_dispatch_continuation_running_fallback_path(tmp_path: Path) -> No
     text = builder.build_dispatch_continuation(dispatch)
     assert "- **status:** running" in text
     assert "subagent-results/subagent-dispatch-abc123.md" in text
+
+
+def test_build_follow_up_reinjects_full_soul_on_rehydrated(tmp_path: Path) -> None:
+    """A rehydrated follow-up loads full persona memory and chat memory."""
+    profile_root = tmp_path / "profile"
+    profile_root.mkdir()
+    (profile_root / "SOUL.md").write_text("# SOUL")
+    (profile_root / "AGENTS.md").write_text("# AGENTS")
+    (profile_root / "MEMORY.md").write_text("We value kindness.")
+
+    builder = _make_builder_with_profile_root(tmp_path, profile_root)
+    mgr = builder.memory_factory("chat-1")
+    fb = mgr._file_backend
+    assert fb is not None
+    fb.retain([MemoryItem(content="We agreed on Postgres.", tags=["memory"])])
+
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="session-1",
+        model="swe-1-7",
+        persona="test-pilot",
+        cwd=str(tmp_path),
+        created_at=time.time(),
+        updated_at=time.time(),
+        turn_number=5,
+    )
+
+    pctx = builder.build_follow_up("chat-1", "how are you?", record=record, rehydrated=True)
+    assert "We value kindness." in pctx.prompt
+    assert "## Chat memory (on disk)" in pctx.prompt
+
+
+def test_build_follow_up_small_soul_under_context_pressure(tmp_path: Path) -> None:
+    """Under context pressure, cheap soul slots are forced into the prompt."""
+    cfg = PluginConfig(
+        name="mood",
+        enabled=True,
+        state_file="mood.json",
+        prompt_slot="body",
+        prompt_template="Mood: {mood}",
+    )
+    builder = _make_builder_with_plugins(tmp_path, [cfg])
+    chat_dir = tmp_path / "sessions" / "chat-1"
+    chat_dir.mkdir(parents=True, exist_ok=True)
+    (chat_dir / "mood.json").write_text(json.dumps({"mood": "calm"}))
+
+    pctx_first = builder.build_first("chat-1", "hello", record=None)
+    assert "Mood: calm" in pctx_first.prompt
+
+    # High input ratio, but cumulative low enough to stay below full threshold.
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="session-1",
+        model="swe-1-7",
+        persona="test-pilot",
+        cwd=str(tmp_path),
+        created_at=time.time(),
+        updated_at=time.time(),
+        turn_number=5,
+        cumulative_metrics={"total_tokens": 100},
+        last_turn_metrics={"input_tokens": 700},
+    )
+    builder.config.engine.context_window = 1000
+
+    pctx_follow = builder.build_follow_up("chat-1", "how are you?", record=record)
+    assert "Mood: calm" in pctx_follow.prompt
+    assert "Context pressure is high" in pctx_follow.prompt
+    assert not pctx_follow.force_new_session
+
+
+def test_build_follow_up_full_soul_and_fresh_session_at_high_pressure(
+    tmp_path: Path,
+) -> None:
+    """At very high context pressure, full soul is loaded and a new ACP session is requested."""
+    profile_root = tmp_path / "profile"
+    profile_root.mkdir()
+    (profile_root / "SOUL.md").write_text("# SOUL")
+    (profile_root / "AGENTS.md").write_text("# AGENTS")
+    (profile_root / "MEMORY.md").write_text("We value kindness.")
+
+    builder = _make_builder_with_profile_root(tmp_path, profile_root)
+    mgr = builder.memory_factory("chat-1")
+    fb = mgr._file_backend
+    assert fb is not None
+    fb.retain([MemoryItem(content="We agreed on Postgres.", tags=["memory"])])
+
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="session-1",
+        model="swe-1-7",
+        persona="test-pilot",
+        cwd=str(tmp_path),
+        created_at=time.time(),
+        updated_at=time.time(),
+        turn_number=5,
+        cumulative_metrics={"total_tokens": 950},
+        last_turn_metrics={"input_tokens": 100},
+    )
+    builder.config.engine.context_window = 1000
+
+    pctx = builder.build_follow_up("chat-1", "how are you?", record=record)
+    assert "We value kindness." in pctx.prompt
+    assert "## Chat memory (on disk)" in pctx.prompt
+    assert pctx.force_new_session

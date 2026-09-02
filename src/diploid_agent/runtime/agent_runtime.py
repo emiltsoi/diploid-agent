@@ -222,6 +222,7 @@ class AgentRuntime(RuntimeAPI):
             self._memory_manager,
             self.skills,
             self._active_skill_names,
+            context_window_fn=self.engine.model_context_window,
         )
         self.context_builder.metrics = self._runtime_metrics._per_chat_metrics
 
