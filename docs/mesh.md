@@ -5,6 +5,22 @@
 installed and enabled. The plugin is a separate package that adds an ingress
 handler, an MCP server, and a per-chat state file (`chat_mesh_state.json`).
 
+## Routing mesh messages to chats
+
+`harness.mesh.chat_mapping` controls how an inbound mesh message is mapped to a diploid `chat_id`:
+
+- `session` — the `session` envelope token is looked up in `chat_map`, then the
+  sender name, then `fallback_chat_id`.
+- `per_sender` — the sender name is looked up in `chat_map`, then
+  `fallback_chat_id`.
+- `single` — every inbound message goes to `fallback_chat_id`.
+
+When `fallback_chat_id` is a real Telegram numeric chat id (e.g. `7945905361`),
+unmapped known peers are routed there instead of creating a phantom
+`mesh:<sender>` session. This is the recommended default for diploid-agent
+instances that are backed by Telegram. Use `fallback_chat_id: mesh:inbox` only
+when you want every unmapped sender to get its own non-Telegram mesh session.
+
 ## Enabling mesh
 
 Add to `harness.yaml`:
