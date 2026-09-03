@@ -100,8 +100,10 @@ notifications:
 
 The delivery method follows `harness.notifications.outbox_delivery`:
 
-- `true` (recommended): the float is enqueued in the per-chat outbox and sent by
-  the Telegram `DeliveryWorker`.
+- `true` (recommended): the float is enqueued in the outbox and sent by the
+  global Telegram `DeliveryWorker`. The worker starts as soon as the poller
+  connects to the harness, so mesh replies reach Telegram without requiring a
+  user message to arrive first.
 - `false`: the float is sent immediately with `notifier.send()`. This works but
   can race with streaming edits; use `outbox_delivery: true` for the cleanest
   behaviour.

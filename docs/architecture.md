@@ -169,10 +169,12 @@ The ACP per-turn engine, extracted from the former `runtime/turn_controller.py`.
   `if self.runtime is not None` / HTTP branching logic.
 - Each active chat gets a `TurnWorker` thread that starts a turn, polls
   `GET /turn/{chat_id}`, and edits the reply placeholder in place.
-- When `harness.notifications.outbox_delivery` is enabled, a `DeliveryWorker`
-  per chat consumes `GET /outbox/{chat_id}` and delivers enqueued `ChatResult`s
-  (queue acknowledgements, background subagent completions, wake continuations,
-  and liveness heartbeats) to Telegram.
+- When `harness.notifications.outbox_delivery` is enabled, a single global
+  `DeliveryWorker` consumes `GET /outbox` and delivers enqueued `ChatResult`s
+  (queue acknowledgements, background subagent completions, mesh wake replies,
+  wake continuations, and liveness heartbeats) to Telegram. The worker starts
+  at poller startup, so it can deliver queued results before any new user
+  message arrives.
 - If `intermediate_messages` is enabled, the worker commits the currently
   streamed text as a real message when it pauses after a complete sentence, then
   starts a fresh placeholder below it. This keeps tool-call gaps from mashing
