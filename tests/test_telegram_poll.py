@@ -952,6 +952,8 @@ def _fake_response(status_code: int, body: dict[str, Any]) -> httpx.Response:
 
 def test_api_retries_429_and_respects_retry_after(tmp_path: Path, monkeypatch) -> None:
     """A 429 response with retry_after triggers a sleep and then a retry."""
+    from diploid_agent.transport.telegram import sender as sender_module
+
     poller = TelegramPoller(
         token="dummy",
         state_dir=tmp_path / ".poller-placeholders",
@@ -966,8 +968,10 @@ def test_api_retries_429_and_respects_retry_after(tmp_path: Path, monkeypatch) -
     def fake_sleep(n: float) -> None:
         now[0] += n
 
-    monkeypatch.setattr(time, "monotonic", fake_monotonic)
-    monkeypatch.setattr(time, "sleep", fake_sleep)
+    fake_time = type(time)("fake_time", "time stub for tests")
+    fake_time.monotonic = fake_monotonic
+    fake_time.sleep = fake_sleep
+    monkeypatch.setattr(sender_module, "time", fake_time)
 
     calls: list[int] = []
 
