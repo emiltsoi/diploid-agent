@@ -159,10 +159,7 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
         Telegram user message has arrived yet.
         """
         with self._worker_lock:
-            if (
-                self._global_delivery_worker is not None
-                and self._global_delivery_worker.is_alive()
-            ):
+            if self._global_delivery_worker is not None and self._global_delivery_worker.is_alive():
                 return
             config = self.command_handler.call(
                 method="get_config",
@@ -347,10 +344,7 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
             if self._stop.is_set():
                 break
             self._ensure_delivery_worker(0)
-            if (
-                self._global_delivery_worker is not None
-                and self._global_delivery_worker.is_alive()
-            ):
+            if self._global_delivery_worker is not None and self._global_delivery_worker.is_alive():
                 break
             time.sleep(0.5)
         while not self._stop.is_set():
