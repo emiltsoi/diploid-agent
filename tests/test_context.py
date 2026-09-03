@@ -612,6 +612,8 @@ def test_build_follow_up_small_soul_under_context_pressure(tmp_path: Path) -> No
         last_turn_metrics={"input_tokens": 700},
     )
     builder.config.engine.context_window = 1000
+    # Disable proactive fresh so this test stays in the small-soul regime.
+    builder.config.harness.proactive_new_session_threshold = 5.0
 
     pctx_follow = builder.build_follow_up("chat-1", "how are you?", record=record)
     assert "Mood: calm" in pctx_follow.prompt
@@ -619,10 +621,35 @@ def test_build_follow_up_small_soul_under_context_pressure(tmp_path: Path) -> No
     assert not pctx_follow.force_new_session
 
 
-def test_build_follow_up_full_soul_and_fresh_session_at_high_pressure(
+def test_build_follow_up_proactive_fresh_session(
     tmp_path: Path,
 ) -> None:
-    """At very high context pressure, full soul is loaded and a new ACP session is requested."""
+    """Proactive prompt sizing triggers a compact fresh session before overflow."""
+    builder = _make_builder(tmp_path)
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="session-1",
+        model="swe-1-7",
+        persona="test-pilot",
+        cwd=str(tmp_path),
+        created_at=time.time(),
+        updated_at=time.time(),
+        turn_number=5,
+        cumulative_metrics={"total_tokens": 500},
+        last_turn_metrics={"input_tokens": 100},
+    )
+    builder.config.engine.context_window = 1000
+
+    pctx = builder.build_follow_up("chat-1", "how are you?", record=record)
+    assert "Fresh ACP session for context pressure" in pctx.prompt
+    assert pctx.force_new_session
+
+
+def test_build_follow_up_fresh_soul_at_high_pressure(
+    tmp_path: Path,
+) -> None:
+    """At very high context pressure, a compact fresh soul is loaded and a new ACP session is requested."""
     profile_root = tmp_path / "profile"
     profile_root.mkdir()
     (profile_root / "SOUL.md").write_text("# SOUL")

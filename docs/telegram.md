@@ -210,7 +210,7 @@ message, so the conversation thread is visible.
 | `/model <name>` | Switch this chat to a new model. |
 | `/new` | Start a fresh Devin session for this chat while keeping chat memory. |
 | `/stop` | Cancel the current turn and return a partial reply. |
-| `/restart` | Kill the ACP child and start a fresh transport. |
+| `/restart` | Kill the ACP subprocess and start a fresh transport. |
 | `/graceful-restart [service]` | Schedule a graceful `systemd-run` restart of the named service. If `service` is omitted, the current persona's `.service` unit is restarted. |
 | `/subagent <prompt>` | Start a background ACP subagent. The harness continues the chat with the result when it finishes. |
 | `/continue` | Resume the previous turn after a partial reply or timeout. |

@@ -14,6 +14,7 @@ from typing import Any
 from diploid_agent.acp_client import (
     AcpClient,
     AcpError,
+    AcpLifecycleLog,
     AcpMcpError,
     AcpModelError,
     AcpPromptResult,
@@ -60,6 +61,7 @@ class AcpEngine(AgentEngine):
         metrics: Any | None = None,
         service_name: str | None = None,
         on_service_restart: Callable[[str, str], None] | None = None,
+        lifecycle_log: AcpLifecycleLog | None = None,
     ) -> None:
         self.config = config
         self.metrics = metrics
@@ -91,6 +93,7 @@ class AcpEngine(AgentEngine):
             metrics=metrics,
             service_name=service_name,
             on_service_restart=on_service_restart,
+            lifecycle_log=lifecycle_log,
         )
 
     def _to_result(self, result: AcpPromptResult) -> TurnResult:
@@ -221,12 +224,12 @@ class AcpEngine(AgentEngine):
         """Return the ACP session id currently in flight, if any."""
         return self._client.active_session_id()
 
-    def restart(self) -> None:
-        self.restart_transport()
+    def restart(self, reason: str | None = None) -> None:
+        self.restart_transport(reason=reason)
 
-    def restart_transport(self) -> None:
+    def restart_transport(self, reason: str | None = None) -> None:
         """Restart the ACP transport."""
-        self._client.restart_transport()
+        self._client.restart_transport(reason=reason)
 
     def close(self) -> None:
         self._client.close()

@@ -1,4 +1,5 @@
 import sys
+import threading
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -30,9 +31,13 @@ def test_watchdog_rollback_before_restart() -> None:
     with patch("subprocess.run") as mock_run:
         calls = 0
         original_sleep = time.sleep
+        main_thread = threading.current_thread()
 
         def short_sleep(s):
             nonlocal calls
+            if threading.current_thread() is not main_thread:
+                original_sleep(s)
+                return
             calls += 1
             if calls > 6:
                 raise SystemExit

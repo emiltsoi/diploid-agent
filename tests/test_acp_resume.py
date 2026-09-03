@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from diploid_agent.acp_client import AcpClient, AcpError, AcpPromptResult
+from diploid_agent.acp_client import AcpClient, AcpError, AcpLifecycleLog, AcpPromptResult
 from diploid_agent.config import (
     Config,
     DiploidConfig,
@@ -54,6 +55,11 @@ def _make_config(tmp_path: Path, fixture_root: Path, acp_resume_enabled: bool = 
         ),
         secrets=Secrets(WINDSURF_API_KEY="test-key"),
     )
+
+
+def test_acp_resume_enabled_default_is_true() -> None:
+    """The production default for ACP session resume is enabled."""
+    assert EngineConfig.model_fields["acp_resume_enabled"].default is True
 
 
 def test_resume_session_tries_resume_then_load(client: AcpClient, monkeypatch) -> None:
@@ -283,3 +289,23 @@ def test_process_stale_session_attempts_resume(monkeypatch, tmp_path: Path) -> N
         assert call_order.count("create") == 1
     finally:
         harness.client.close()
+
+
+def test_resume_session_writes_lifecycle_log(
+    client: AcpClient, monkeypatch, tmp_path: Path
+) -> None:
+    """_resume_session appends attempt and success events to the lifecycle log."""
+    log = AcpLifecycleLog(tmp_path / "acp-lifecycle.jsonl")
+    client._lifecycle_log = log
+
+    async def fake_call(method: str, params: dict[str, Any], **kwargs: Any) -> Any:
+        return {}
+
+    monkeypatch.setattr(client, "_call", fake_call)
+    result = client._loop.run_until_complete(client._resume_session("s-log", cwd=Path("/")))
+    assert result == "s-log"
+
+    lines = log.path.read_text().strip().split("\n")
+    events = [json.loads(line)["event"] for line in lines if line]
+    assert "session.resume.attempt" in events
+    assert "session.resume.success" in events

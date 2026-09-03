@@ -28,6 +28,7 @@ class FakeAgentEngine(AgentEngine):
     resumed: list[str] = field(default_factory=list)
     replies: list[str] = field(default_factory=list)
     call_log: list[tuple[str, Any]] = field(default_factory=list)
+    lifecycle_log: Any | None = None
     session_counter: int = field(default=0, init=False)
 
     def _next_session_id(self) -> str:

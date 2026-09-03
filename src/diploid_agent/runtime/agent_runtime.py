@@ -12,9 +12,11 @@ import time
 import uuid
 from collections import deque
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from diploid_agent.acp_client import AcpLifecycleLog
 from diploid_agent.config import (
     Config,
     ConfigPersistenceError,
@@ -103,6 +105,7 @@ class AgentRuntime(RuntimeAPI):
         self.sessions_root = Path(config.harness.sessions_root).expanduser()
         self.sessions_root.mkdir(parents=True, exist_ok=True)
         self.store_path = Path(config.harness.session_store_path).expanduser()
+        self.lifecycle_log = AcpLifecycleLog(self.store_path.parent / "acp-lifecycle.jsonl")
         self.metrics = MetricsCollector()
         self.engine = self._create_engine(metrics=self.metrics)
         self._lock = threading.RLock()
@@ -113,6 +116,7 @@ class AgentRuntime(RuntimeAPI):
         self._active_chat_skills: dict[str, set[str]] = {}
         self._runtime_metrics = RuntimeMetrics(self)
         self._memory_managers: dict[str, MemoryManager] = {}
+        self._last_restart_memory_written: dict[str, float] = {}
         self.instance_id = f"harness-{uuid.uuid4().hex[:12]}"
         self.instance_started_at = time.time()
         self._router = ModelRouter(config)
@@ -177,7 +181,7 @@ class AgentRuntime(RuntimeAPI):
         # Durable record of plugin incidents (sandbox, lifecycle, health, watchdog).
         self._incidents = PluginIncidentStore(self.store_path.parent / "plugin-incidents.jsonl")
 
-        # Rate-limit ACP-child-initiated service restarts.
+        # Rate-limit ACP-subprocess-initiated service restarts.
         self._last_service_restart_at: float = 0.0
         self._service_restart_cooldown_seconds = 60.0
 
@@ -254,6 +258,7 @@ class AgentRuntime(RuntimeAPI):
             metrics=metrics,
             service_name=f"{self.config.persona.name}.service",
             on_service_restart=self._on_service_restart,
+            lifecycle_log=self.lifecycle_log,
         )
 
     @property
@@ -267,9 +272,9 @@ class AgentRuntime(RuntimeAPI):
 
     @_locked
     def _on_service_restart(self, service: str, reason: str) -> None:
-        """Handle a service restart request from the ACP child.
+        """Handle a service restart request from the ACP subprocess.
 
-        Instead of letting the child kill the harness directly, we schedule a
+        Instead of letting the subprocess kill the harness directly, we schedule a
         short-delayed `systemd-run` that restarts the service after the current
         turn has a chance to finish and the final reply is delivered.
         """
@@ -283,7 +288,7 @@ class AgentRuntime(RuntimeAPI):
         self._last_service_restart_at = now
 
         logger.warning(
-            "ACP child requested restart of %s (reason: %s); scheduling graceful restart",
+            "ACP subprocess requested restart of %s (reason: %s); scheduling graceful restart",
             service,
             reason,
         )
@@ -303,7 +308,7 @@ class AgentRuntime(RuntimeAPI):
                 self._incidents.record(
                     plugin="self_management",
                     phase="graceful_restart",
-                    error=f"ACP child requested restart of {service}: {reason}",
+                    error=f"ACP subprocess requested restart of {service}: {reason}",
                     action="scheduled",
                 )
             except Exception as exc:  # noqa: BLE001
@@ -599,6 +604,31 @@ class AgentRuntime(RuntimeAPI):
                 metrics=self.metrics,
             )
         return self._memory_managers[chat_id]
+
+    def _record_restart_memory(self, chat_id: str, reason: str | None = None) -> None:
+        """Record a brief ACP restart observation for memory_recall.
+
+        Deduplicates rapid restarts within a 60-second window per chat so a
+        tight restart loop only produces one memory item.
+        """
+        now = time.time()
+        with self._lock:
+            last = self._last_restart_memory_written.get(chat_id, 0)
+            if now - last < 60:
+                return
+            self._last_restart_memory_written[chat_id] = now
+
+        ts = datetime.fromtimestamp(now, tz=UTC).isoformat()
+        text = f"ACP transport restarted at {ts}."
+        if reason:
+            text += f" Reason: {reason}."
+        try:
+            self._memory_manager(chat_id).retain(
+                text,
+                tags=["system", "acp", "restart"],
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to record restart memory for %s", chat_id)
 
     def _register_plugin_mcp_servers(self) -> None:
         self._runtime_plugins._register_plugin_mcp_servers()

@@ -5,7 +5,7 @@ The harness has two long-running processes:
 1. `telegram_ingress` — FastAPI server.
 2. `telegram_poll` — Telegram long-polling bot.
 
-They are started together by `systemd/diploid-agent-run.sh`. If either child exits,
+They are started together by `systemd/diploid-agent-run.sh`. If either subprocess exits,
 the script exits and systemd restarts the pair.
 
 ## Run script
@@ -14,9 +14,9 @@ the script exits and systemd restarts the pair.
 
 - Resolves the project root from the script's own path.
 - Loads `config/secrets.env` if present.
-- Starts the poller and the ingress as background children.
-- Waits for either child to exit, then kills the other and returns the failing
-  child's exit code.
+- Starts the poller and the ingress as background subprocesses.
+- Waits for either subprocess to exit, then kills the other and returns the failing
+  subprocess's exit code.
 
 This lets `Restart=on-failure` restart the whole unit as a pair.
 
@@ -77,11 +77,11 @@ of killing the unit directly:
 
 - Telegram: `/graceful-restart [service]`
 - HTTP: `POST /graceful-restart` with `{"chat_id": "...", "service": "..."}`
-- ACP child (in `permission_mode: dangerous`): the child can run
+- ACP subprocess (in `permission_mode: dangerous`): the subprocess can run
   `systemctl --user restart <service>` and the harness intercepts it.
 
 In all cases the harness sends an acknowledgement, then schedules the actual
-restart with `systemd-run --user --on-active=5s` (or `10s` for child-initiated
+restart with `systemd-run --user --on-active=5s` (or `10s` for subprocess-initiated
 restarts). This gives the HTTP/Telegram response time to be delivered before the
 service goes down.
 

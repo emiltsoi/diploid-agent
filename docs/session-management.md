@@ -17,7 +17,7 @@ process can continue a previously saved session with `session/resume` or
 `session/load`.
 
 When the harness wants to continue an existing diploid session, it asks the
-current `devin acp` child to resume the stored `session_id`. If that succeeds,
+current `devin acp` subprocess to resume the stored `session_id`. If that succeeds,
 the ACP message chain continues and the next user message is sent as a
 rehydrated follow-up, so first-prompt-only plugins (e.g. `continuity`) still
 appear at the session boundary. Only explicit `/new` or a chat that fails
@@ -77,7 +77,7 @@ session seeded with the archived transcript and memory.
 
 ## ACP resume configuration
 
-ACP session resume is controlled by `engine.acp_resume_enabled` (also writable as `diploid.acp_resume_enabled`; default `false`). When enabled, the harness tries ACP `session/resume` (falling back to `session/load`) before rehydrating from a rebuilt prompt.
+ACP session resume is controlled by `engine.acp_resume_enabled` (also writable as `diploid.acp_resume_enabled`; default `true`). When enabled, the harness tries ACP `session/resume` (falling back to `session/load`) before rehydrating from a rebuilt prompt.
 
 Resume is only attempted when the active configuration matches the stored
 session:
@@ -154,3 +154,53 @@ Unrecoverable ACP configuration errors (e.g. an unknown model or a rejected MCP
 server definition) are classified as `AcpModelError` / `AcpMcpError` and return
 a `ChatResult` with `last_stop_reason` set to `error` instead of crashing the
 harness.
+
+## ACP lifecycle log
+
+The harness writes an append-only JSONL audit log next to the session store:
+
+```
+<harness-data>/
+  acp-lifecycle.jsonl
+  acp_restart_history.jsonl
+```
+
+`acp-lifecycle.jsonl` records transport start/stop/restart, session
+new/resume/load attempts and outcomes, and rehydration events. `acp_restart_history.jsonl`
+persists the in-process ACP restart backoff counter so the limiter survives
+harness restarts.
+
+## `/status` command
+
+Both the Telegram bot (`/status`) and the HTTP endpoint `GET /status/{chat_id}`
+return a `continuity` block that reports:
+
+- `resume_enabled` — whether `engine.acp_resume_enabled` is on.
+- `current_session_id` — the active ACP session id.
+- `state` — how the session was established: `resumed`, `rebuilt`, `new` or `unknown`.
+- `last_restart_at` / `last_restart_reason` — the most recent `transport.restart` event.
+- `restart_count_in_window` — number of restarts inside `acp_restart_backoff_window`.
+
+## Context pressure and `fresh` compact soul mode
+
+When the next prompt is projected to exceed the context window, `ContextBuilder`
+switches `soul_mode` to `fresh` and asks for a new ACP session on the following
+turn. A `fresh` prompt:
+
+- Uses the identity anchor instead of the full persona memory.
+- Forces only the cheap `SOUL_SLOTS` (`self_narrative`, `self_state`, `body`, `wake`, `mesh`).
+- Loads on-disk chat memory but skips long-term `recall_context`.
+- Keeps the most recent `min_short_term_turns` raw and loads a pre-computed
+  short-term compaction summary for the older turns.
+- Injects a `Fresh ACP session for context pressure` notice.
+
+The proactive trigger is controlled by `harness.proactive_new_session_threshold`
+(default `0.85`) and `harness.proactive_input_buffer_factor` (default `1.2`).
+
+## Smart short-term context
+
+`memory.short_term_strategy` defaults to `smart` and `max_short_term_chars` to
+`6144`. In `smart` mode the oldest `short_term_turns - min_short_term_turns`
+pairs are summarized into a cached `.cache/short-term-summary-*.md` file. The
+summary is pre-computed after each completed turn and after each `recall_context`
+call so it is ready when a `fresh` reset happens.

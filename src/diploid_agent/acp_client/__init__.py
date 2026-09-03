@@ -9,6 +9,7 @@ from diploid_agent.acp_client.errors import (
     AcpTransportError,
     _acp_error_from_response,
 )
+from diploid_agent.acp_client.lifecycle import AcpLifecycleLog, AcpRestartHistory
 from diploid_agent.acp_client.types import AcpPromptResult, _Prompt
 from diploid_agent.acp_client.utils import (
     _load_windsurf_api_key,
@@ -19,9 +20,11 @@ from diploid_agent.acp_client.utils import (
 __all__ = [
     "AcpClient",
     "AcpError",
+    "AcpLifecycleLog",
     "AcpMcpError",
     "AcpModelError",
     "AcpPromptResult",
+    "AcpRestartHistory",
     "AcpSessionStaleError",
     "AcpTransportError",
     "_Prompt",

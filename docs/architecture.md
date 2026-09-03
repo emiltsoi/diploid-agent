@@ -88,12 +88,12 @@ Synchronous wrapper around the configured ACP v1 JSON-RPC agent binary.
   through it.
 - `acp_client/transport.py` owns the JSON-RPC stdio transport, process
   lifecycle, and backoff/recovery (`AcpTransport`).
-- `acp_client/watchdog.py` monitors in-flight calls and kills stuck children
+- `acp_client/watchdog.py` monitors in-flight calls and kills stuck subprocesses
   (`PromptWatchdog`).
 - `acp_client/control.py` listens for graceful-restart requests from the ACP
-  child over a private Unix socket.
+  subprocess over a private Unix socket.
 - `acp_client/sandbox.py` sets up the isolated `HOME`, fake `systemctl`
-  wrappers, and MCP configuration so the child cannot touch the host system
+  wrappers, and MCP configuration so the subprocess cannot touch the host system
   directly.
 
 ### `MemoryManager`
@@ -270,7 +270,7 @@ for details on `/new`, `/resume`, `/branch`, `/sessions`, and auto-recovery.
 ## Data flow for a background subagent
 
 1. User calls `POST /subagent` or Telegram `/subagent <prompt>`, or the ACP
-   child invokes the `harness_subagent` MCP tool.
+   subprocess invokes the `harness_subagent` MCP tool.
 2. `AgentRuntime.subagent_start(chat_id, prompt, ...)`:
    - Creates a `Dispatch` record in `dispatch_store.jsonl`.
    - Creates a one-task `Plan` with `TaskType.SUBAGENT`.

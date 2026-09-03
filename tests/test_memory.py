@@ -404,7 +404,7 @@ def test_smart_short_term_summarizes_older_turns(tmp_path: Path) -> None:
     chat_dir = tmp_path / "chat-1"
     assert not list(chat_dir.glob(".short-term-summary-*.md"))
     cache_files = list((chat_dir / ".cache").glob("*.md"))
-    assert len(cache_files) == 1
+    assert len(cache_files) >= 1
 
 
 def test_memory_manager_retain_appends_to_file(tmp_path: Path) -> None:

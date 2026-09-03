@@ -170,7 +170,7 @@ class TurnController:
 
     @_locked
     def restart(self, chat_id: str) -> ChatResult:
-        """Kill the ACP child and start a fresh transport."""
+        """Kill the ACP subprocess and start a fresh transport."""
         with self.runtime._lock:
             active = self.runtime._active_turns.get(chat_id)
 
@@ -185,7 +185,8 @@ class TurnController:
                 logger.info("Cancelled %d pending auto-continue wake(s) for %s", count, chat_id)
 
         try:
-            self.runtime.engine.restart()
+            self.runtime.engine.restart(reason="user /restart")
+            self.runtime._record_restart_memory(chat_id, reason="user /restart")
         except AcpTransportError as exc:
             return ChatResult(
                 reply="Could not restart the ACP transport.",

@@ -44,7 +44,7 @@ class EngineConfig(BaseModel):
     acp_max_restarts: int = 3  # transport restarts allowed in the backoff window
     acp_restart_backoff_window: float = 300.0  # seconds for max_restarts budget
     acp_resume_enabled: bool = (
-        False  # use ACP session/resume (or load) instead of prompt rehydration
+        True  # use ACP session/resume (or load) instead of prompt rehydration
     )
     continuation_triggers: list[str] = Field(
         default_factory=lambda: ["continue", "go on", "proceed", "resume"]
@@ -153,9 +153,9 @@ class MemoryConfig(BaseModel):
     max_reply_quote_chars: int = 2048
     max_bot_reply_quote_chars: int = 240
     short_term_turns: int = 10
-    short_term_strategy: str = "raw"  # raw | smart
+    short_term_strategy: str = "smart"  # raw | smart
     min_short_term_turns: int = 2
-    max_short_term_chars: int = 4096
+    max_short_term_chars: int = 6144
     include_short_term: bool = True
     short_term_summary_cache_days: int = 7
     recall_on_follow_up: bool = False  # whether to run long-term recall on follow-ups
@@ -350,6 +350,12 @@ class HarnessConfig(BaseModel):
     reinject_soul_input_threshold: float = 0.6  # last-turn input pressure
     reinject_soul_full_threshold: float = 0.9  # force full soul + fresh session
     reinject_soul_turns: int = 20  # fallback turn budget when window is unknown
+    proactive_new_session_threshold: float = (
+        0.85  # estimated prompt ratio that forces a fresh session
+    )
+    proactive_input_buffer_factor: float = (
+        1.2  # multiplier for last-turn input tokens when estimating
+    )
     session_prune_enabled: bool = True
     session_prune_days: int = 14
     plugin_paths: list[Path] = Field(default_factory=lambda: [Path("~/.devin/plugins")])
@@ -385,8 +391,8 @@ class HarnessConfig(BaseModel):
     def _reject_legacy_body(cls, data: Any) -> Any:
         if isinstance(data, dict) and data.get("body") is not None:
             raise ValueError(
-                "the legacy body plugin is no longer supported. "
-                "Move body configuration to harness.plugins (or remove it to use the defaults)."
+                "the legacy body field is no longer supported. "
+                "Move that configuration to harness.plugins (or remove it to use the defaults)."
             )
         return data
 

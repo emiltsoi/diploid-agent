@@ -29,6 +29,7 @@ from diploid_agent.plugins import PluginManager
 from diploid_agent.plugins.contexts import (
     PromptBuildContext,
     PromptContext,
+    RehydrationReason,
     UserMessageContext,
 )
 from diploid_agent.skills import SkillManager
@@ -133,17 +134,60 @@ class ContextBuilder:
         result["input_ratio"] = round(input_tokens / context_window, 4)
         return result
 
+    def _estimate_next_prompt_tokens(
+        self,
+        chat_id: str,
+        record: SessionRecord,
+        formatted_message: str,
+    ) -> dict[str, int]:
+        """Estimate token footprint of the next prompt for proactive sizing.
+
+        Uses a conservative 4 characters-per-token ratio when no tokenizer is
+        available.  Returns a dict with the components so callers can log them.
+        """
+        cumulative = record.cumulative_metrics or {}
+        last_turn = record.last_turn_metrics or {}
+        cumulative_total = cumulative.get("total_tokens", 0) or 0
+        last_input = last_turn.get("input_tokens", 0) or 0
+
+        memory_cfg = self.config.harness.memory
+        short_term_estimate = (memory_cfg.max_short_term_chars or 0) // 4
+
+        # Cheap fresh-soul budget: identity anchor + cheap soul slots.
+        anchor_len = len(identity_anchor(self.config.persona))
+        cheap_soul_estimate = anchor_len // 4 + 500
+
+        user_estimate = len(formatted_message) // 4
+
+        buffer_factor = self.config.harness.proactive_input_buffer_factor
+        buffered_input = int(last_input * buffer_factor)
+
+        return {
+            "cumulative": cumulative_total,
+            "buffered_input": buffered_input,
+            "soul": cheap_soul_estimate,
+            "user": user_estimate,
+            "short_term": short_term_estimate,
+            "total": cumulative_total
+            + buffered_input
+            + cheap_soul_estimate
+            + user_estimate
+            + short_term_estimate,
+        }
+
     def _soul_mode(
         self,
         chat_id: str,
         record: SessionRecord | None,
         rehydrated: bool,
+        formatted_message: str = "",
     ) -> tuple[str, bool]:
         """Decide whether to inject a small soul, full soul, or nothing new.
 
         Returns a tuple of (soul_mode, force_new_session) where soul_mode is
-        one of "normal", "small", "full".  force_new_session is True when the
-        context window is so full that we should start a fresh ACP child.
+        one of "normal", "small", "full", or "fresh".  force_new_session is
+        True when the context window is so full that we should start a fresh
+        ACP subprocess.
         """
         if record is None:
             return "normal", False
@@ -156,8 +200,23 @@ class ContextBuilder:
         input_ratio = pressure["input_ratio"]
 
         thresholds = self.config.harness
+
+        # Proactive sizing: estimate the next prompt and trigger a compact fresh
+        # session before the prompt overflows the ACP child context window.
+        if context_window:
+            estimate = self._estimate_next_prompt_tokens(chat_id, record, formatted_message)
+            estimated_ratio = estimate["total"] / context_window
+            logger.debug(
+                "Proactive prompt estimate for %s: %s (ratio %.3f)",
+                chat_id,
+                estimate,
+                estimated_ratio,
+            )
+            if estimated_ratio > thresholds.proactive_new_session_threshold:
+                return "fresh", True
+
         if cumulative_ratio > thresholds.reinject_soul_full_threshold:
-            return "full", True
+            return "fresh", True
 
         last_full = self._last_full_soul_turn.get(chat_id, 0)
         turn_number = record.turn_number or 0
@@ -173,6 +232,34 @@ class ContextBuilder:
             return "small", False
 
         return "normal", False
+
+    @staticmethod
+    def _rehydration_notice(reason: RehydrationReason) -> str:
+        """Return the system-notice text to explain why a session was re-created."""
+        notices = {
+            RehydrationReason.NONE: "",
+            RehydrationReason.RESUMED: ("Resumed ACP session. The conversation history is intact."),
+            RehydrationReason.STALE: (
+                "This ACP session was rehydrated. Full persona memory and "
+                "long-term chat memory have been re-injected into the prompt."
+            ),
+            RehydrationReason.TIMEOUT: (
+                "The previous turn stopped due to a hard timeout. "
+                "A fresh ACP session is being used."
+            ),
+            RehydrationReason.TRANSPORT_ERROR: (
+                "The ACP transport was restarted due to an error. "
+                "A fresh ACP session is being used."
+            ),
+            RehydrationReason.RESTART: (
+                "The ACP transport was restarted. A fresh ACP session is being used."
+            ),
+            RehydrationReason.FRESH: (
+                "Fresh ACP session for context pressure. "
+                "Persona memory is compacted and long-term recall is skipped."
+            ),
+        }
+        return notices[reason]
 
     def generate_label(self, chat_id: str, user_message: str) -> str:
         """Auto-generate a short label from the first user message."""
@@ -525,6 +612,7 @@ class ContextBuilder:
         wake_event: WakeEvent | None = None,
         other_instance_running: bool = False,
         rehydrated: bool = False,
+        rehydration_reason: RehydrationReason | None = None,
     ) -> PromptContext:
         """Build a first-turn prompt and any memory truncation notice.
 
@@ -544,6 +632,11 @@ class ContextBuilder:
         # A new ACP session starts here; reset the follow-up change cache.
         self._reset_cache(chat_id)
 
+        resolved_reason = (
+            rehydration_reason
+            if rehydration_reason is not None
+            else (RehydrationReason.STALE if rehydrated else RehydrationReason.NONE)
+        )
         build_ctx = PromptBuildContext(
             chat_id=chat_id,
             record=record,
@@ -551,6 +644,7 @@ class ContextBuilder:
             is_first=True,
             continuation_anchor=continuation_anchor,
             rehydrated=rehydrated,
+            rehydration_reason=resolved_reason,
         )
         build_ctx = self.plugin_manager.before_build_prompt(chat_id, build_ctx)
         effective_model = build_ctx.model or self.config.engine.model
@@ -594,12 +688,7 @@ class ContextBuilder:
             "user": [formatted],
         }
 
-        rehydration_notice = ""
-        if build_ctx.rehydrated:
-            rehydration_notice = (
-                "This ACP session was rehydrated. Full persona memory and "
-                "long-term chat memory have been re-injected into the prompt."
-            )
+        rehydration_notice = self._rehydration_notice(build_ctx.rehydration_reason)
 
         if notice or rehydration_notice:
             parts = [p for p in [rehydration_notice, notice] if p]
@@ -692,6 +781,7 @@ class ContextBuilder:
         continuation_anchor: str | None = None,
         skill_names: set[str] | None = None,
         rehydrated: bool = False,
+        rehydration_reason: RehydrationReason | None = None,
         wake_event: WakeEvent | None = None,
         other_instance_running: bool = False,
     ) -> PromptContext:
@@ -704,7 +794,14 @@ class ContextBuilder:
         window is very full, the full soul (persona memory, chat memory, recall)
         is re-injected and a fresh ACP session is requested for the next turn.
         """
-        soul_mode, force_new_session = self._soul_mode(chat_id, record, rehydrated)
+        formatted = self.format_user_message(
+            user_message,
+            reply_to,
+            reply_to_is_bot,
+            reply_to_message_id,
+            chat_id,
+        )
+        soul_mode, force_new_session = self._soul_mode(chat_id, record, rehydrated, formatted)
         if wake_event is not None:
             self.plugin_manager.on_waking(
                 chat_id,
@@ -714,6 +811,13 @@ class ContextBuilder:
                 other_instance_running=other_instance_running,
             )
 
+        resolved_reason = (
+            rehydration_reason
+            if rehydration_reason is not None
+            else (RehydrationReason.STALE if rehydrated else RehydrationReason.NONE)
+        )
+        if soul_mode == "fresh":
+            resolved_reason = RehydrationReason.FRESH
         build_ctx = PromptBuildContext(
             chat_id=chat_id,
             record=record,
@@ -721,22 +825,28 @@ class ContextBuilder:
             is_first=False,
             continuation_anchor=continuation_anchor,
             rehydrated=rehydrated,
+            rehydration_reason=resolved_reason,
         )
         build_ctx = self.plugin_manager.before_build_prompt(chat_id, build_ctx)
         effective_model = build_ctx.model or self.config.engine.model
 
-        formatted = self.format_user_message(
-            user_message,
-            reply_to,
-            reply_to_is_bot,
-            reply_to_message_id,
-            chat_id,
-        )
         anchor = identity_anchor(self.config.persona)
         mgr = self.memory_factory(chat_id)
-        # Recall is expensive; only run on full soul or when explicitly enabled.
-        if soul_mode == "full" or self.config.harness.memory.recall_on_follow_up:
+        # Recall is expensive; skip it in fresh compact mode. Fresh still keeps
+        # the most recent min_short_term_turns raw.
+        if soul_mode == "fresh":
+            recall = RecallResult(
+                text="",
+                truncated=False,
+                memory_path=None,
+                limit=0,
+                loaded=0,
+                total=0,
+            )
+            short_term = mgr.compaction_context(model=effective_model)
+        elif soul_mode == "full" or self.config.harness.memory.recall_on_follow_up:
             recall = mgr.recall_context(formatted, model=effective_model)
+            short_term = ""
         else:
             recall = RecallResult(
                 text="",
@@ -746,13 +856,20 @@ class ContextBuilder:
                 loaded=0,
                 total=0,
             )
+            short_term = ""
         chat_status = mgr.chat_memory_status()
 
-        # Load persona memory on full soul (rehydration or high pressure) and
-        # when the file has changed since the last prompt.
+        # Load persona memory on full soul (rehydration) and when the file has
+        # changed since the last prompt.  Fresh compact mode only loads changed
+        # persona memory and caps it tightly.
         persona_memory_path = mgr.persona_memory_path
-        if soul_mode == "full" or self._file_changed(chat_id, persona_memory_path):
-            pm = mgr.persona_memory(self.config.harness.memory.max_persona_memory_chars)
+        if soul_mode == "full" or (
+            soul_mode == "fresh" and self._file_changed(chat_id, persona_memory_path)
+        ):
+            max_chars = self.config.harness.memory.max_persona_memory_chars
+            if soul_mode == "fresh":
+                max_chars = min(1500, max_chars)
+            pm = mgr.persona_memory(max_chars)
             self._record_file(chat_id, persona_memory_path)
         else:
             pm = {
@@ -800,19 +917,20 @@ class ContextBuilder:
             "user": [formatted],
         }
 
-        rehydration_notice = ""
-        if build_ctx.rehydrated:
-            rehydration_notice = (
-                "This ACP session was rehydrated. Full persona memory and "
-                "long-term chat memory have been re-injected into the prompt."
-            )
+        rehydration_notice = self._rehydration_notice(build_ctx.rehydration_reason)
 
         soul_notice = ""
         if force_new_session:
-            soul_notice = (
-                "Context window is nearly full. This prompt includes the full soul "
-                "and a fresh ACP session will be started."
-            )
+            if soul_mode == "fresh":
+                soul_notice = (
+                    "Fresh ACP session for context pressure. "
+                    "Persona memory is compacted and long-term recall is skipped."
+                )
+            else:
+                soul_notice = (
+                    "Context window is nearly full. This prompt includes the full soul "
+                    "and a fresh ACP session will be started."
+                )
         elif soul_mode == "small":
             soul_notice = (
                 "Context pressure is high. Re-injecting the cheap soul slots "
@@ -833,11 +951,14 @@ class ContextBuilder:
             )
         if recall.text:
             slots["recall"].append("## Chat memory\n\n" + recall.text)
+        if short_term:
+            slots["recall"].append("## Chat memory\n\n" + short_term)
 
-        # Load on-disk chat memory on full soul and when the file has changed.
+        # Load on-disk chat memory on full/fresh soul and when the file has
+        # changed.
         chat_mem = None
         chat_memory_path = mgr.chat_memory_path
-        if soul_mode == "full" or self._file_changed(chat_id, chat_memory_path):
+        if soul_mode in ("full", "fresh") or self._file_changed(chat_id, chat_memory_path):
             chat_mem = mgr.chat_memory_block()
             self._record_file(chat_id, chat_memory_path)
         if chat_mem:
@@ -845,7 +966,7 @@ class ContextBuilder:
 
         # Force cheap soul slots under pressure so they survive compression.
         # Full soul also re-injects the cheap slots in case they were skipped.
-        force_slots = self.SOUL_SLOTS if soul_mode in ("small", "full") else None
+        force_slots = self.SOUL_SLOTS if soul_mode in ("small", "full", "fresh") else None
 
         self.plugin_manager.fill_prompt_slots(
             chat_id,

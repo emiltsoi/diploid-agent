@@ -7,7 +7,7 @@ on:
     branches: [master, main]
 
 env:
-  # Dummy key for tests that instantiate AcpClient but never start a real ACP child.
+  # Dummy key for tests that instantiate AcpClient but never start a real ACP subprocess.
   WINDSURF_API_KEY: ci-test-key-not-real
 
 jobs:

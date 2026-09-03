@@ -806,20 +806,38 @@ class MemoryManager:
         """Append a mesh/system note to the current chat's transcript."""
         self.backend.append_system_note(text)
 
-    def _short_term_context(self, model: str | None = None) -> str:
-        if not self.memory_config.include_short_term:
-            return ""
+    def _short_term_window(
+        self,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+        """Return (recent, fresh, older) transcript windows for short-term handling."""
         transcript = self._load_transcript()
         n = self.memory_config.short_term_turns * 2
         recent = transcript[-n:] if n > 0 else transcript
+        min_pairs = max(0, self.memory_config.min_short_term_turns * 2)
+        if len(recent) <= min_pairs:
+            fresh = recent
+            older: list[dict[str, Any]] = []
+        else:
+            fresh = recent[-min_pairs:]
+            older = recent[:-min_pairs]
+        return recent, fresh, older
+
+    @staticmethod
+    def _format_recent_turns(entries: list[dict[str, Any]]) -> str:
+        lines = ["Recent conversation:"]
+        for entry in entries:
+            role = entry.get("role", "unknown").capitalize()
+            lines.append(f"{role}: {entry.get('content', '')}")
+        return "\n\n".join(lines)
+
+    def _short_term_context(self, model: str | None = None) -> str:
+        if not self.memory_config.include_short_term:
+            return ""
+        recent, fresh, older = self._short_term_window()
         if not recent:
             return ""
 
-        lines = ["Recent conversation:"]
-        for entry in recent:
-            role = entry.get("role", "unknown").capitalize()
-            lines.append(f"{role}: {entry.get('content', '')}")
-        raw_text = "\n\n".join(lines)
+        raw_text = self._format_recent_turns(recent)
 
         if self.memory_config.short_term_strategy != "smart":
             return raw_text
@@ -828,26 +846,15 @@ class MemoryManager:
         if len(raw_text) <= max_chars:
             return raw_text
 
-        # Smart strategy: keep the most recent min_short_term_turns raw and
-        # summarize the older part of the short-term window to fit the budget.
-        min_pairs = max(0, self.memory_config.min_short_term_turns * 2)
-        if len(recent) <= min_pairs:
-            # Even the minimum fresh window does not fit; truncate as a last
-            # resort and mark it.
+        fresh_text = self._format_recent_turns(fresh)
+
+        # If even the minimum fresh window does not fit, truncate as a last resort.
+        if not older:
             return (
                 _trim_to_section(raw_text, max_chars)
                 + "\n\n[... short-term context truncated because even the minimum "
                 "fresh turns exceed the budget ...]"
             )
-
-        fresh = recent[-min_pairs:]
-        older = recent[:-min_pairs]
-
-        fresh_lines = ["Recent conversation:"]
-        for entry in fresh:
-            role = entry.get("role", "unknown").capitalize()
-            fresh_lines.append(f"{role}: {entry.get('content', '')}")
-        fresh_text = "\n\n".join(fresh_lines)
 
         # If even the minimum fresh window is larger than the short-term budget,
         # truncate it. We cannot keep any older turns at this point.
@@ -858,7 +865,10 @@ class MemoryManager:
                 "fresh turns exceed the budget ...]"
             )
 
-        summary = self._load_or_summarize_short_term(older, model)
+        summary = self.summarize_and_retain_recent_turns(
+            n=self.memory_config.short_term_turns - self.memory_config.min_short_term_turns,
+            model=model,
+        )
         if not summary:
             # Fallback: just use the fresh turns if summarization failed.
             return fresh_text
@@ -869,6 +879,107 @@ class MemoryManager:
             return combined
 
         # Trim the summary so the fresh turns remain intact.
+        summary_cap = max(0, max_chars - len(fresh_text) - len(prefix) - 2)
+        if summary_cap == 0:
+            return fresh_text
+        trimmed_summary = _trim_to_section(summary, summary_cap)
+        return f"{prefix}{trimmed_summary}\n[... older turns truncated ...]\n\n{fresh_text}"
+
+    def summarize_and_retain_recent_turns(
+        self,
+        n: int | None = None,
+        model: str | None = None,
+    ) -> str:
+        """Summarize the oldest `n` short-term pairs and retain a compaction item.
+
+        Returns the summary text and writes it to the `.cache` short-term summary
+        path so `compaction_context` can load it without running the model again.
+        """
+        if not self.memory_config.include_short_term:
+            return ""
+        if self.memory_config.short_term_strategy != "smart":
+            return ""
+
+        recent, fresh, older = self._short_term_window()
+        if not older:
+            return ""
+
+        raw_text = self._format_recent_turns(recent)
+        fresh_text = self._format_recent_turns(fresh)
+        max_chars = self.memory_config.max_short_term_chars
+        if len(raw_text) <= max_chars:
+            return ""
+        if len(fresh_text) >= max_chars:
+            return ""
+
+        max_pairs = (
+            n
+            if n is not None
+            else (self.memory_config.short_term_turns - self.memory_config.min_short_term_turns)
+        )
+        max_entries = max(0, max_pairs * 2)
+        if max_entries and len(older) > max_entries:
+            older = older[:max_entries]
+
+        summary = self._load_or_summarize_short_term(older, model)
+        if not summary:
+            return ""
+
+        self.retain(
+            summary,
+            tags=["compaction", f"chat:{self.chat_id}"],
+        )
+        return summary
+
+    def compaction_context(self, model: str | None = None) -> str:
+        """Return a short-term block for a fresh reset without triggering summarization.
+
+        Loads the most recently cached short-term summary and appends the raw
+        minimum fresh turns.  If no summary has been cached yet, falls back to
+        the raw recent window or the fresh window.
+        """
+        if not self.memory_config.include_short_term:
+            return ""
+        recent, fresh, older = self._short_term_window()
+        if not recent:
+            return ""
+
+        raw_text = self._format_recent_turns(recent)
+        fresh_text = self._format_recent_turns(fresh)
+        max_chars = self.memory_config.max_short_term_chars
+
+        # Small enough that no summarization has happened yet.
+        if len(raw_text) <= max_chars:
+            return raw_text
+
+        # Try to load a cached summary for the current older window.
+        summary = ""
+        if older:
+            path = self._short_term_summary_path(older)
+            if path.exists():
+                summary = path.read_text()
+            else:
+                # Fall back to the most recent summary in the cache directory.
+                cache_dir = path.parent
+                if cache_dir.exists():
+                    paths = sorted(
+                        cache_dir.glob("short-term-summary-*.md"),
+                        key=lambda p: p.stat().st_mtime,
+                        reverse=True,
+                    )
+                    for p in paths:
+                        summary = p.read_text()
+                        if summary:
+                            break
+
+        if not summary:
+            return fresh_text
+
+        prefix = "Summary of earlier short-term turns:\n\n"
+        combined = f"{prefix}{summary}\n\n{fresh_text}"
+        if len(combined) <= max_chars:
+            return combined
+
         summary_cap = max(0, max_chars - len(fresh_text) - len(prefix) - 2)
         if summary_cap == 0:
             return fresh_text
@@ -1039,6 +1150,14 @@ class MemoryManager:
 
         if extra_items:
             self.backend.retain(extra_items)
+
+        # Pre-compute the smart short-term compaction summary for the next turn,
+        # so a `fresh` reset can load it without running the model synchronously.
+        if self.memory_config.short_term_strategy == "smart":
+            self.summarize_and_retain_recent_turns(
+                n=self.memory_config.short_term_turns - self.memory_config.min_short_term_turns,
+                model=model,
+            )
 
         if (
             self.memory_config.n_turns_summarization

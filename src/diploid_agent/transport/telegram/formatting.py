@@ -22,7 +22,7 @@ _TELEGRAM_HELP = """Available commands:
 /model <name> - switch this chat to a new model
 /new - start a fresh Devin session while keeping chat memory
 /stop - cancel the current turn and return a partial reply
-/restart - kill the ACP child and start a fresh transport
+/restart - kill the ACP subprocess and start a fresh transport
 /graceful-restart [service] - schedule a graceful restart of the named service
 /subagent <prompt> - start a background subagent and continue when it finishes
 /subagents - list background subagents for this chat

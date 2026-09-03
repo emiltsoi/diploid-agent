@@ -306,12 +306,25 @@ class TelegramCommandMixin:
         data = raw
         if not data.get("active"):
             return "No active session for this chat yet."
+        cont = data.get("continuity") or {}
+        state = cont.get("state", "unknown")
+        state_reason = cont.get("state_reason")
+        state_line = f"Continuity: {state}"
+        if state_reason:
+            state_line += f" ({state_reason})"
         lines = [
             f"Persona: {data.get('persona')}",
             f"Model: {data.get('model')}",
             f"Session: {data.get('session_id')}",
             f"Working directory: {data.get('cwd')}",
+            state_line,
+            f"Resume enabled: {cont.get('resume_enabled', False)}",
         ]
+        if cont.get("last_restart_at"):
+            lines.append(f"Last ACP restart: {cont['last_restart_at']}")
+            if cont.get("last_restart_reason"):
+                lines.append(f"Restart reason: {cont['last_restart_reason']}")
+            lines.append(f"Restarts in backoff window: {cont.get('restart_count_in_window', 0)}")
         active_turn = data.get("active_turn") or {}
         if active_turn.get("status") == "running":
             elapsed = active_turn.get("elapsed_seconds", 0)

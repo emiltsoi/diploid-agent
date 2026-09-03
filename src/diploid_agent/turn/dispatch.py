@@ -104,23 +104,67 @@ class TurnDispatch:
         return self.controller.rehydrate
 
     @staticmethod
+    def _append_full_text(active: ActiveTurn, text: str) -> None:
+        """Append an agent_message chunk, keeping full_text as a rolling window."""
+        active.full_text += text
+        excess = len(active.full_text) - _MAX_THOUGHT_TEXT_CHARS
+        if excess > 0:
+            dropped = active.full_text[:excess]
+            active.full_text_offset += len(dropped)
+            active.full_text = active.full_text[excess:]
+
+    @staticmethod
+    def _full_text_has_thought_prefix(active: ActiveTurn) -> bool:
+        """Return True if the retained full_text window starts within the thought."""
+        if not active.thought_total or not active.full_text:
+            return False
+        if active.thought_total <= _MAX_THOUGHT_TEXT_CHARS:
+            return active.full_text.startswith(active.thought_text)
+        prefix_start = active.full_text_offset
+        prefix_end = min(_MAX_THOUGHT_TEXT_CHARS, prefix_start + len(active.full_text))
+        if prefix_end <= prefix_start:
+            return False
+        return (
+            active.full_text[: prefix_end - prefix_start]
+            == active.thought_prefix[prefix_start:prefix_end]
+        )
+
+    @staticmethod
     def _recompute_message_text(active: ActiveTurn) -> None:
-        """Keep message_text as full_text with the current thought prefix removed."""
-        if not active.thought_text or not active.full_text:
-            active.message_text = active.full_text
-        elif active.full_text.startswith(active.thought_text):
-            active.message_text = active.full_text[len(active.thought_text) :]
+        """Keep message_text as the part of full_text after the thought prefix."""
+        if not active.full_text:
+            active.message_text = ""
+            return
+        if active.thought_total > 0 and TurnDispatch._full_text_has_thought_prefix(active):
+            start = max(0, active.thought_total - active.full_text_offset)
+            active.message_text = active.full_text[start:]
         else:
             active.message_text = active.full_text
         if len(active.message_text) > _MAX_THOUGHT_TEXT_CHARS:
             active.message_text = active.message_text[-_MAX_THOUGHT_TEXT_CHARS:]
 
     @staticmethod
+    def _append_thought_text(active: ActiveTurn, text: str) -> None:
+        """Append an agent_thought update and bump the cumulative counter."""
+        active.thought_text += text
+        active.thought_prefix += text
+        active.thought_total += len(text)
+        if len(active.thought_text) > _MAX_THOUGHT_TEXT_CHARS:
+            active.thought_text = active.thought_text[-_MAX_THOUGHT_TEXT_CHARS:]
+        if len(active.thought_prefix) > _MAX_THOUGHT_TEXT_CHARS:
+            active.thought_prefix = active.thought_prefix[:_MAX_THOUGHT_TEXT_CHARS]
+
+    @staticmethod
     def _final_reply_text(active: ActiveTurn, reply: str) -> str:
         """Return the final reply with any leading thought text removed."""
-        thought = active.thought_text
+        if not active.thought_total:
+            return reply
+        if active.thought_total <= _MAX_THOUGHT_TEXT_CHARS:
+            thought = active.thought_text
+        else:
+            thought = active.thought_prefix
         if thought and reply.startswith(thought):
-            return reply[len(thought) :].lstrip("\n")
+            return reply[active.thought_total :].lstrip("\n")
         return reply
 
     @_locked
@@ -264,6 +308,9 @@ class TurnDispatch:
                     user_message=user_message,
                     message_text=a.message_text,
                     thought_text=a.thought_text,
+                    thought_prefix=a.thought_prefix,
+                    thought_total=a.thought_total,
+                    full_text_offset=a.full_text_offset,
                     updated_at=time.time(),
                 ),
             )
@@ -272,9 +319,7 @@ class TurnDispatch:
             with self._lock:
                 a = self.runtime._active_turns.get(chat_id)
                 if a:
-                    a.full_text += text
-                    if len(a.full_text) > _MAX_THOUGHT_TEXT_CHARS:
-                        a.full_text = a.full_text[-_MAX_THOUGHT_TEXT_CHARS:]
+                    self._append_full_text(a, text)
                     self._recompute_message_text(a)
             if a:
                 with a._condition:
@@ -296,9 +341,7 @@ class TurnDispatch:
             with self._lock:
                 a = self.runtime._active_turns.get(chat_id)
                 if a:
-                    a.thought_text += text
-                    if len(a.thought_text) > _MAX_THOUGHT_TEXT_CHARS:
-                        a.thought_text = a.thought_text[-_MAX_THOUGHT_TEXT_CHARS:]
+                    self._append_thought_text(a, text)
                     self._recompute_message_text(a)
             if a:
                 with a._condition:

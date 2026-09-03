@@ -61,7 +61,7 @@ class RuntimeAPI(abc.ABC):
 
     @abc.abstractmethod
     def restart(self, chat_id: str) -> Any:
-        """Kill the ACP child and start a fresh transport for this chat."""
+        """Kill the ACP subprocess and start a fresh transport for this chat."""
 
     @abc.abstractmethod
     def graceful_service_restart(

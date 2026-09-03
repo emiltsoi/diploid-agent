@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from diploid_agent.engine import TurnRequest, TurnResult
 from diploid_agent.models import ChatResult, SessionRecord, WakeEvent
-from diploid_agent.plugins.contexts import PromptContext
+from diploid_agent.plugins.contexts import PromptContext, RehydrationReason
 
 if TYPE_CHECKING:
     from diploid_agent.turn.controller import TurnController
@@ -75,14 +75,36 @@ class TurnRehydrate:
         on_update: Callable[[dict[str, Any]], None],
         restart_first: bool = False,
         log_prefix: str = "Rehydrating",
+        rehydration_reason: RehydrationReason | None = None,
     ) -> tuple[TurnResult, str, PromptContext] | ChatResult:
         """Resume a persisted ACP session if possible, otherwise start a new one."""
+        if rehydration_reason is None:
+            if restart_first:
+                rehydration_reason = RehydrationReason.RESTART
+            elif "stale" in log_prefix.lower() or "empty" in log_prefix.lower():
+                rehydration_reason = RehydrationReason.STALE
+            else:
+                rehydration_reason = RehydrationReason.STALE
+        if self.runtime.lifecycle_log is not None:
+            self.runtime.lifecycle_log.write(
+                "rehydrate.start",
+                chat_id=chat_id,
+                reason=rehydration_reason.value,
+                detail={"log_prefix": log_prefix, "restart_first": restart_first},
+            )
         if restart_first:
             logger.warning("%s; restarting ACP transport for %s", log_prefix, chat_id)
             try:
-                self.runtime.engine.restart()
+                self.runtime.engine.restart(reason=log_prefix)
+                self.runtime._record_restart_memory(chat_id, reason=log_prefix)
             except Exception:
                 logger.exception("Failed to restart ACP transport for %s", chat_id)
+                if self.runtime.lifecycle_log is not None:
+                    self.runtime.lifecycle_log.write(
+                        "rehydrate.transport_restart_failure",
+                        chat_id=chat_id,
+                        reason=rehydration_reason.value,
+                    )
                 return ChatResult(
                     reply="Could not restart the ACP transport.",
                     notice="The agent is unavailable after a transport restart failure.",
@@ -103,6 +125,13 @@ class TurnRehydrate:
                     mcp_servers=self.runtime._active_mcp_servers(chat_id),
                 )
                 logger.warning("Resumed ACP session %s for %s", resumed_id, chat_id)
+                if self.runtime.lifecycle_log is not None:
+                    self.runtime.lifecycle_log.write(
+                        "rehydrate.resume.success",
+                        chat_id=chat_id,
+                        session_id=resumed_id,
+                        reason=rehydration_reason.value,
+                    )
                 pctx = self.runtime.context_builder.build_follow_up(
                     chat_id,
                     user_message,
@@ -112,6 +141,7 @@ class TurnRehydrate:
                     reply_to_message_id=reply_to_message_id,
                     continuation_anchor=continuation_anchor,
                     rehydrated=True,
+                    rehydration_reason=RehydrationReason.RESUMED,
                     wake_event=wake_event,
                     other_instance_running=other_instance_running,
                 )
@@ -133,6 +163,14 @@ class TurnRehydrate:
                 return result, resumed_id, pctx
             except (RuntimeError, TimeoutError) as exc:
                 logger.warning("%s: ACP session resume failed for %s: %s", log_prefix, chat_id, exc)
+                if self.runtime.lifecycle_log is not None:
+                    self.runtime.lifecycle_log.write(
+                        "rehydrate.resume.failure",
+                        chat_id=chat_id,
+                        session_id=old_record.session_id,
+                        reason=rehydration_reason.value,
+                        detail={"error": str(exc)},
+                    )
 
         pctx = self.runtime.context_builder.build_first(
             chat_id,
@@ -146,6 +184,7 @@ class TurnRehydrate:
             wake_event=wake_event,
             other_instance_running=other_instance_running,
             rehydrated=True,
+            rehydration_reason=rehydration_reason,
         )
         model = pctx.model or use_model
 
@@ -159,6 +198,13 @@ class TurnRehydrate:
                     on_chunk=on_chunk,
                     on_update=on_update,
                 )
+                if self.runtime.lifecycle_log is not None:
+                    self.runtime.lifecycle_log.write(
+                        "rehydrate.new_session.success",
+                        chat_id=chat_id,
+                        session_id=session_id,
+                        reason=rehydration_reason.value,
+                    )
                 return result, session_id, pctx
             except (RuntimeError, TimeoutError) as exc:
                 if self.runtime.engine.is_fatal_acp_error(exc) or (
@@ -172,6 +218,13 @@ class TurnRehydrate:
                     )
                     if old_record is not None:
                         old_record.last_stop_reason = "error"
+                    if self.runtime.lifecycle_log is not None:
+                        self.runtime.lifecycle_log.write(
+                            "rehydrate.new_session.error",
+                            chat_id=chat_id,
+                            reason=rehydration_reason.value,
+                            detail={"error": str(exc)},
+                        )
                     return ChatResult(
                         reply=f"Could not continue: {exc}",
                         notice="An ACP configuration error prevented the turn from completing.",
@@ -187,11 +240,19 @@ class TurnRehydrate:
 
                 if attempt == 0:
                     try:
-                        self.runtime.engine.restart()
+                        self.runtime.engine.restart(reason=log_prefix)
+                        self.runtime._record_restart_memory(chat_id, reason=log_prefix)
                     except Exception:
                         logger.exception("Failed to restart ACP transport for %s", chat_id)
                         if old_record is not None:
                             old_record.last_stop_reason = "error"
+                        if self.runtime.lifecycle_log is not None:
+                            self.runtime.lifecycle_log.write(
+                                "rehydrate.transport_restart_failure",
+                                chat_id=chat_id,
+                                reason=rehydration_reason.value,
+                                detail={"attempt": attempt + 1},
+                            )
                         return ChatResult(
                             reply="Could not restart the ACP transport.",
                             notice="The agent is unavailable after a transport restart failure.",
