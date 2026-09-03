@@ -127,11 +127,15 @@ class RuntimeActions:
             "last_restart_at": None,
             "last_restart_reason": None,
             "restart_count_in_window": 0,
+            "resume_metrics": {},
         }
         if self._runtime.lifecycle_log is None:
             return continuity
 
-        events = self._runtime.lifecycle_log.recent_events(limit=500)
+        events = self._runtime.lifecycle_log.recent_events_for(
+            chat_id,
+            limit=500,
+        )
         if not events:
             return continuity
 
@@ -153,6 +157,11 @@ class RuntimeActions:
         session_id = record.session_id
         for event in reversed(events):
             if event.get("session_id") != session_id:
+                # A transport restart for this chat usually means the session was rebuilt.
+                if event.get("event") == "transport.restart" and event.get("chat_id") == chat_id:
+                    continuity["state"] = "rebuilt"
+                    continuity["state_reason"] = event.get("reason")
+                    break
                 continue
             ev = event.get("event")
             if ev in ("rehydrate.resume.success", "session.resume.success", "session.load.success"):
@@ -163,9 +172,45 @@ class RuntimeActions:
                 continuity["state"] = "rebuilt"
                 continuity["state_reason"] = event.get("reason")
                 break
-            if ev == "session.new":
+            if ev in ("session.new.success", "session.new"):
                 continuity["state"] = "new"
+                continuity["state_reason"] = event.get("reason")
                 break
+
+        # Resume telemetry for this chat: count successes/failures by method.
+        resume_events = [
+            e
+            for e in events
+            if e.get("event")
+            in (
+                "session.resume.success",
+                "session.resume.failure",
+                "session.load.success",
+                "session.load.failure",
+                "session.new.success",
+                "session.new.failure",
+                "rehydrate.resume.success",
+                "rehydrate.resume.failure",
+                "rehydrate.new_session.success",
+            )
+        ]
+        durations: list[float] = []
+        resume_counts: dict[str, int] = {}
+        for event in resume_events:
+            ev = event.get("event", "")
+            result = "success" if ".success" in ev else "failure"
+            method = ev.split(".")[-2] if "." in ev else "unknown"
+            key = f"{method}_{result}"
+            resume_counts[key] = resume_counts.get(key, 0) + 1
+            detail = event.get("detail") or {}
+            if isinstance(detail, dict) and "duration_ms" in detail:
+                durations.append(float(detail["duration_ms"]))
+
+        continuity["resume_metrics"] = {
+            "counts": resume_counts,
+            "total_events": len(resume_events),
+            "average_duration_ms": round(sum(durations) / len(durations), 2) if durations else 0.0,
+        }
 
         return continuity
 
@@ -306,25 +351,23 @@ class RuntimeActions:
 
     @_actions_locked
     def promote(self, chat_id: str, fact: str) -> ChatResult:
-        """Promote a fact to the persona's memory."""
+        """Promote a fact to the chat's curated memory pocket."""
         record = self._runtime._active_record(chat_id)
         ctx = self._plugins.before_promote(
             chat_id,
             PromoteContext(chat_id=chat_id, fact=fact, record=record),
         )
-        self._runtime._memory_manager(chat_id).promote_to_persona(ctx.fact)
+        self._runtime._memory_manager(chat_id).promote(ctx.fact)
 
         record = self._runtime._active_record(chat_id)
-        notice = None
         if record:
-            notice = self._runtime._check_persona_memory_transition(record)
             self._runtime._append_record(record)
             self._plugins.after_promote(
                 chat_id,
                 PromoteContext(chat_id=chat_id, fact=ctx.fact, record=record),
             )
 
-        return ChatResult(reply="Promoted to persona memory.", notice=notice)
+        return ChatResult(reply="Promoted.")
 
     def list_models(self) -> list[str]:
         """Return the list of models the ACP server accepts."""

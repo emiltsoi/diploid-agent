@@ -13,8 +13,9 @@ import re
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
+from diploid_agent.acp_client.lifecycle import AcpLifecycleLog
 from diploid_agent.config import Config
 from diploid_agent.dispatch import Dispatch, DispatchStatus
 from diploid_agent.memory import MemoryManager, RecallResult
@@ -40,6 +41,17 @@ logger = logging.getLogger(__name__)
 class ContextBuilder:
     """Assemble first-turn and follow-up prompts from persona, memory, and slots."""
 
+    # Hand-maintained characters-per-token table for known models.  If the model
+    # is not listed, the conservative 4:1 fallback is used.
+    _CHARS_PER_TOKEN: ClassVar[dict[str, float]] = {
+        "swe-1-7": 3.5,
+        "claude-sonnet-4-20250514": 4.0,
+        "claude-sonnet-4": 4.0,
+        "claude-opus-4": 4.0,
+        "gpt-4o": 4.0,
+        "gpt-4o-mini": 4.0,
+    }
+
     # Plugin slots that are cheap and identity-defining; they are forced into
     # the prompt whenever the ACP session is under context pressure.
     SOUL_SLOTS: frozenset[str] = frozenset(
@@ -60,6 +72,7 @@ class ContextBuilder:
         skill_manager: SkillManager | None = None,
         active_skill_names: Callable[[str], set[str]] | None = None,
         context_window_fn: Callable[[str], int | None] | None = None,
+        lifecycle_log: AcpLifecycleLog | None = None,
     ) -> None:
         self.config = config
         self.plugin_manager = plugin_manager
@@ -67,6 +80,7 @@ class ContextBuilder:
         self.skill_manager = skill_manager
         self.active_skill_names = active_skill_names
         self.context_window_fn = context_window_fn
+        self.lifecycle_log = lifecycle_log
         # Shared per-chat metrics store.  The harness sets this to its own dict.
         self.metrics: dict[str, dict[str, Any]] = {}
         # Per-chat cache of the last injected plugin blocks and file mtimes. This
@@ -102,6 +116,50 @@ class ContextBuilder:
         if chat_id not in self._last_file_mtimes:
             self._last_file_mtimes[chat_id] = {}
         self._last_file_mtimes[chat_id][str(path)] = path.stat().st_mtime
+
+    def _chars_per_token(self, model: str | None) -> float:
+        """Return a best-guess character-to-token ratio for `model`."""
+        if not model:
+            return 4.0
+        model_lower = model.lower()
+        for name, ratio in self._CHARS_PER_TOKEN.items():
+            if name in model_lower:
+                return ratio
+        return 4.0
+
+    def _wake_narrative(self, chat_id: str, event: dict[str, Any] | None) -> str:
+        """Render a one-sentence continuity note from a lifecycle event."""
+        if event is None:
+            return ""
+        ev = event.get("event", "")
+        reason = event.get("reason") or ""
+        if ev == "transport.restart" and reason == "mcp_change":
+            return "I restarted a moment ago so a new tool could load; my thread is intact."
+        if "restart" in ev:
+            return "I restarted a moment ago; the thread is intact."
+        if ev in ("session.resume.success", "session.load.success"):
+            return "I resumed the previous session; the thread continues."
+        if ev == "session.new":
+            return "I woke in a fresh session; earlier memory is loaded."
+        return ""
+
+    def _last_wake_event(self, chat_id: str) -> dict[str, Any] | None:
+        """Return the last wake-relevant lifecycle event for this chat."""
+        if self.lifecycle_log is None:
+            return None
+        events = self.lifecycle_log.recent_events_for(
+            chat_id,
+            event_types=[
+                "transport.restart",
+                "session.resume.success",
+                "session.load.success",
+                "rehydrate.resume.success",
+                "rehydrate.new_session.success",
+                "session.new",
+            ],
+            limit=1,
+        )
+        return events[0] if events else None
 
     def _context_window_for(self, model: str | None) -> int | None:
         """Resolve the context window for a model, if known."""
@@ -142,37 +200,38 @@ class ContextBuilder:
     ) -> dict[str, int]:
         """Estimate token footprint of the next prompt for proactive sizing.
 
-        Uses a conservative 4 characters-per-token ratio when no tokenizer is
-        available.  Returns a dict with the components so callers can log them.
+        Uses the last turn's actual token usage as the primary signal and a
+        hand-maintained characters-per-token table for the model.  Returns a
+        dict with the components so callers can log them.
         """
-        cumulative = record.cumulative_metrics or {}
         last_turn = record.last_turn_metrics or {}
-        cumulative_total = cumulative.get("total_tokens", 0) or 0
         last_input = last_turn.get("input_tokens", 0) or 0
+        last_output = last_turn.get("output_tokens", 0) or 0
+        last_total = last_input + last_output
+
+        chars_per_token = self._chars_per_token(record.model)
 
         memory_cfg = self.config.harness.memory
-        short_term_estimate = (memory_cfg.max_short_term_chars or 0) // 4
+        short_term_estimate = int((memory_cfg.max_short_term_chars or 0) / chars_per_token)
 
         # Cheap fresh-soul budget: identity anchor + cheap soul slots.
         anchor_len = len(identity_anchor(self.config.persona))
-        cheap_soul_estimate = anchor_len // 4 + 500
+        cheap_soul_estimate = (
+            int(anchor_len / chars_per_token) + self.config.harness.proactive_soul_token_budget
+        )
 
-        user_estimate = len(formatted_message) // 4
+        user_estimate = int(len(formatted_message) / chars_per_token)
 
         buffer_factor = self.config.harness.proactive_input_buffer_factor
-        buffered_input = int(last_input * buffer_factor)
+        buffered_turn = int(last_total * buffer_factor)
 
         return {
-            "cumulative": cumulative_total,
-            "buffered_input": buffered_input,
+            "last_total": last_total,
+            "buffered_turn": buffered_turn,
             "soul": cheap_soul_estimate,
             "user": user_estimate,
             "short_term": short_term_estimate,
-            "total": cumulative_total
-            + buffered_input
-            + cheap_soul_estimate
-            + user_estimate
-            + short_term_estimate,
+            "total": buffered_turn + cheap_soul_estimate + user_estimate + short_term_estimate,
         }
 
     def _soul_mode(
@@ -660,6 +719,7 @@ class ContextBuilder:
         mgr = self.memory_factory(chat_id)
         recall = mgr.recall_context(formatted, model=effective_model)
         chat_status = mgr.chat_memory_status()
+        promoted = mgr.promoted_memory()
         pm = mgr.persona_memory(self.config.harness.memory.max_persona_memory_chars)
         persona.memory_text = pm["text"]
         persona.memory_truncated = pm["truncated"]
@@ -674,6 +734,7 @@ class ContextBuilder:
             "self_narrative": [],
             "system_notice": [],
             "memory": [],
+            "promoted": [],
             "recall": [],
             "chat_memory": [],
             "persistent_memory": [],
@@ -699,6 +760,8 @@ class ContextBuilder:
             )
         if recall.text:
             slots["recall"].append("## Chat memory\n\n" + recall.text)
+        if promoted["text"]:
+            slots["promoted"].append(f"## Promoted memory\n\n{promoted['text']}")
 
         chat_mem = self.memory_factory(chat_id).chat_memory_block()
         if chat_mem:
@@ -740,6 +803,7 @@ class ContextBuilder:
             "self_narrative",
             "system_notice",
             "memory",
+            "promoted",
             "recall",
             "chat_memory",
             "persistent_memory",
@@ -859,6 +923,9 @@ class ContextBuilder:
             short_term = ""
         chat_status = mgr.chat_memory_status()
 
+        # Promoted memory is a user-curated pocket that survives fresh compact mode.
+        promoted = mgr.promoted_memory()
+
         # Load persona memory on full soul (rehydration) and when the file has
         # changed since the last prompt.  Fresh compact mode only loads changed
         # persona memory and caps it tightly.
@@ -903,6 +970,7 @@ class ContextBuilder:
             "self_narrative": [],
             "system_notice": [],
             "memory": [],
+            "promoted": [],
             "recall": [],
             "chat_memory": [],
             "persistent_memory": [],
@@ -922,10 +990,13 @@ class ContextBuilder:
         soul_notice = ""
         if force_new_session:
             if soul_mode == "fresh":
+                wake_narrative = self._wake_narrative(chat_id, self._last_wake_event(chat_id))
                 soul_notice = (
                     "Fresh ACP session for context pressure. "
                     "Persona memory is compacted and long-term recall is skipped."
                 )
+                if wake_narrative:
+                    soul_notice += f" {wake_narrative}"
             else:
                 soul_notice = (
                     "Context window is nearly full. This prompt includes the full soul "
@@ -953,6 +1024,8 @@ class ContextBuilder:
             slots["recall"].append("## Chat memory\n\n" + recall.text)
         if short_term:
             slots["recall"].append("## Chat memory\n\n" + short_term)
+        if promoted["text"]:
+            slots["promoted"].append(f"## Promoted memory\n\n{promoted['text']}")
 
         # Load on-disk chat memory on full/fresh soul and when the file has
         # changed.
@@ -1002,6 +1075,7 @@ class ContextBuilder:
             "self_narrative",
             "system_notice",
             "memory",
+            "promoted",
             "recall",
             "chat_memory",
             "persistent_memory",

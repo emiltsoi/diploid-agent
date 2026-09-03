@@ -82,6 +82,8 @@ class AcpClient:
         watchdog_interval: float = 10.0,
         watchdog_timeout: float = 120.0,
         max_restarts: int = 3,
+        max_mcp_restarts: int = 5,
+        max_user_restarts: int = 5,
         restart_backoff_window: float = 300.0,
         agent_bin: str | Path = "~/.local/bin/devin",
         start_args: list[str] | None = None,
@@ -130,8 +132,12 @@ class AcpClient:
         self._watchdog_interval = watchdog_interval
         self._watchdog_timeout = watchdog_timeout
 
-        # Restart backoff.
-        self._max_restarts = max(0, max_restarts)
+        # Restart backoff per cause.
+        self._max_restarts_by_reason: dict[str, int] = {
+            "transport_error": max(0, max_restarts),
+            "mcp_change": max(0, max_mcp_restarts),
+            "user_restart": max(0, max_user_restarts),
+        }
         self._restart_backoff_window = max(1.0, restart_backoff_window)
 
         # Service restart support: the subprocess can request a controlled restart
@@ -208,6 +214,7 @@ class AcpClient:
         model: str | None = None,
         mcp_servers: list[dict[str, Any]] | None = None,
         soft_timeout: float | None = None,
+        chat_id: str | None = None,
         on_chunk: Callable[[str], None] | None = None,
         on_update: Callable[[dict[str, Any]], None] | None = None,
     ) -> AcpPromptResult:
@@ -223,6 +230,7 @@ class AcpClient:
                 model=model,
                 mcp_servers=normalized_mcp_servers,
                 soft_timeout=soft_timeout,
+                chat_id=chat_id,
                 on_chunk=on_chunk,
                 on_update=on_update,
             ),
@@ -413,13 +421,24 @@ class AcpClient:
 
     # ---------------------------------------------------------------- internal
 
-    def _check_restart_backoff(self) -> None:
-        """Raise AcpTransportError if we have restarted too many times recently."""
-        self._restart_history_store.check(self._max_restarts)
+    def _categorize_restart_reason(self, reason: str | None) -> str:
+        """Map a free-text restart reason to a backoff bucket."""
+        if reason == "mcp_change":
+            return "mcp_change"
+        if reason is not None and ("user" in reason.lower() or reason.startswith("/")):
+            return "user_restart"
+        return "transport_error"
 
-    def _record_restart_attempt(self) -> None:
+    def _check_restart_backoff(self, reason: str | None = None) -> None:
+        """Raise AcpTransportError if we have restarted too many times recently."""
+        bucket = self._categorize_restart_reason(reason)
+        max_restarts = self._max_restarts_by_reason.get(bucket, 0)
+        self._restart_history_store.check(max_restarts, reason=bucket)
+
+    def _record_restart_attempt(self, reason: str | None = None) -> None:
         """Record that we are about to (re)start the ACP transport."""
-        self._restart_history_store.record()
+        bucket = self._categorize_restart_reason(reason)
+        self._restart_history_store.record(reason=bucket)
 
     def _unblock_inflight(self, reason: str) -> None:
         """Set an exception on the in-flight _run future and cancel active prompts."""
@@ -487,7 +506,8 @@ class AcpClient:
                         reason="mcp_change",
                         detail={"mcp_servers": [s.get("name") for s in (target or [])]},
                     )
-                self._record_restart_attempt()
+                self._check_restart_backoff("mcp_change")
+                self._record_restart_attempt("mcp_change")
                 self.close()
                 # close() sets _initialized=False and clears the transport. Loop
                 # back to start a fresh one with the new target list.
@@ -527,17 +547,18 @@ class AcpClient:
                 self._lifecycle_log.write("transport.start")
             return
 
-    def restart_transport(self, reason: str | None = None) -> None:
+    def restart_transport(self, reason: str | None = None, chat_id: str | None = None) -> None:
         """Kill the ACP subprocess and start a fresh one."""
         logger.warning("Restarting ACP transport")
         if self._lifecycle_log is not None:
             self._lifecycle_log.write(
                 "transport.restart",
+                chat_id=chat_id,
                 reason=reason,
                 detail={"reason": reason} if reason else None,
             )
-        self._check_restart_backoff()
-        self._record_restart_attempt()
+        self._check_restart_backoff(reason)
+        self._record_restart_attempt(reason)
         if self.metrics is not None:
             self.metrics.inc("acp_restarts_total")
         self._unblock_inflight("ACP transport restarted")
@@ -667,6 +688,7 @@ class AcpClient:
             )
 
         resume_method = "resume"
+        start = time.perf_counter()
         try:
             call_timeout = self._control.call_timeout()
             try:
@@ -690,25 +712,37 @@ class AcpClient:
                     raise
             await self._apply_session_config(session_id, use_model, timeout=call_timeout)
         except (AcpError, TimeoutError) as exc:
+            duration_ms = round((time.perf_counter() - start) * 1000, 2)
             if self.metrics is not None:
-                self.metrics.inc("acp_resume_failures_total")
+                self.metrics.inc("acp_resume_total", result="failure", method=resume_method)
+                self.metrics.set("acp_resume_latency_ms", duration_ms, result="failure")
             if self._lifecycle_log is not None:
                 self._lifecycle_log.write(
                     "session.resume.failure",
                     session_id=session_id,
                     model=use_model,
-                    detail={"cwd": str(use_cwd), "error": str(exc)},
+                    detail={
+                        "cwd": str(use_cwd),
+                        "error": str(exc),
+                        "duration_ms": duration_ms,
+                    },
                 )
             raise
 
+        duration_ms = round((time.perf_counter() - start) * 1000, 2)
         if self.metrics is not None:
-            self.metrics.inc("acp_resumes_total")
+            self.metrics.inc("acp_resume_total", result="success", method=resume_method)
+            self.metrics.set("acp_resume_latency_ms", duration_ms, result="success")
         if self._lifecycle_log is not None:
             self._lifecycle_log.write(
                 "session.resume.success",
                 session_id=session_id,
                 model=use_model,
-                detail={"cwd": str(use_cwd), "method": resume_method},
+                detail={
+                    "cwd": str(use_cwd),
+                    "method": resume_method,
+                    "duration_ms": duration_ms,
+                },
             )
         return session_id
 
@@ -738,6 +772,7 @@ class AcpClient:
                 detail={"cwd": str(use_cwd)},
             )
         call_timeout = self._control.call_timeout()
+        start = time.perf_counter()
         try:
             await self._call(
                 "session/load",
@@ -750,25 +785,33 @@ class AcpClient:
             )
             await self._apply_session_config(session_id, use_model, timeout=call_timeout)
         except (AcpError, TimeoutError) as exc:
+            duration_ms = round((time.perf_counter() - start) * 1000, 2)
             if self.metrics is not None:
-                self.metrics.inc("acp_resume_failures_total")
+                self.metrics.inc("acp_resume_total", result="failure", method="load")
+                self.metrics.set("acp_resume_latency_ms", duration_ms, result="failure")
             if self._lifecycle_log is not None:
                 self._lifecycle_log.write(
                     "session.load.failure",
                     session_id=session_id,
                     model=use_model,
-                    detail={"cwd": str(use_cwd), "error": str(exc)},
+                    detail={
+                        "cwd": str(use_cwd),
+                        "error": str(exc),
+                        "duration_ms": duration_ms,
+                    },
                 )
             raise
 
+        duration_ms = round((time.perf_counter() - start) * 1000, 2)
         if self.metrics is not None:
-            self.metrics.inc("acp_resumes_total")
+            self.metrics.inc("acp_resume_total", result="success", method="load")
+            self.metrics.set("acp_resume_latency_ms", duration_ms, result="success")
         if self._lifecycle_log is not None:
             self._lifecycle_log.write(
                 "session.load.success",
                 session_id=session_id,
                 model=use_model,
-                detail={"cwd": str(use_cwd)},
+                detail={"cwd": str(use_cwd), "duration_ms": duration_ms},
             )
         return session_id
 
@@ -800,6 +843,7 @@ class AcpClient:
         model: str | None = None,
         mcp_servers: list[dict[str, Any]] | None = None,
         soft_timeout: float | None = None,
+        chat_id: str | None = None,
         on_chunk: Callable[[str], None] | None = None,
         on_update: Callable[[dict[str, Any]], None] | None = None,
     ) -> AcpPromptResult:
@@ -818,19 +862,52 @@ class AcpClient:
         # does not hold the harness lock for multiple minutes. The watchdog
         # stall threshold is also bounded by _watchdog_timeout, so align the
         # call timeout with that ceiling (at least 60s to allow normal init).
-        session_new_timeout = self._control.call_timeout()
-        session = await self._call(
-            "session/new",
-            {"cwd": use_cwd, "mcpServers": []},
-            timeout=session_new_timeout,
-        )
-        session_id = session["sessionId"]
         if self._lifecycle_log is not None:
             self._lifecycle_log.write(
-                "session.new",
-                session_id=session_id,
+                "session.new.attempt",
+                chat_id=chat_id,
                 model=use_model,
                 detail={"cwd": str(use_cwd)},
+            )
+
+        session_new_timeout = self._control.call_timeout()
+        start = time.perf_counter()
+        try:
+            session = await self._call(
+                "session/new",
+                {"cwd": use_cwd, "mcpServers": []},
+                timeout=session_new_timeout,
+            )
+            session_id = session["sessionId"]
+        except (AcpError, TimeoutError) as exc:
+            duration_ms = round((time.perf_counter() - start) * 1000, 2)
+            if self.metrics is not None:
+                self.metrics.inc("acp_resume_total", result="failure", method="new")
+                self.metrics.set("acp_resume_latency_ms", duration_ms, result="failure")
+            if self._lifecycle_log is not None:
+                self._lifecycle_log.write(
+                    "session.new.failure",
+                    chat_id=chat_id,
+                    model=use_model,
+                    detail={
+                        "cwd": str(use_cwd),
+                        "error": str(exc),
+                        "duration_ms": duration_ms,
+                    },
+                )
+            raise
+
+        duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        if self.metrics is not None:
+            self.metrics.inc("acp_resume_total", result="success", method="new")
+            self.metrics.set("acp_resume_latency_ms", duration_ms, result="success")
+        if self._lifecycle_log is not None:
+            self._lifecycle_log.write(
+                "session.new.success",
+                chat_id=chat_id,
+                session_id=session_id,
+                model=use_model,
+                detail={"cwd": str(use_cwd), "duration_ms": duration_ms},
             )
 
         if self._model_options is None:

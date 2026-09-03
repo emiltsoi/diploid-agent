@@ -333,8 +333,8 @@ def test_restart_transport_unblocks_inflight_future(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "close", fake_close)
     monkeypatch.setattr(client, "_ensure_started", fake_ensure_started)
-    monkeypatch.setattr(client, "_check_restart_backoff", lambda: None)
-    monkeypatch.setattr(client, "_record_restart_attempt", lambda: None)
+    monkeypatch.setattr(client, "_check_restart_backoff", lambda _reason=None: None)
+    monkeypatch.setattr(client, "_record_restart_attempt", lambda _reason=None: None)
 
     client.restart_transport()
 
@@ -855,7 +855,34 @@ def test_restart_transport_backoff() -> None:
     )
 
     # Seed the restart history with two recent restarts.
-    client._restart_history_store._history = [time.time(), time.time() - 1.0]
+    client._restart_history_store._history = [
+        {"timestamp": time.time(), "reason": "transport_error"},
+        {"timestamp": time.time() - 1.0, "reason": "transport_error"},
+    ]
 
     with pytest.raises(AcpTransportError):
         client.restart_transport()
+
+
+def test_restart_transport_mcp_backoff_is_separate() -> None:
+    """MCP-change restarts use their own, higher backoff limit."""
+    client = AcpClient(
+        agent_bin="/bin/true",
+        api_key="test-key",
+        max_restarts=2,
+        max_mcp_restarts=4,
+        restart_backoff_window=60.0,
+    )
+
+    # Seed two transport-error restarts, which exhausts the transport budget.
+    client._restart_history_store._history = [
+        {"timestamp": time.time(), "reason": "transport_error"},
+        {"timestamp": time.time() - 1.0, "reason": "transport_error"},
+    ]
+
+    # A plain restart should still be rejected.
+    with pytest.raises(AcpTransportError):
+        client.restart_transport()
+
+    # An MCP-change restart is bucketed separately and should still be allowed.
+    client._check_restart_backoff("mcp_change")

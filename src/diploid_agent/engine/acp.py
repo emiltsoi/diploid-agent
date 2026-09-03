@@ -86,6 +86,8 @@ class AcpEngine(AgentEngine):
             watchdog_interval=config.acp_watchdog_interval,
             watchdog_timeout=config.acp_watchdog_timeout,
             max_restarts=config.acp_max_restarts,
+            max_mcp_restarts=config.acp_max_mcp_restarts,
+            max_user_restarts=config.acp_max_user_restarts,
             restart_backoff_window=config.acp_restart_backoff_window,
             agent_bin=config.bin,
             start_args=start_args,
@@ -116,6 +118,7 @@ class AcpEngine(AgentEngine):
         model: str | None = None,
         mcp_servers: list[dict[str, Any]] | None = None,
         soft_timeout: float | None = None,
+        chat_id: str | None = None,
         on_chunk: Callable[[str], None] | None = None,
         on_update: Callable[[dict[str, Any]], None] | None = None,
     ) -> AcpPromptResult:
@@ -128,6 +131,7 @@ class AcpEngine(AgentEngine):
             model=model,
             mcp_servers=mcp_servers,
             soft_timeout=soft_timeout,
+            chat_id=chat_id,
             on_chunk=on_chunk,
             on_update=on_update,
         )
@@ -176,6 +180,7 @@ class AcpEngine(AgentEngine):
                 model=request.model,
                 mcp_servers=request.mcp_servers,
                 soft_timeout=request.soft_timeout,
+                chat_id=request.chat_id,
                 on_chunk=on_chunk,
                 on_update=on_update,
             )
@@ -224,12 +229,12 @@ class AcpEngine(AgentEngine):
         """Return the ACP session id currently in flight, if any."""
         return self._client.active_session_id()
 
-    def restart(self, reason: str | None = None) -> None:
-        self.restart_transport(reason=reason)
+    def restart(self, reason: str | None = None, chat_id: str | None = None) -> None:
+        self.restart_transport(reason=reason, chat_id=chat_id)
 
-    def restart_transport(self, reason: str | None = None) -> None:
+    def restart_transport(self, reason: str | None = None, chat_id: str | None = None) -> None:
         """Restart the ACP transport."""
-        self._client.restart_transport(reason=reason)
+        self._client.restart_transport(reason=reason, chat_id=chat_id)
 
     def close(self) -> None:
         self._client.close()

@@ -185,7 +185,8 @@ class TurnController:
                 logger.info("Cancelled %d pending auto-continue wake(s) for %s", count, chat_id)
 
         try:
-            self.runtime.engine.restart(reason="user /restart")
+            self.runtime._snapshot_plugin_states(chat_id)
+            self.runtime.engine.restart(reason="user /restart", chat_id=chat_id)
             self.runtime._record_restart_memory(chat_id, reason="user /restart")
         except AcpTransportError as exc:
             return ChatResult(

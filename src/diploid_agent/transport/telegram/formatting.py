@@ -32,7 +32,7 @@ _TELEGRAM_HELP = """Available commands:
 /branch <n> - branch from session n and make it active
 /summarize - trigger file-backed summarization
 /recall <query> - search memory for relevant context
-/promote <fact> - append a fact to persona global memory
+/promote <fact> - append a fact to your curated promoted memory
 /stream_thoughts on|off - toggle the optional real-time thought stream
 /config <section> <key>=<value> [key=value...] - update live runtime config (task|waker|timer|notifications|telegram)
 /help - show this list"""

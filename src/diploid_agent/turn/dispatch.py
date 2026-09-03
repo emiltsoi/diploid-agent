@@ -355,6 +355,7 @@ class TurnDispatch:
                     cwd=self.runtime._chat_dir(chat_id),
                     model=use_model,
                     soft_timeout=self.runtime.config.engine.soft_timeout,
+                    chat_id=chat_id,
                 )
                 call_ctx = self.runtime._plugins.before_engine_call(
                     chat_id,

@@ -48,6 +48,10 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = ["-m", "not slow"]
+markers = [
+    "slow: tests that exercise real external binaries or APIs",
+]
 
 [tool.ruff]
 line-length = 100

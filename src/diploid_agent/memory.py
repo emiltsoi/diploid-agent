@@ -781,6 +781,42 @@ class MemoryManager:
             "total": total,
         }
 
+    @property
+    def promoted_memory_path(self) -> Path:
+        """Path to the user-curated promoted memory file for this chat."""
+        safe = self.chat_id.replace("/", "_")
+        return self.sessions_root / safe / "chat_PROMOTED.md"
+
+    def promoted_memory(self, max_chars: int = 1000) -> dict[str, Any]:
+        """Load the promoted memory pocket, always capped tightly."""
+        from diploid_agent.persona_composer import _trim_to_section
+
+        path = self.promoted_memory_path
+        text = ""
+        total = 0
+        loaded = 0
+        truncated = False
+
+        if path.exists():
+            raw = path.read_text()
+            total = len(raw)
+            if total > max_chars:
+                text = _trim_to_section(raw, max_chars)
+                loaded = len(text)
+                truncated = True
+            else:
+                text = raw
+                loaded = total
+
+        return {
+            "text": text,
+            "path": path if total > 0 else None,
+            "truncated": truncated,
+            "limit": max_chars,
+            "loaded": loaded,
+            "total": total,
+        }
+
     def _load_transcript(self) -> list[dict[str, Any]]:
         path = self._transcript_path
         if not path.exists():
@@ -793,6 +829,33 @@ class MemoryManager:
                 except json.JSONDecodeError:
                     continue
         return entries
+
+    def _should_precompute_short_term_summary(
+        self,
+        turn_number: int,
+        model: str | None,
+    ) -> bool:
+        """Return True when it is worth paying for a pre-computed summary."""
+        if not self.memory_config.precompute_short_term_summary:
+            return False
+        if self.memory_config.short_term_strategy != "smart":
+            return False
+        if turn_number < self.memory_config.precompute_short_term_summary_min_turns:
+            return False
+
+        recent, _, _ = self._short_term_window()
+        if not recent:
+            return False
+
+        raw_text = self._format_recent_turns(recent)
+        return len(raw_text) > self.memory_config.max_short_term_chars
+
+    def _append_promoted_memory(self, content: str) -> None:
+        """Append a user-promoted fact to the curated pocket file."""
+        path = self.promoted_memory_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(f"- {content.strip()}\n")
 
     def _append_transcript(self, user_message: str, reply: str, notice: str | None = None) -> None:
         path = self._transcript_path
@@ -1097,6 +1160,9 @@ class MemoryManager:
         if "memory" not in item_tags:
             item_tags.append("memory")
 
+        if "promoted" in item_tags:
+            self._append_promoted_memory(content)
+
         item = MemoryItem(
             content=content.strip(),
             timestamp=datetime.now(UTC).isoformat(),
@@ -1153,11 +1219,15 @@ class MemoryManager:
 
         # Pre-compute the smart short-term compaction summary for the next turn,
         # so a `fresh` reset can load it without running the model synchronously.
-        if self.memory_config.short_term_strategy == "smart":
+        # Only run the model when the window is actually overflowing; otherwise
+        # each turn would pay for an unnecessary summarization call.
+        if self._should_precompute_short_term_summary(turn_number, model):
             self.summarize_and_retain_recent_turns(
                 n=self.memory_config.short_term_turns - self.memory_config.min_short_term_turns,
                 model=model,
             )
+            if self.metrics is not None:
+                self.metrics.inc("compaction_summary_calls_total")
 
         if (
             self.memory_config.n_turns_summarization
@@ -1234,6 +1304,18 @@ class MemoryManager:
 
     def stats(self) -> dict[str, Any]:
         return self.backend.stats()
+
+    def promote(self, fact: str) -> None:
+        """Append a fact to the chat's curated promoted memory pocket.
+
+        Promoted facts are always loaded in compact/fresh mode so the user can
+        curate a small "me" pocket that the compactor cannot throw away.
+        """
+        path = self.promoted_memory_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        new_block = f"- {fact.strip()}\n"
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(new_block)
 
     def promote_to_persona(self, fact: str) -> None:
         """Append a fact to the persona's MEMORY.md and, for Hindsight, index it.
