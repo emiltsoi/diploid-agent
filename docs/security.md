@@ -63,17 +63,17 @@ header.
 Hindsight is treated as eventually consistent: failed retains are spooled locally
 and retried; failed recalls fall back to local transcript search.
 
-## ACP child sandbox and self-restart
+## ACP subprocess sandbox and self-restart
 
-When `permission_mode` is `dangerous` (ACP `bypass`), the ACP child can auto-approve
+When `permission_mode` is `dangerous` (ACP `bypass`), the ACP subprocess can auto-approve
 tool calls including shell execution. This would let the agent run
 `systemctl --user restart <service>` and kill its own harness. To prevent that:
 
-- `AcpClient` creates an isolated home for the child with a private `XDG_RUNTIME_DIR`
-  and unsets `DBUS_SESSION_BUS_ADDRESS`, so the child cannot reach the user's systemd
+- `AcpClient` creates an isolated home for the subprocess with a private `XDG_RUNTIME_DIR`
+  and unsets `DBUS_SESSION_BUS_ADDRESS`, so the subprocess cannot reach the user's systemd
   manager directly.
 - A fake `systemctl` wrapper (plus `reboot`, `poweroff`, `shutdown`, and `halt`)
-  is placed first on the child's `PATH`. It forwards restart requests to the harness
+  is placed first on the subprocess's `PATH`. It forwards restart requests to the harness
   over a private Unix socket.
 - The harness schedules the actual restart with `systemd-run --on-active=<delay>`
   after sending its reply, so the restart is graceful and the user sees a message

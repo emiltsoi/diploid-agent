@@ -117,7 +117,7 @@ Response:
 
 ## `POST /restart`
 
-Kill the ACP child transport for a chat and start a fresh one. This does **not**
+Kill the ACP subprocess transport for a chat and start a fresh one. This does **not**
 restart the systemd service; it only restarts the `devin acp` process.
 
 ```bash
@@ -434,6 +434,15 @@ Response:
     "memory_budgets": {...},
     "memory_exceeded": {...}
   },
+  "continuity": {
+    "resume_enabled": true,
+    "current_session_id": "nickel-tango",
+    "state": "resumed",
+    "state_reason": null,
+    "last_restart_at": "2026-01-15T10:23:45+00:00",
+    "last_restart_reason": "transport timeout",
+    "restart_count_in_window": 1
+  },
   "active_turn": {
     "chat_id": "test-1",
     "status": "running",
@@ -449,6 +458,8 @@ Response:
 ```
 
 When no turn is running, `active_turn.status` is `idle`. The `last_turn` block also includes `stop_reason` when the previous turn stopped with a non-empty reason (e.g. `timeout`).
+
+The `continuity` block is populated from the per-harness `acp-lifecycle.jsonl` and `acp_restart_history.jsonl` files. It reports how the current ACP session was established (`resumed`, `rebuilt`, `new` or `unknown`), the most recent transport restart timestamp and reason, and the number of restarts within the configured backoff window.
 
 ## `GET /memory/{chat_id}`
 

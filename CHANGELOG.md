@@ -26,7 +26,7 @@ queues user messages when a chat is busy instead of returning an error.
   transport and only restarts on a transport failure or after a second stale
   failure from the new session.
 - Unrecoverable ACP configuration errors now return a graceful `ChatResult` and
-  set `last_stop_reason = "error"` instead of crashing the harness child.
+  set `last_stop_reason = "error"` instead of crashing the harness subprocess.
 
 ## 0.4.0 — 2026-08-26
 
@@ -62,7 +62,7 @@ independent.
 
 ### Summary
 Sanitized public release. The full historical master was squashed and cleaned to
-remove private persona content, body/intimacy plugin prototypes, and internal
+remove private persona content, sensitive persona plugin prototypes, and internal
 project references.
 
 ### What stayed public
@@ -75,10 +75,10 @@ project references.
 
 ### What was moved to the private persona repository
 - Private persona memory files.
-- Body/intimacy plugin.
+- Sensitive persona plugin.
 - Mesh/identity skeleton.
 - Persona migration tooling.
 
 ### Removed from history
 - Personal names, internal fleet names, private IP addresses, and old
-  persona/body identifiers.
+  private persona identifiers.

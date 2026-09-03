@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from diploid_agent.acp_client.errors import AcpTransportError
+from diploid_agent.acp_client.lifecycle import AcpRestartHistory
 from diploid_agent.acp_client.transport import AcpTransport
 
 
@@ -62,11 +63,18 @@ class FakeClient:
         self._loop: Any = None
         self._max_restarts = 3
         self._restart_backoff_window = 300.0
+        self._restart_history_store = AcpRestartHistory(None, 300.0)
         self._api_key = "test"
         self._startup_timeout = 30.0
         self.agent_bin = "/fake/devin"
         self.start_args: list[str] = []
         self._watchdog = FakeWatchdog()
+
+    def _check_restart_backoff(self) -> None:
+        self._restart_history_store.check(self._max_restarts)
+
+    def _record_restart_attempt(self) -> None:
+        self._restart_history_store.record()
 
 
 def _make_transport() -> AcpTransport:

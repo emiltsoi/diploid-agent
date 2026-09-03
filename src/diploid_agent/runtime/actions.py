@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import logging
 import time
+from datetime import datetime
 from typing import Any
 
 from diploid_agent.models import ChatResult, WakeEvent
@@ -116,6 +117,58 @@ class RuntimeActions:
     def engine(self) -> Any:
         return self._runtime.engine
 
+    def _continuity_status(self, chat_id: str, record: Any) -> dict[str, Any]:
+        """Return ACP continuity status for the active session."""
+        continuity: dict[str, Any] = {
+            "resume_enabled": self._runtime.config.engine.acp_resume_enabled,
+            "current_session_id": record.session_id,
+            "state": "unknown",
+            "state_reason": None,
+            "last_restart_at": None,
+            "last_restart_reason": None,
+            "restart_count_in_window": 0,
+        }
+        if self._runtime.lifecycle_log is None:
+            return continuity
+
+        events = self._runtime.lifecycle_log.recent_events(limit=500)
+        if not events:
+            return continuity
+
+        window = self._runtime.config.engine.acp_restart_backoff_window
+        now = time.time()
+        restart_events = [
+            e
+            for e in events
+            if e.get("event") == "transport.restart"
+            and now - datetime.fromisoformat(e["timestamp"]).timestamp() < window
+        ]
+        if restart_events:
+            last = restart_events[-1]
+            continuity["last_restart_at"] = last["timestamp"]
+            continuity["last_restart_reason"] = last.get("reason")
+            continuity["restart_count_in_window"] = len(restart_events)
+
+        # Determine whether the current session was resumed, rebuilt, or is new.
+        session_id = record.session_id
+        for event in reversed(events):
+            if event.get("session_id") != session_id:
+                continue
+            ev = event.get("event")
+            if ev in ("rehydrate.resume.success", "session.resume.success", "session.load.success"):
+                continuity["state"] = "resumed"
+                continuity["state_reason"] = event.get("reason")
+                break
+            if ev == "rehydrate.new_session.success":
+                continuity["state"] = "rebuilt"
+                continuity["state_reason"] = event.get("reason")
+                break
+            if ev == "session.new":
+                continuity["state"] = "new"
+                break
+
+        return continuity
+
     def status(self, chat_id: str) -> dict[str, Any]:
         """Return the harness-recorded status for a chat."""
         with self._lock:
@@ -162,6 +215,7 @@ class RuntimeActions:
                 "disabled_skills": record.disabled_skills,
                 "background_tasks": background_tasks,
                 "active_turn": active_turn,
+                "continuity": self._continuity_status(chat_id, record),
             }
 
     def list_sessions(self, chat_id: str) -> dict[str, Any]:

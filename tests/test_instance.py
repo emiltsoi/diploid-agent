@@ -57,7 +57,7 @@ def _dead_child(
     im = InstanceManager(sessions_root, instance_id, ttl_seconds=0.1)
     if im.acquire(chat_id):
         acquired_event.set()
-    # Intentionally do not release; the child exits and the fd/lock vanish.
+    # Intentionally do not release; the subprocess exits and the fd/lock vanish.
 
 
 def test_acquire_and_release(tmp_path: Path) -> None:
@@ -102,16 +102,16 @@ def test_two_real_processes_cannot_hold_same_chat(tmp_path: Path) -> None:
 
 def test_dead_child_releases_lock(tmp_path: Path) -> None:
     acquired_event = mp.Event()
-    child = mp.Process(
+    subprocess = mp.Process(
         target=_dead_child,
         args=(tmp_path, "chat-1", "i-dead", acquired_event),
     )
-    child.start()
+    subprocess.start()
     assert acquired_event.wait(timeout=5)
-    child.join(timeout=5)
-    assert not child.is_alive()
+    subprocess.join(timeout=5)
+    assert not subprocess.is_alive()
 
-    # Give the OS a moment to reap the child's file descriptor lock.
+    # Give the OS a moment to reap the subprocess's file descriptor lock.
     time.sleep(0.05)
 
     im = InstanceManager(tmp_path, "i-alive", ttl_seconds=2.0)
@@ -155,13 +155,13 @@ def test_different_thread_in_same_process_cannot_reenter(tmp_path: Path) -> None
 
 
 def test_pid_alive_treats_zombie_as_dead() -> None:
-    child = mp.Process(target=_do_nothing)
-    child.start()
-    child.terminate()
+    subprocess = mp.Process(target=_do_nothing)
+    subprocess.start()
+    subprocess.terminate()
     # Give the OS a moment to deliver the signal.
     time.sleep(0.1)
 
     im = InstanceManager(Path("/tmp"), "i-1")
-    # The child PID may still exist as a zombie before join() reaps it.
-    assert im._pid_alive(child.pid) is False
-    child.join(timeout=5)
+    # The subprocess PID may still exist as a zombie before join() reaps it.
+    assert im._pid_alive(subprocess.pid) is False
+    subprocess.join(timeout=5)

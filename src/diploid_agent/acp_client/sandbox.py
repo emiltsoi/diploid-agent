@@ -1,4 +1,4 @@
-"""Isolated HOME and fake systemctl setup for the ACP child."""
+"""Isolated HOME and fake systemctl setup for the ACP subprocess."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _SYSTEMCTL_WRAPPER = '''#!/usr/bin/env python3
-"""Sandboxed systemctl/reboot/shutdown wrapper for the ACP child."""
+"""Sandboxed systemctl/reboot/shutdown wrapper for the ACP subprocess."""
 import json
 import os
 import socket
@@ -109,14 +109,14 @@ if __name__ == "__main__":
 
 
 class AcpSandbox:
-    """Prepare and manage the isolated HOME for the ACP child."""
+    """Prepare and manage the isolated HOME for the ACP subprocess."""
 
     def __init__(self, service_name: str | None = None) -> None:
         self._service_name = service_name
         self.devin_home: Path | None = None
 
     def prepare(self, mcp_servers: list[dict[str, Any]] | None = None) -> None:
-        """Create an isolated HOME for the ACP child process and write configs.
+        """Create an isolated HOME for the ACP subprocess and write configs.
 
         Devin's bundled MCP config (e.g. `~/.codeium/windsurf/mcp_config.json`)
         can include MCP servers that deadlock or saturate and block `devin acp`
@@ -126,7 +126,7 @@ class AcpSandbox:
         """
         if self.devin_home is not None and self.devin_home.exists():
             # Re-sanitize the MCP config on every (re)start in case the previous
-            # `devin` child wrote to it.
+            # `devin` subprocess wrote to it.
             self.write_mcp_configs(mcp_servers)
             return
 
@@ -136,9 +136,9 @@ class AcpSandbox:
         codeium_dir = self.devin_home / ".codeium" / "windsurf"
         codeium_dir.mkdir(parents=True, exist_ok=True)
 
-        # Sandbox the ACP child: create a private runtime dir and fake systemctl
+        # Sandbox the ACP subprocess: create a private runtime dir and fake systemctl
         # wrapper so the model cannot run raw `systemctl --user restart` from the
-        # child. Restart requests are routed through the harness control socket.
+        # subprocess. Restart requests are routed through the harness control socket.
         (self.devin_home / ".run").mkdir(parents=True, exist_ok=True)
         self._write_sandbox_binaries()
 
@@ -156,7 +156,7 @@ class AcpSandbox:
         self.write_mcp_configs(mcp_servers)
 
     def cleanup(self) -> None:
-        """Remove the isolated HOME created for the ACP child."""
+        """Remove the isolated HOME created for the ACP subprocess."""
         home = self.devin_home
         self.devin_home = None
         if home is not None and home.exists():
@@ -173,7 +173,7 @@ class AcpSandbox:
 
         `devin acp` 3000.6.7+ loads MCP servers from `mcp_config.json` at
         process startup, so the isolated home must contain the active servers
-        before the child is spawned.
+        before the subprocess is spawned.
         """
         if self.devin_home is None:
             return
@@ -216,7 +216,7 @@ class AcpSandbox:
     def _write_sandbox_binaries(self) -> None:
         """Install fake system control binaries into the isolated HOME.
 
-        The ACP child inherits the real host `PATH` and can run
+        The ACP subprocess inherits the real host `PATH` and can run
         `systemctl --user restart <service>` while in `bypass` mode. These
         wrappers intercept those calls and forward them to the harness control
         socket, where the restart can be scheduled gracefully.
@@ -257,7 +257,7 @@ class AcpSandbox:
 
         The ACP `session/new` payload expects `env` as a map of strings, while
         the harness stores it as a list of `KEY=VALUE` strings. Convert any
-        non-empty list to a dict before sending it to the ACP child.
+        non-empty list to a dict before sending it to the ACP subprocess.
         """
         if not mcp_servers:
             return []

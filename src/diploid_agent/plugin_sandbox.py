@@ -22,6 +22,7 @@ from diploid_agent.plugins.contexts import (
     EngineResultContext,
     PromptBuildContext,
     RecordTurnContext,
+    RehydrationReason,
     TurnStartContext,
 )
 from diploid_agent.testing.fake_runtime import FakePluginRuntime
@@ -88,6 +89,7 @@ def _exercise_plugin(plugin: StatePlugin, chat_id: str) -> None:
             record=None,
             model="swe-1-7",
             is_first=False,
+            rehydration_reason=RehydrationReason.NONE,
         )
     )
 

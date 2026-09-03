@@ -61,9 +61,6 @@ class AcpTransport:
         self._initialized = False
         self._transport_healthy = False
 
-        # Restart backoff.
-        self._restart_history: list[float] = []
-
     # ------------------------------------------------------------------ public
 
     def healthy(self) -> bool:
@@ -189,7 +186,7 @@ class AcpTransport:
         except RuntimeError as exc:
             # Anything that is still a plain RuntimeError at this point is
             # unexpected; treat it as a transport failure so the caller can
-            # restart cleanly instead of crashing the service child.
+            # restart cleanly instead of crashing the service subprocess.
             self._transport_healthy = False
             raise AcpTransportError(
                 getattr(coro, "__name__", "acp.run"),
@@ -198,7 +195,7 @@ class AcpTransport:
         except (OSError, ConnectionError) as exc:
             # Broken pipes and closed transports surface as OS-level errors.
             # Convert them to transport errors so the harness treats them as
-            # recoverable rather than crashing the service child.
+            # recoverable rather than crashing the service subprocess.
             self._transport_healthy = False
             raise AcpTransportError(
                 getattr(coro, "__name__", "acp.run"),
@@ -223,7 +220,7 @@ class AcpTransport:
     # ---------------------------------------------------------------- internal
 
     def _is_transport_healthy(self) -> bool:
-        """Check whether the running ACP child and event loop are still usable."""
+        """Check whether the running ACP subprocess and event loop are still usable."""
         if not self._initialized:
             return False
         if self._loop is None or self._loop.is_closed() or not self._loop.is_running():
@@ -233,7 +230,7 @@ class AcpTransport:
         return self._proc.returncode is None
 
     def _cleanup_stale_transport(self) -> None:
-        """Kill a dead child and stop its event loop so a fresh one can start."""
+        """Kill a dead subprocess and stop its event loop so a fresh one can start."""
         if self._proc is not None:
             if self._proc.returncode is None:
                 try:
@@ -272,7 +269,7 @@ class AcpTransport:
                 "XDG_CACHE_HOME",
                 str(Path.home() / ".cache"),
             )
-            # Isolate the child from the user's systemd/D-Bus session so it cannot
+            # Isolate the subprocess from the user's systemd/D-Bus session so it cannot
             # run raw `systemctl --user restart ...` directly. Restarts go through
             # the fake binaries in .local/bin and the harness control socket.
             env["XDG_RUNTIME_DIR"] = str(self._client._sandbox.devin_home / ".run")
@@ -513,27 +510,14 @@ class AcpTransport:
 
     def _check_restart_backoff(self) -> None:
         """Raise AcpTransportError if we have restarted too many times recently."""
-        now = time.monotonic()
-        cutoff = now - self._client._restart_backoff_window
-        self._restart_history = [t for t in self._restart_history if t > cutoff]
-        if self._client._max_restarts and len(self._restart_history) >= self._client._max_restarts:
-            raise AcpTransportError(
-                "acp.restart",
-                msg=(
-                    f"ACP transport has been restarted {len(self._restart_history)} times "
-                    f"in the last {self._client._restart_backoff_window}s; giving up"
-                ),
-            )
+        self._client._check_restart_backoff()
 
     def _record_restart_attempt(self) -> None:
         """Record that we are about to (re)start the ACP transport."""
-        now = time.monotonic()
-        cutoff = now - self._client._restart_backoff_window
-        self._restart_history = [t for t in self._restart_history if t > cutoff]
-        self._restart_history.append(now)
+        self._client._record_restart_attempt()
 
     def _kill_process_group(self, proc: asyncio.subprocess.Process) -> None:
-        """Kill the child and any spawned descendants."""
+        """Kill the subprocess and any spawned descendants."""
         try:
             proc.kill()
             os.killpg(proc.pid, signal.SIGKILL)

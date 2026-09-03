@@ -1,4 +1,4 @@
-"""ACP control socket listener for restart requests from the ACP child."""
+"""ACP control socket listener for restart requests from the ACP subprocess."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class ControlListener:
-    """Listen on a private Unix socket for restart requests from the ACP child.
+    """Listen on a private Unix socket for restart requests from the ACP subprocess.
 
     The fake systemctl wrapper installed in the isolated ACP HOME sends
     JSON-RPC-ish restart requests here instead of running real systemctl.
@@ -142,7 +142,7 @@ class ControlListener:
             pass
 
     def env(self) -> dict[str, str]:
-        """Return environment variables needed by the ACP child wrapper."""
+        """Return environment variables needed by the ACP subprocess wrapper."""
         return {
             "DIPLOID_CONTROL_SOCKET": str(self._control_socket_path),
             "DIPLOID_SERVICE_NAME": self._service_name or "unknown.service",

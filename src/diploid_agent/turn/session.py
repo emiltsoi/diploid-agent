@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from diploid_agent.engine import TurnRequest
 from diploid_agent.models import ChatResult, SessionRecord
 from diploid_agent.plugins.contexts import (
+    RehydrationReason,
     SessionActiveContext,
     SessionArchiveContext,
     SessionClearContext,
@@ -370,6 +371,7 @@ class TurnSession:
                     skill_names=start_ctx.skill_names,
                     mcp_names=None,
                     rehydrated=True,
+                    rehydration_reason=RehydrationReason.STALE,
                 )
                 prompt = pctx.prompt
                 memory_flags = pctx.memory_flags
@@ -417,6 +419,8 @@ class TurnSession:
                 user_message,
                 source,
                 skill_names=source_skill_names,
+                rehydrated=True,
+                rehydration_reason=RehydrationReason.RESUMED,
             )
             prompt = pctx.prompt
             memory_flags = pctx.memory_flags
@@ -539,6 +543,8 @@ class TurnSession:
                 user_message,
                 source,
                 skill_names=source_skill_names,
+                rehydrated=True,
+                rehydration_reason=RehydrationReason.RESUMED,
             )
             prompt = pctx.prompt
             notice = pctx.notice
@@ -566,6 +572,8 @@ class TurnSession:
                 model=use_model,
                 skill_names=start_ctx.skill_names,
                 mcp_names=None,
+                rehydrated=True,
+                rehydration_reason=RehydrationReason.STALE,
             )
             prompt = pctx.prompt
             notice = pctx.notice

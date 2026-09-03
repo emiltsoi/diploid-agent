@@ -295,10 +295,10 @@ class _ChunkingEngine(AgentEngine):
     def close(self) -> None:
         pass
 
-    def restart(self) -> None:
+    def restart(self, reason: str | None = None) -> None:
         pass
 
-    def restart_transport(self) -> None:
+    def restart_transport(self, reason: str | None = None) -> None:
         pass
 
     def is_stale_session_error(self, exc: BaseException) -> bool:
@@ -354,7 +354,7 @@ def test_agent_runtime_restarts_transport(tmp_path: Path) -> None:
     called: list[bool] = []
 
     class _RestartEngine(_ChunkingEngine):
-        def restart(self) -> None:
+        def restart(self, reason: str | None = None) -> None:
             called.append(True)
 
     runtime.engine = _RestartEngine()

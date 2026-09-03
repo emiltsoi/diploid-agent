@@ -7,7 +7,7 @@ from typing import Any
 
 
 class AcpError(RuntimeError):
-    """Base class for ACP JSON-RPC errors returned by the child process."""
+    """Base class for ACP JSON-RPC errors returned by the subprocess."""
 
     def __init__(self, method: str, error: dict[str, Any]) -> None:
         self.method = method
@@ -19,7 +19,7 @@ class AcpError(RuntimeError):
 
 
 class AcpTransportError(AcpError):
-    """The ACP transport itself did not respond or the child process died."""
+    """The ACP transport itself did not respond or the subprocess died."""
 
     def __init__(self, method: str, error: dict[str, Any] | None = None, msg: str = "") -> None:
         if error is None:
@@ -32,11 +32,11 @@ class AcpSessionStaleError(AcpError):
 
 
 class AcpModelError(AcpError):
-    """The requested model is not available to the ACP child."""
+    """The requested model is not available to the ACP subprocess."""
 
 
 class AcpMcpError(AcpError):
-    """The MCP server configuration was rejected by the ACP child."""
+    """The MCP server configuration was rejected by the ACP subprocess."""
 
 
 def _acp_error_from_response(method: str, error: dict[str, Any]) -> AcpError:

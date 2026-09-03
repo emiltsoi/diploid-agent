@@ -13,6 +13,7 @@ from diploid_agent.plugins.contexts import (
     EngineCallContext,
     EngineResultContext,
     RecordTurnContext,
+    RehydrationReason,
     TurnErrorContext,
     TurnStartContext,
 )
@@ -108,29 +109,97 @@ class TurnProcess:
             return
         message_text = wake_event.payload.get("message_text") or ""
         thought_text = wake_event.payload.get("thought_text") or ""
-        active.message_text = message_text[-_MAX_THOUGHT_TEXT_CHARS:]
+        thought_prefix = wake_event.payload.get("thought_prefix") or ""
         active.thought_text = thought_text[-_MAX_THOUGHT_TEXT_CHARS:]
-        active.full_text = active.thought_text + active.message_text
+        active.thought_prefix = thought_prefix or thought_text[:_MAX_THOUGHT_TEXT_CHARS]
+        active.full_text = active.thought_text + message_text
+        active.thought_total = wake_event.payload.get("thought_total") or len(active.thought_text)
+        active.full_text_offset = wake_event.payload.get("full_text_offset") or 0
         self._recompute_message_text(active)
 
     @staticmethod
+    def _append_full_text(active: ActiveTurn, text: str) -> None:
+        """Append an agent_message chunk, keeping full_text as a rolling window.
+
+        When the buffer grows past _MAX_THOUGHT_TEXT_CHARS we drop the oldest
+        prefix (which is part of the thought) and adjust full_text_offset so
+        message_text can still be computed correctly.
+        """
+        active.full_text += text
+        excess = len(active.full_text) - _MAX_THOUGHT_TEXT_CHARS
+        if excess > 0:
+            dropped = active.full_text[:excess]
+            active.full_text_offset += len(dropped)
+            active.full_text = active.full_text[excess:]
+
+    @staticmethod
+    def _full_text_has_thought_prefix(active: ActiveTurn) -> bool:
+        """Return True if the retained full_text window starts within the thought.
+
+        For short thoughts, full_text must simply start with the thought_text.
+        For long (capped) thoughts, we compare the first _MAX chars of the
+        thought against the retained window starting at full_text_offset.
+        """
+        if not active.thought_total or not active.full_text:
+            return False
+        if active.thought_total <= _MAX_THOUGHT_TEXT_CHARS:
+            return active.full_text.startswith(active.thought_text)
+        # The thought is longer than the cap. The first _MAX chars are in
+        # thought_prefix; the retained window starts at full_text_offset.
+        prefix_start = active.full_text_offset
+        prefix_end = min(_MAX_THOUGHT_TEXT_CHARS, prefix_start + len(active.full_text))
+        if prefix_end <= prefix_start:
+            return False
+        return (
+            active.full_text[: prefix_end - prefix_start]
+            == active.thought_prefix[prefix_start:prefix_end]
+        )
+
+    @staticmethod
     def _recompute_message_text(active: ActiveTurn) -> None:
-        """Keep message_text as full_text with the current thought prefix removed."""
-        if not active.thought_text or not active.full_text:
-            active.message_text = active.full_text
-        elif active.full_text.startswith(active.thought_text):
-            active.message_text = active.full_text[len(active.thought_text) :]
+        """Keep message_text as the part of full_text after the thought prefix.
+
+        thought_total is the cumulative length of agent_thought updates.
+        full_text_offset is how much of the agent_message stream has been
+        discarded from the front. We only remove the thought prefix if we can
+        verify that full_text actually contains it; otherwise the ACP subprocess
+        streams the answer and thought on separate channels.
+        """
+        if not active.full_text:
+            active.message_text = ""
+            return
+        if active.thought_total > 0 and TurnProcess._full_text_has_thought_prefix(active):
+            start = max(0, active.thought_total - active.full_text_offset)
+            active.message_text = active.full_text[start:]
         else:
             active.message_text = active.full_text
         if len(active.message_text) > _MAX_THOUGHT_TEXT_CHARS:
             active.message_text = active.message_text[-_MAX_THOUGHT_TEXT_CHARS:]
 
     @staticmethod
+    def _append_thought_text(active: ActiveTurn, text: str) -> None:
+        """Append an agent_thought update and bump the cumulative counter."""
+        active.thought_text += text
+        active.thought_prefix += text
+        active.thought_total += len(text)
+        if len(active.thought_text) > _MAX_THOUGHT_TEXT_CHARS:
+            active.thought_text = active.thought_text[-_MAX_THOUGHT_TEXT_CHARS:]
+        if len(active.thought_prefix) > _MAX_THOUGHT_TEXT_CHARS:
+            active.thought_prefix = active.thought_prefix[:_MAX_THOUGHT_TEXT_CHARS]
+
+    @staticmethod
     def _final_reply_text(active: ActiveTurn, reply: str) -> str:
         """Return the final reply with any leading thought text removed."""
-        thought = active.thought_text
+        if not active.thought_total:
+            return reply
+        # For short thoughts the full thought_text is still accurate; for long
+        # (capped) thoughts we verify with the first _MAX chars prefix.
+        if active.thought_total <= _MAX_THOUGHT_TEXT_CHARS:
+            thought = active.thought_text
+        else:
+            thought = active.thought_prefix
         if thought and reply.startswith(thought):
-            return reply[len(thought) :].lstrip("\n")
+            return reply[active.thought_total :].lstrip("\n")
         return reply
 
     def process(
@@ -219,7 +288,15 @@ class TurnProcess:
                     continuation_anchor=continuation_anchor,
                     wake_event=wake_event,
                     other_instance_running=other_instance_running,
+                    rehydrated=hard_timeout_before,
+                    rehydration_reason=RehydrationReason.TIMEOUT if hard_timeout_before else None,
                 )
+                if hard_timeout_before and self.runtime.lifecycle_log is not None:
+                    self.runtime.lifecycle_log.write(
+                        "rehydrate.timeout",
+                        chat_id=chat_id,
+                        reason=RehydrationReason.TIMEOUT.value,
+                    )
                 prompt = pctx.prompt
                 notice = pctx.notice
                 memory_flags = pctx.memory_flags
@@ -288,6 +365,9 @@ class TurnProcess:
                     user_message=user_message,
                     message_text=a.message_text,
                     thought_text=a.thought_text,
+                    thought_prefix=a.thought_prefix,
+                    thought_total=a.thought_total,
+                    full_text_offset=a.full_text_offset,
                     updated_at=time.time(),
                 ),
             )
@@ -296,9 +376,7 @@ class TurnProcess:
             with self.runtime._lock:
                 a = self.runtime._active_turns.get(chat_id)
                 if a:
-                    a.full_text += text
-                    if len(a.full_text) > _MAX_THOUGHT_TEXT_CHARS:
-                        a.full_text = a.full_text[-_MAX_THOUGHT_TEXT_CHARS:]
+                    self._append_full_text(a, text)
                     self._recompute_message_text(a)
             if a:
                 with a._condition:
@@ -320,9 +398,7 @@ class TurnProcess:
             with self.runtime._lock:
                 a = self.runtime._active_turns.get(chat_id)
                 if a:
-                    a.thought_text += text
-                    if len(a.thought_text) > _MAX_THOUGHT_TEXT_CHARS:
-                        a.thought_text = a.thought_text[-_MAX_THOUGHT_TEXT_CHARS:]
+                    self._append_thought_text(a, text)
                     self._recompute_message_text(a)
             if a:
                 with a._condition:

@@ -1211,7 +1211,7 @@ def test_stream_turn_splits_intermediate_messages(tmp_path: Path, monkeypatch: A
         {"status": "running", "message_text": "I’ll check.", "thought_text": ""},
         {
             "status": "running",
-            "message_text": "I’ll check.\n\nDone, love.",
+            "message_text": "I’ll check.\n\nDone, thanks.",
             "thought_text": "",
         },
     ]
@@ -1225,7 +1225,7 @@ def test_stream_turn_splits_intermediate_messages(tmp_path: Path, monkeypatch: A
             return self.ticks > len(statuses)
 
         def result(self) -> dict[str, Any]:
-            return {"reply": "I’ll check.\n\nDone, love.", "notice": None}
+            return {"reply": "I’ll check.\n\nDone, thanks.", "notice": None}
 
         def cancel(self) -> None:
             pass
@@ -1276,12 +1276,12 @@ def test_stream_turn_splits_intermediate_messages(tmp_path: Path, monkeypatch: A
 
     # The new placeholder was edited with the full text.
     assert any(
-        mid == 101 and "I’ll check." in txt and "Done, love." in txt for mid, txt in edit_history
+        mid == 101 and "I’ll check." in txt and "Done, thanks." in txt for mid, txt in edit_history
     )
 
     # The final reply was sliced to avoid duplicating the committed text.
     assert len(send_text_calls) == 1
-    assert send_text_calls[0][1] == "Done, love."
+    assert send_text_calls[0][1] == "Done, thanks."
     assert send_text_calls[0][2] == 101
 
 
@@ -1307,7 +1307,7 @@ def test_stream_turn_no_split_when_intermediate_messages_disabled(
         {"status": "running", "message_text": "I’ll check.", "thought_text": ""},
         {
             "status": "running",
-            "message_text": "I’ll check.\n\nDone, love.",
+            "message_text": "I’ll check.\n\nDone, thanks.",
             "thought_text": "",
         },
     ]
@@ -1321,7 +1321,7 @@ def test_stream_turn_no_split_when_intermediate_messages_disabled(
             return self.ticks > len(statuses)
 
         def result(self) -> dict[str, Any]:
-            return {"reply": "I’ll check.\n\nDone, love.", "notice": None}
+            return {"reply": "I’ll check.\n\nDone, thanks.", "notice": None}
 
         def cancel(self) -> None:
             pass
@@ -1360,7 +1360,7 @@ def test_stream_turn_no_split_when_intermediate_messages_disabled(
     # No extra placeholder was sent and the full reply replaced message 42.
     assert not sent_messages
     assert len(send_text_calls) == 1
-    assert send_text_calls[0][1] == "I’ll check.\n\nDone, love."
+    assert send_text_calls[0][1] == "I’ll check.\n\nDone, thanks."
     assert send_text_calls[0][2] == 42
 
 

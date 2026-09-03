@@ -68,7 +68,7 @@ POLLER_PID=$!
   --config "$CONFIG" &
 INGRESS_PID=$!
 
-# If the script is stopped, stop both children.
+# If the script is stopped, stop both subprocesses.
 cleanup() {
   kill "$POLLER_PID" "$INGRESS_PID" 2>/dev/null || true
   for pid in "$POLLER_PID" "$INGRESS_PID"; do
@@ -77,8 +77,8 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# Wait for either child to exit. As soon as one dies, the script exits with
-# that child's exit code so systemd can restart the pair on failure.
+# Wait for either subprocess to exit. As soon as one dies, the script exits with
+# that subprocess's exit code so systemd can restart the pair on failure.
 set +e
 wait -n
 EXIT_CODE=$?

@@ -4,12 +4,25 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
 from diploid_agent.dispatch import Dispatch
 from diploid_agent.engine.base import TurnRequest, TurnResult
 from diploid_agent.models import ChatResult, SessionRecord
+
+
+class RehydrationReason(Enum):
+    """Why the ACP session had to be re-created for this turn."""
+
+    NONE = "none"
+    RESUMED = "resumed"
+    STALE = "stale"
+    TIMEOUT = "timeout"
+    TRANSPORT_ERROR = "transport_error"
+    RESTART = "restart"
+    FRESH = "fresh"
 
 
 @dataclass
@@ -60,6 +73,7 @@ class PromptBuildContext:
     is_first: bool
     continuation_anchor: str | None = None
     rehydrated: bool = False
+    rehydration_reason: RehydrationReason = RehydrationReason.NONE
 
 
 @dataclass

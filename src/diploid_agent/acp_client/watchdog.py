@@ -57,7 +57,7 @@ class PromptWatchdog:
             if client._inflight_future is None or client._inflight_future.done():
                 return
 
-            # If the child process has already exited, the transport is dead and
+            # If the subprocess has already exited, the transport is dead and
             # recovery should start immediately.
             if client._proc is not None and client._proc.returncode is not None:
                 logger.warning(
@@ -85,7 +85,7 @@ class PromptWatchdog:
         # not killed by the watchdog for time; they are governed by their own
         # `soft_timeout` (client-side cancel that returns a partial reply) and by
         # the overall `_run` deadline. The transport-death check above already
-        # handles an exited child.
+        # handles an exited subprocess.
         if has_pending and not has_prompt:
             if call_deadline and now > call_deadline:
                 logger.warning(
@@ -103,11 +103,21 @@ class PromptWatchdog:
                 return
 
     def _stall_recovery(self) -> None:
-        """Kill the ACP child and unblock the in-flight caller (watchdog path)."""
+        """Kill the ACP subprocess and unblock the in-flight caller (watchdog path)."""
         client = self._client
         with client._lock:
             if client.metrics is not None:
                 client.metrics.inc("acp_watchdog_fired_total")
+            lifecycle_log = getattr(client, "_lifecycle_log", None)
+            if lifecycle_log is not None:
+                lifecycle_log.write(
+                    "transport.restart",
+                    reason="watchdog_stall",
+                    detail={"killed": True},
+                )
+            record_restart = getattr(client, "_record_restart_attempt", None)
+            if record_restart is not None:
+                record_restart()
 
         client._unblock_inflight("ACP transport watchdog detected a stall")
 

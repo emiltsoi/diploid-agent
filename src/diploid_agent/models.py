@@ -104,7 +104,10 @@ class ActiveTurn:
     start_time: float
     message_text: str = ""
     thought_text: str = ""
+    thought_prefix: str = ""
     full_text: str = ""
+    thought_total: int = 0
+    full_text_offset: int = 0
     stopped: bool = False
     _condition: threading.Condition = field(default_factory=threading.Condition, repr=False)
 
@@ -145,6 +148,9 @@ class PartialTurn:
     user_message: str
     message_text: str = ""
     thought_text: str = ""
+    thought_prefix: str = ""
+    thought_total: int = 0
+    full_text_offset: int = 0
     updated_at: float = 0.0
 
 

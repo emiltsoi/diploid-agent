@@ -102,7 +102,7 @@ agent to manually prune the transcript.
 
 Which MCP servers are active is a chat-level policy, not a transport detail.
 The harness keeps the configured server definitions and the per-chat enabled set,
-writes them to an isolated `mcp_config.json` in the ACP child's `HOME`, and passes
+writes them to an isolated `mcp_config.json` in the ACP subprocess's `HOME`, and passes
 `mcpServers: []` to `session/new`. `devin acp` 3000.6.7+ loads its MCP servers from
 that file and rejects inline definitions in the `session/new` payload. This lets
 Telegram and HTTP callers enable or disable servers per chat, and lets the harness
@@ -142,7 +142,7 @@ skills are discovered.
 
 Telegram shows edited placeholder text in the same message. When a reply
 contains a statement like "I’ll check..." followed by a tool-call pause and then
-"Done, love.", the user sees both sentences mashed together in one message that
+"Done, thanks.", the user sees both sentences mashed together in one message that
 was rewritten in place. That is confusing and hides the real pause.
 
 The `intermediate_messages` feature watches the streamed text. When it pauses

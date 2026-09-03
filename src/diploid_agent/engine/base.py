@@ -86,7 +86,7 @@ class AgentEngine(abc.ABC):
     def close(self) -> None:
         """Close the engine and release resources."""
 
-    def restart(self) -> None:
+    def restart(self, reason: str | None = None) -> None:
         """Restart the underlying transport, if supported."""
         return
 

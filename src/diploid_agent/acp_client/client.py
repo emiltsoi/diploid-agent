@@ -27,6 +27,7 @@ from diploid_agent.acp_client.errors import (
     AcpTransportError,
     _acp_error_from_response,
 )
+from diploid_agent.acp_client.lifecycle import AcpLifecycleLog, AcpRestartHistory
 from diploid_agent.acp_client.sandbox import AcpSandbox
 from diploid_agent.acp_client.transport import AcpTransport
 from diploid_agent.acp_client.types import AcpPromptResult, _Prompt
@@ -88,6 +89,7 @@ class AcpClient:
         metrics: Any | None = None,
         service_name: str | None = None,
         on_service_restart: Callable[[str, str], None] | None = None,
+        lifecycle_log: AcpLifecycleLog | None = None,
     ):
         self.model = _normalize_model(model)
         self.acp_mode = _ACP_MODE_MAP.get(permission_mode, "bypass")
@@ -132,10 +134,18 @@ class AcpClient:
         self._max_restarts = max(0, max_restarts)
         self._restart_backoff_window = max(1.0, restart_backoff_window)
 
-        # Service restart support: the child can request a controlled restart
+        # Service restart support: the subprocess can request a controlled restart
         # through a private Unix socket instead of killing the parent directly.
         self._service_name = service_name
         self._on_service_restart = on_service_restart
+        self._lifecycle_log = lifecycle_log
+        restart_history_path = None
+        if lifecycle_log is not None:
+            restart_history_path = lifecycle_log.path.parent / "acp_restart_history.jsonl"
+        self._restart_history_store = AcpRestartHistory(
+            restart_history_path,
+            self._restart_backoff_window,
+        )
         self._sandbox = AcpSandbox(service_name=service_name)
         self._control = ControlListener(
             service_name=service_name or "unknown.service",
@@ -338,6 +348,8 @@ class AcpClient:
         with self._lock:
             if not self._initialized or self._loop is None:
                 return
+            if self._lifecycle_log is not None:
+                self._lifecycle_log.write("transport.stop")
             self._initialized = False
             self._transport_healthy = False
             try:
@@ -403,18 +415,18 @@ class AcpClient:
 
     def _check_restart_backoff(self) -> None:
         """Raise AcpTransportError if we have restarted too many times recently."""
-        self._transport._check_restart_backoff()
+        self._restart_history_store.check(self._max_restarts)
 
     def _record_restart_attempt(self) -> None:
         """Record that we are about to (re)start the ACP transport."""
-        self._transport._record_restart_attempt()
+        self._restart_history_store.record()
 
     def _unblock_inflight(self, reason: str) -> None:
         """Set an exception on the in-flight _run future and cancel active prompts."""
         self._transport._unblock_inflight(reason)
 
     def _kill_process_group(self, proc: asyncio.subprocess.Process) -> None:
-        """Kill the child and any spawned descendants."""
+        """Kill the subprocess and any spawned descendants."""
         self._transport._kill_process_group(proc)
 
     def _run(self, coro: Any, timeout: float | None = None) -> Any:
@@ -469,6 +481,13 @@ class AcpClient:
                     self._sandbox.prepare(target)
 
             if needs_restart:
+                if self._lifecycle_log is not None:
+                    self._lifecycle_log.write(
+                        "transport.restart",
+                        reason="mcp_change",
+                        detail={"mcp_servers": [s.get("name") for s in (target or [])]},
+                    )
+                self._record_restart_attempt()
                 self.close()
                 # close() sets _initialized=False and clears the transport. Loop
                 # back to start a fresh one with the new target list.
@@ -504,11 +523,19 @@ class AcpClient:
                 self._initialized = True
                 self._mcp_servers = target
                 self._transport_healthy = True
+            if self._lifecycle_log is not None:
+                self._lifecycle_log.write("transport.start")
             return
 
-    def restart_transport(self) -> None:
+    def restart_transport(self, reason: str | None = None) -> None:
         """Kill the ACP subprocess and start a fresh one."""
         logger.warning("Restarting ACP transport")
+        if self._lifecycle_log is not None:
+            self._lifecycle_log.write(
+                "transport.restart",
+                reason=reason,
+                detail={"reason": reason} if reason else None,
+            )
         self._check_restart_backoff()
         self._record_restart_attempt()
         if self.metrics is not None:
@@ -609,7 +636,7 @@ class AcpClient:
         ``session/load`` so the harness works with both current and future ACP
         servers.
 
-        The active MCP server list is written to the ACP child's
+        The active MCP server list is written to the ACP subprocess's
         ``mcp_config.json`` by ``_prepare_devin_home``; ``devin acp`` 3000.6.7+
         rejects inline ``mcpServers`` definitions in the resume/load payload, so
         we pass an empty list just like we do for ``session/new``.
@@ -631,6 +658,15 @@ class AcpClient:
             "mcpServers": [],
         }
 
+        if self._lifecycle_log is not None:
+            self._lifecycle_log.write(
+                "session.resume.attempt",
+                session_id=session_id,
+                model=use_model,
+                detail={"cwd": str(use_cwd)},
+            )
+
+        resume_method = "resume"
         try:
             call_timeout = self._control.call_timeout()
             try:
@@ -644,6 +680,7 @@ class AcpClient:
                     logger.debug(
                         "session/resume not supported; trying session/load for %s", session_id
                     )
+                    resume_method = "load"
                     await self._call(
                         "session/load",
                         load_params,
@@ -652,13 +689,27 @@ class AcpClient:
                 else:
                     raise
             await self._apply_session_config(session_id, use_model, timeout=call_timeout)
-        except (AcpError, TimeoutError):
+        except (AcpError, TimeoutError) as exc:
             if self.metrics is not None:
                 self.metrics.inc("acp_resume_failures_total")
+            if self._lifecycle_log is not None:
+                self._lifecycle_log.write(
+                    "session.resume.failure",
+                    session_id=session_id,
+                    model=use_model,
+                    detail={"cwd": str(use_cwd), "error": str(exc)},
+                )
             raise
 
         if self.metrics is not None:
             self.metrics.inc("acp_resumes_total")
+        if self._lifecycle_log is not None:
+            self._lifecycle_log.write(
+                "session.resume.success",
+                session_id=session_id,
+                model=use_model,
+                detail={"cwd": str(use_cwd), "method": resume_method},
+            )
         return session_id
 
     async def _session_load(
@@ -679,6 +730,13 @@ class AcpClient:
         # write the correct mcp_config.json.
         if mcp_servers is not None:
             self._mcp_servers = self._sandbox.normalize_mcp_servers(mcp_servers)
+        if self._lifecycle_log is not None:
+            self._lifecycle_log.write(
+                "session.load.attempt",
+                session_id=session_id,
+                model=use_model,
+                detail={"cwd": str(use_cwd)},
+            )
         call_timeout = self._control.call_timeout()
         try:
             await self._call(
@@ -691,13 +749,27 @@ class AcpClient:
                 timeout=call_timeout,
             )
             await self._apply_session_config(session_id, use_model, timeout=call_timeout)
-        except (AcpError, TimeoutError):
+        except (AcpError, TimeoutError) as exc:
             if self.metrics is not None:
                 self.metrics.inc("acp_resume_failures_total")
+            if self._lifecycle_log is not None:
+                self._lifecycle_log.write(
+                    "session.load.failure",
+                    session_id=session_id,
+                    model=use_model,
+                    detail={"cwd": str(use_cwd), "error": str(exc)},
+                )
             raise
 
         if self.metrics is not None:
             self.metrics.inc("acp_resumes_total")
+        if self._lifecycle_log is not None:
+            self._lifecycle_log.write(
+                "session.load.success",
+                session_id=session_id,
+                model=use_model,
+                detail={"cwd": str(use_cwd)},
+            )
         return session_id
 
     async def _apply_session_config(
@@ -742,7 +814,7 @@ class AcpClient:
         # parameter; passing them produces "data did not match any variant of
         # untagged enum McpServer".  Pass an empty list and rely on the config
         # file so the active server list is still honored.
-        # Cap session/new so a hung child restart (e.g. slow MCP server init)
+        # Cap session/new so a hung subprocess restart (e.g. slow MCP server init)
         # does not hold the harness lock for multiple minutes. The watchdog
         # stall threshold is also bounded by _watchdog_timeout, so align the
         # call timeout with that ceiling (at least 60s to allow normal init).
@@ -753,6 +825,13 @@ class AcpClient:
             timeout=session_new_timeout,
         )
         session_id = session["sessionId"]
+        if self._lifecycle_log is not None:
+            self._lifecycle_log.write(
+                "session.new",
+                session_id=session_id,
+                model=use_model,
+                detail={"cwd": str(use_cwd)},
+            )
 
         if self._model_options is None:
             self._model_options = self._extract_model_options(session)
@@ -781,7 +860,7 @@ class AcpClient:
         use_model = _normalize_model(model or self.model)
         # Only set the session model on follow-up when it has changed. Repeated
         # no-op model changes can re-render the session's system prefix and
-        # destabilize the ACP child.
+        # destabilize the ACP subprocess.
         if self._session_models.get(session_id) != use_model:
             await self._call(
                 "session/set_config_option",

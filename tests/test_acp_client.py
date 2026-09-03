@@ -2,6 +2,7 @@
 
 import asyncio
 import concurrent.futures
+import json
 import os
 import subprocess
 import threading
@@ -17,6 +18,7 @@ from diploid_agent.acp_client import (
     AcpMcpError,
     AcpModelError,
     AcpPromptResult,
+    AcpRestartHistory,
     AcpSessionStaleError,
     AcpTransportError,
     _acp_error_from_response,
@@ -585,7 +587,7 @@ def test_watchdog_waits_for_prompt_soft_timeout() -> None:
 def test_watchdog_does_not_kill_prompt_after_soft_timeout() -> None:
     """The prompt watchdog does not kill a prompt just because soft_timeout passed.
 
-    A soft timeout triggers a client-side cancel and a partial reply; the child
+    A soft timeout triggers a client-side cancel and a partial reply; the subprocess
     is only killed if the process exits or the explicit hard `timeout` deadline
     is exceeded.
     """
@@ -742,7 +744,7 @@ class ExitedFakeProcess(FakeProcess):
 
 
 def test_watchdog_fires_when_child_process_exits() -> None:
-    """The watchdog triggers recovery immediately when the child has exited."""
+    """The watchdog triggers recovery immediately when the subprocess has exited."""
     client = AcpClient(agent_bin="/bin/true", api_key="test-key")
     client._control_timeout = 0.05
     client._loop = asyncio.new_event_loop()
@@ -825,6 +827,24 @@ def test_watchdog_does_not_kill_silent_prompt_before_soft_timeout() -> None:
     assert not inflight.done()
 
 
+def test_restart_history_persists_to_disk(tmp_path: Path) -> None:
+    """AcpRestartHistory loads previous restart attempts from disk."""
+    path = tmp_path / "acp_restart_history.jsonl"
+    now = time.time()
+    with path.open("w") as f:
+        f.write(json.dumps({"timestamp": now}) + "\n")
+        f.write(json.dumps({"timestamp": now - 1.0}) + "\n")
+
+    store = AcpRestartHistory(path, window=60.0)
+    assert store.count() == 2
+
+    # A stale entry outside the window is ignored after the next prune.
+    with path.open("w") as f:
+        f.write(json.dumps({"timestamp": now - 120.0}) + "\n")
+    store = AcpRestartHistory(path, window=60.0)
+    assert store.count() == 0
+
+
 def test_restart_transport_backoff() -> None:
     """restart_transport refuses to cycle more than max_restarts in the backoff window."""
     client = AcpClient(
@@ -835,7 +855,7 @@ def test_restart_transport_backoff() -> None:
     )
 
     # Seed the restart history with two recent restarts.
-    client._restart_history = [time.monotonic(), time.monotonic() - 1.0]
+    client._restart_history_store._history = [time.time(), time.time() - 1.0]
 
     with pytest.raises(AcpTransportError):
         client.restart_transport()

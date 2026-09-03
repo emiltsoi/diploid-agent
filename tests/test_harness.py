@@ -757,6 +757,30 @@ def test_process_records_turn_metrics(monkeypatch, tmp_path: Path) -> None:
     assert status["cumulative_metrics"]["total_tokens"] == 150
 
 
+def test_status_exposes_continuity(monkeypatch, tmp_path: Path) -> None:
+    """status() reports the ACP continuity state from the lifecycle log."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root, acp_resume_enabled=True)
+    harness = ConversationHarness(config)
+
+    def fake_create_session(
+        prompt: str, *, cwd: Path | None = None, model: str | None = None, **kwargs: Any
+    ) -> AcpPromptResult:
+        return AcpPromptResult(reply="Ready.", session_id="s-status")
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+
+    process_result = harness.process("chat-continuity", "hello")
+    harness.runtime.lifecycle_log.write(
+        "session.new", session_id=process_result.session_id, model="swe-1-7"
+    )
+    result = harness.status("chat-continuity")
+    cont = result["continuity"]
+    assert cont["resume_enabled"] is True
+    assert cont["current_session_id"] == "s-status"
+    assert cont["state"] == "new"
+
+
 def test_status_exposes_context_usage(monkeypatch, tmp_path: Path) -> None:
     """status() includes a context_usage block with percentages when the window is known."""
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
@@ -1111,7 +1135,9 @@ def test_hard_timeout_rehydrates_and_restarts_transport(monkeypatch, tmp_path: P
     assert harness._active_record("chat-hard").last_stop_reason == "timeout"
 
     restarts: list[None] = []
-    monkeypatch.setattr(harness.client, "restart_transport", lambda: restarts.append(None))
+    monkeypatch.setattr(
+        harness.client, "restart_transport", lambda reason=None: restarts.append(None)
+    )
 
     call_count = [0]
 
@@ -1135,6 +1161,23 @@ def test_hard_timeout_rehydrates_and_restarts_transport(monkeypatch, tmp_path: P
     assert "Resumed." in result2.reply
     assert len(restarts) == 1
     assert call_count[0] == 2
+
+
+def test_restart_records_memory_item(monkeypatch, tmp_path: Path) -> None:
+    """A transport restart writes a recallable memory observation."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root)
+    harness = ConversationHarness(config)
+
+    monkeypatch.setattr(harness.client, "restart_transport", lambda reason=None: None)
+
+    result = harness.restart("chat-restart")
+    assert "restarted" in result.reply.lower()
+
+    manager = harness.runtime._memory_manager("chat-restart")
+    memory = manager.backend.recall("restart")
+    assert "ACP transport restarted" in memory
+    assert "user /restart" in memory
 
 
 def test_continuation_triggers_match_punctuation(monkeypatch, tmp_path: Path) -> None:
