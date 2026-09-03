@@ -163,6 +163,15 @@ class MemoryConfig(BaseModel):
     precompute_short_term_summary: bool = True
     precompute_short_term_summary_min_turns: int = 5
     recall_on_follow_up: bool = False  # whether to run long-term recall on follow-ups
+    fresh_recall_triggers: list[str] = Field(default_factory=lambda: [
+        "do you remember",
+        "what did we decide about",
+        "where did we leave off",
+        "did we discuss",
+        "remind me",
+    ])
+    fresh_recall_max_chars: int = 1024
+    fresh_recall_max_results: int = 3
     hindsight: HindsightConfig = Field(default_factory=HindsightConfig)
 
 

@@ -4,6 +4,7 @@ import json
 import os
 import time
 from pathlib import Path
+from typing import Any
 
 from diploid_agent.config import Config, DiploidConfig, HarnessConfig, PersonaConfig, PluginConfig
 from diploid_agent.context import ContextBuilder
@@ -681,6 +682,102 @@ def test_build_follow_up_fresh_soul_at_high_pressure(
     assert "We value kindness." in pctx.prompt
     assert "## Chat memory (on disk)" in pctx.prompt
     assert pctx.force_new_session
+
+
+def test_build_follow_up_fresh_recalls_on_memory_triggers(tmp_path: Path, monkeypatch) -> None:
+    """Fresh compact mode still runs a capped recall when the user asks a memory question."""
+    profile_root = tmp_path / "profile"
+    profile_root.mkdir()
+    (profile_root / "SOUL.md").write_text("# SOUL")
+    (profile_root / "AGENTS.md").write_text("# AGENTS")
+    (profile_root / "MEMORY.md").write_text("We value kindness.")
+
+    builder = _make_builder_with_profile_root(tmp_path, profile_root)
+    mgr = builder.memory_factory("chat-1")
+    fb = mgr._file_backend
+    assert fb is not None
+    fb.retain([MemoryItem(content="We agreed on Postgres.", tags=["memory"])])
+
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="session-1",
+        model="swe-1-7",
+        persona="test-pilot",
+        cwd=str(tmp_path),
+        created_at=time.time(),
+        updated_at=time.time(),
+        turn_number=5,
+        cumulative_metrics={"total_tokens": 950},
+        last_turn_metrics={"input_tokens": 100},
+    )
+    builder.config.engine.context_window = 1000
+
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def fake_recall_context(
+        self, user_message: str, model: str | None = None, **kwargs: Any
+    ) -> RecallResult:
+        calls.append((user_message, kwargs))
+        return RecallResult(
+            text="## Recalled\n\nWe agreed on Postgres.",
+            truncated=False,
+            memory_path=None,
+            limit=0,
+            loaded=20,
+            total=20,
+        )
+
+    monkeypatch.setattr(MemoryManager, "recall_context", fake_recall_context)
+
+    pctx = builder.build_follow_up(
+        "chat-1", "do you remember what we decided about the database?", record=record
+    )
+    assert pctx.force_new_session
+    assert "## Recalled" in pctx.prompt
+    assert calls
+    assert calls[0][1].get("max_chars") == builder.config.harness.memory.fresh_recall_max_chars
+
+
+def test_build_follow_up_fresh_skips_recall_without_trigger(tmp_path: Path, monkeypatch) -> None:
+    """Fresh compact mode skips long-term recall for ordinary follow-ups."""
+    profile_root = tmp_path / "profile"
+    profile_root.mkdir()
+    (profile_root / "SOUL.md").write_text("# SOUL")
+    (profile_root / "AGENTS.md").write_text("# AGENTS")
+    (profile_root / "MEMORY.md").write_text("We value kindness.")
+
+    builder = _make_builder_with_profile_root(tmp_path, profile_root)
+
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="session-1",
+        model="swe-1-7",
+        persona="test-pilot",
+        cwd=str(tmp_path),
+        created_at=time.time(),
+        updated_at=time.time(),
+        turn_number=5,
+        cumulative_metrics={"total_tokens": 950},
+        last_turn_metrics={"input_tokens": 100},
+    )
+    builder.config.engine.context_window = 1000
+
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def fake_recall_context(
+        self, user_message: str, model: str | None = None, **kwargs: Any
+    ) -> RecallResult:
+        calls.append((user_message, kwargs))
+        return RecallResult(text="", truncated=False, memory_path=None, limit=0, loaded=0, total=0)
+
+    monkeypatch.setattr(MemoryManager, "recall_context", fake_recall_context)
+
+    pctx = builder.build_follow_up("chat-1", "how are you?", record=record)
+    assert pctx.force_new_session
+    assert "## Recalled" not in pctx.prompt
+    assert not calls
 
 
 def test_chars_per_token_prefers_live_calibration(tmp_path: Path) -> None:

@@ -1097,7 +1097,14 @@ class MemoryManager:
         path.write_text(summary)
         return summary
 
-    def recall_context(self, user_message: str, model: str | None = None) -> RecallResult:
+    def recall_context(
+        self,
+        user_message: str,
+        model: str | None = None,
+        *,
+        max_chars: int | None = None,
+        max_tokens: int | None = None,
+    ) -> RecallResult:
         """Return a memory block for the prompt, combining short-term + recall.
 
         The long-term recall is loaded first and capped, then the short-term
@@ -1106,14 +1113,17 @@ class MemoryManager:
         """
         short = self._short_term_context(model)
         cap = self.memory_config.max_chat_memory_chars
-        max_recall_chars = self.memory_config.max_recall_chars or cap
+        max_recall_chars = min(
+            max_chars if max_chars is not None else (self.memory_config.max_recall_chars or cap),
+            cap,
+        )
 
         query = user_message or "relevant context"
         tags: list[str] = [f"chat:{self.chat_id}"]
         recall_text = self.backend.recall(
             query,
             tags=tags,
-            max_tokens=self.memory_config.hindsight.max_recall_tokens,
+            max_tokens=max_tokens or self.memory_config.hindsight.max_recall_tokens,
         )
 
         # Reserve space for the short-term context; trim the long-term recall
