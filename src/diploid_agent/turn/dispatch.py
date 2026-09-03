@@ -506,6 +506,7 @@ class TurnDispatch:
                 use_model,
                 turn_result.usage if turn_result else None,
                 latency,
+                prompt_chars=len(request.prompt) if request.prompt else 0,
             )
 
             mcp_names = self.runtime._active_mcp_server_names(chat_id)

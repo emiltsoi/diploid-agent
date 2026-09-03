@@ -562,9 +562,10 @@ class AgentRuntime(RuntimeAPI):
         model: str,
         usage: dict[str, Any] | None,
         latency_seconds: float,
+        prompt_chars: int = 0,
     ) -> dict[str, Any]:
         return self._runtime_metrics._record_turn_metrics(
-            chat_id, turn_number, model, usage, latency_seconds
+            chat_id, turn_number, model, usage, latency_seconds, prompt_chars=prompt_chars
         )
 
     def _metrics_context_for_prompt(self, chat_id: str, compact: bool = False) -> str | None:

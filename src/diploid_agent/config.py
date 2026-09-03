@@ -359,6 +359,8 @@ class HarnessConfig(BaseModel):
     )
     proactive_input_buffer_factor: float = 1.2  # multiplier for last-turn tokens when estimating
     proactive_soul_token_budget: int = 500  # cheap fresh-soul token budget for proactive sizing
+    proactive_calibration_enabled: bool = True  # live-calibrate chars/token from last-turn metrics
+    proactive_calibration_min_prompt_chars: int = 100  # minimum prompt length to trust calibration
     session_prune_enabled: bool = True
     session_prune_days: int = 14
     plugin_paths: list[Path] = Field(default_factory=lambda: [Path("~/.devin/plugins")])
