@@ -828,9 +828,7 @@ def test_proactive_sizing_uses_calibrated_chars_per_token(tmp_path: Path) -> Non
     )
     estimate = builder._estimate_next_prompt_tokens("chat-1", record, "hello")
     assert estimate["chars_per_token"] == 4.0
-    assert estimate["short_term"] == int(
-        builder.config.harness.memory.max_short_term_chars / 4.0
-    )
+    assert estimate["short_term"] == int(builder.config.harness.memory.max_short_term_chars / 4.0)
     assert estimate["last_total"] == 1000
 
 
