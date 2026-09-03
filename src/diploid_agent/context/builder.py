@@ -117,9 +117,7 @@ class ContextBuilder:
             self._last_file_mtimes[chat_id] = {}
         self._last_file_mtimes[chat_id][str(path)] = path.stat().st_mtime
 
-    def _chars_per_token(
-        self, model: str | None, record: SessionRecord | None = None
-    ) -> float:
+    def _chars_per_token(self, model: str | None, record: SessionRecord | None = None) -> float:
         """Return a character-to-token ratio for `model`.
 
         Prefer live calibration from the last turn's prompt length and token
@@ -260,8 +258,7 @@ class ContextBuilder:
         """Return True if a fresh-mode message is asking about remembered facts."""
         lower = (message or "").lower()
         return any(
-            trigger.lower() in lower
-            for trigger in self.config.harness.memory.fresh_recall_triggers
+            trigger.lower() in lower for trigger in self.config.harness.memory.fresh_recall_triggers
         )
 
     def _soul_mode(
@@ -935,8 +932,7 @@ class ContextBuilder:
                     formatted,
                     model=effective_model,
                     max_chars=self.config.harness.memory.fresh_recall_max_chars,
-                    max_tokens=self.config.harness.memory.fresh_recall_max_results
-                    * 250,
+                    max_tokens=self.config.harness.memory.fresh_recall_max_results * 250,
                 )
             else:
                 recall = RecallResult(

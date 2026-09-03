@@ -383,7 +383,9 @@ def test_resume_session_retries_transient_errors(client: AcpClient, monkeypatch)
     assert len(resume_calls) == 3
 
 
-def test_resume_session_retries_session_load_after_resume_not_found(client: AcpClient, monkeypatch) -> None:
+def test_resume_session_retries_session_load_after_resume_not_found(
+    client: AcpClient, monkeypatch
+) -> None:
     """When session/resume is not found, session/load is also retried on transient errors."""
     client.acp_resume_max_retries = 1
     calls: list[tuple[str, dict[str, Any]]] = []
