@@ -256,6 +256,14 @@ class ContextBuilder:
             "total": buffered_turn + cheap_soul_estimate + user_estimate + short_term_estimate,
         }
 
+    def _wants_memory_recall(self, message: str) -> bool:
+        """Return True if a fresh-mode message is asking about remembered facts."""
+        lower = (message or "").lower()
+        return any(
+            trigger.lower() in lower
+            for trigger in self.config.harness.memory.fresh_recall_triggers
+        )
+
     def _soul_mode(
         self,
         chat_id: str,
@@ -918,17 +926,27 @@ class ContextBuilder:
 
         anchor = identity_anchor(self.config.persona)
         mgr = self.memory_factory(chat_id)
-        # Recall is expensive; skip it in fresh compact mode. Fresh still keeps
+        # Recall is expensive; skip it in fresh compact mode unless the user is
+        # explicitly asking about something we might remember. Fresh still keeps
         # the most recent min_short_term_turns raw.
         if soul_mode == "fresh":
-            recall = RecallResult(
-                text="",
-                truncated=False,
-                memory_path=None,
-                limit=0,
-                loaded=0,
-                total=0,
-            )
+            if self._wants_memory_recall(formatted):
+                recall = mgr.recall_context(
+                    formatted,
+                    model=effective_model,
+                    max_chars=self.config.harness.memory.fresh_recall_max_chars,
+                    max_tokens=self.config.harness.memory.fresh_recall_max_results
+                    * 250,
+                )
+            else:
+                recall = RecallResult(
+                    text="",
+                    truncated=False,
+                    memory_path=None,
+                    limit=0,
+                    loaded=0,
+                    total=0,
+                )
             short_term = mgr.compaction_context(model=effective_model)
         elif soul_mode == "full" or self.config.harness.memory.recall_on_follow_up:
             recall = mgr.recall_context(formatted, model=effective_model)
