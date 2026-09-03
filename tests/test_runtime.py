@@ -295,10 +295,10 @@ class _ChunkingEngine(AgentEngine):
     def close(self) -> None:
         pass
 
-    def restart(self, reason: str | None = None) -> None:
+    def restart(self, reason: str | None = None, chat_id: str | None = None) -> None:
         pass
 
-    def restart_transport(self, reason: str | None = None) -> None:
+    def restart_transport(self, reason: str | None = None, chat_id: str | None = None) -> None:
         pass
 
     def is_stale_session_error(self, exc: BaseException) -> bool:
