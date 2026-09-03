@@ -117,10 +117,31 @@ class ContextBuilder:
             self._last_file_mtimes[chat_id] = {}
         self._last_file_mtimes[chat_id][str(path)] = path.stat().st_mtime
 
-    def _chars_per_token(self, model: str | None) -> float:
-        """Return a best-guess character-to-token ratio for `model`."""
+    def _chars_per_token(
+        self, model: str | None, record: SessionRecord | None = None
+    ) -> float:
+        """Return a character-to-token ratio for `model`.
+
+        Prefer live calibration from the last turn's prompt length and token
+        count, then fall back to the hand-maintained table, then 4:1.
+        """
         if not model:
             return 4.0
+
+        if (
+            self.config.harness.proactive_calibration_enabled
+            and record is not None
+            and record.last_turn_metrics
+        ):
+            last_turn = record.last_turn_metrics
+            prompt_chars = last_turn.get("prompt_chars") or 0
+            input_tokens = last_turn.get("input_tokens") or 0
+            if (
+                prompt_chars >= self.config.harness.proactive_calibration_min_prompt_chars
+                and input_tokens > 0
+            ):
+                return prompt_chars / input_tokens
+
         model_lower = model.lower()
         for name, ratio in self._CHARS_PER_TOKEN.items():
             if name in model_lower:
@@ -209,7 +230,7 @@ class ContextBuilder:
         last_output = last_turn.get("output_tokens", 0) or 0
         last_total = last_input + last_output
 
-        chars_per_token = self._chars_per_token(record.model)
+        chars_per_token = self._chars_per_token(record.model, record)
 
         memory_cfg = self.config.harness.memory
         short_term_estimate = int((memory_cfg.max_short_term_chars or 0) / chars_per_token)
@@ -226,6 +247,7 @@ class ContextBuilder:
         buffered_turn = int(last_total * buffer_factor)
 
         return {
+            "chars_per_token": chars_per_token,
             "last_total": last_total,
             "buffered_turn": buffered_turn,
             "soul": cheap_soul_estimate,

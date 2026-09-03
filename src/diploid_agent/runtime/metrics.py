@@ -98,6 +98,7 @@ class RuntimeMetrics:
         model: str,
         usage: dict[str, Any] | None,
         latency_seconds: float,
+        prompt_chars: int = 0,
     ) -> dict[str, Any]:
         """Record per-turn metrics and update running totals."""
         usage = usage or {}
@@ -109,6 +110,7 @@ class RuntimeMetrics:
             "output_tokens": usage.get("outputTokens") or usage.get("output_tokens", 0),
             "total_tokens": usage.get("totalTokens") or usage.get("total_tokens", 0),
             "cached_tokens": usage.get("cachedReadTokens") or usage.get("cached_tokens", 0),
+            "prompt_chars": prompt_chars,
             "latency_seconds": round(latency_seconds, 3),
         }
 

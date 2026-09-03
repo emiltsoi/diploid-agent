@@ -592,6 +592,7 @@ class TurnProcess:
                 use_model,
                 result.usage,
                 latency,
+                prompt_chars=len(request.prompt) if request.prompt else 0,
             )
 
             mcp_names = self.runtime._active_mcp_server_names(chat_id)

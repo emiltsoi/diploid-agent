@@ -681,3 +681,81 @@ def test_build_follow_up_fresh_soul_at_high_pressure(
     assert "We value kindness." in pctx.prompt
     assert "## Chat memory (on disk)" in pctx.prompt
     assert pctx.force_new_session
+
+
+def test_chars_per_token_prefers_live_calibration(tmp_path: Path) -> None:
+    """_chars_per_token calibrates from last-turn prompt_chars / input_tokens."""
+    builder = _make_builder(tmp_path)
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="session-1",
+        model="swe-1-7",
+        persona="test-pilot",
+        cwd=str(tmp_path),
+        created_at=time.time(),
+        updated_at=time.time(),
+        turn_number=1,
+        last_turn_metrics={"input_tokens": 1000, "prompt_chars": 3500},
+    )
+    assert builder._chars_per_token("swe-1-7", record) == 3.5
+
+    # Below the minimum prompt length, the hand table is used instead.
+    record.last_turn_metrics = {"input_tokens": 1000, "prompt_chars": 50}
+    assert builder._chars_per_token("swe-1-7", record) == 3.5
+
+    # Unknown model with calibration data uses the calibrated ratio.
+    record.last_turn_metrics = {"input_tokens": 1000, "prompt_chars": 4000}
+    assert builder._chars_per_token("custom-model-v1", record) == 4.0
+
+    # Calibration disabled falls back to the table/fallback.
+    builder.config.harness.proactive_calibration_enabled = False
+    record.last_turn_metrics = {"input_tokens": 1000, "prompt_chars": 4000}
+    assert builder._chars_per_token("swe-1-7", record) == 3.5
+
+
+def test_proactive_sizing_uses_calibrated_chars_per_token(tmp_path: Path) -> None:
+    """_estimate_next_prompt_tokens uses the live-calibrated ratio."""
+    builder = _make_builder(tmp_path)
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="session-1",
+        model="swe-1-7",
+        persona="test-pilot",
+        cwd=str(tmp_path),
+        created_at=time.time(),
+        updated_at=time.time(),
+        turn_number=1,
+        last_turn_metrics={"input_tokens": 1000, "prompt_chars": 4000, "output_tokens": 0},
+    )
+    estimate = builder._estimate_next_prompt_tokens("chat-1", record, "hello")
+    assert estimate["chars_per_token"] == 4.0
+    assert estimate["short_term"] == int(
+        builder.config.harness.memory.max_short_term_chars / 4.0
+    )
+    assert estimate["last_total"] == 1000
+
+
+def test_prompt_chars_recorded_in_turn_metrics(tmp_path: Path) -> None:
+    """Turn metrics include the length of the prompt sent to the engine."""
+    import threading
+    from types import SimpleNamespace
+
+    from diploid_agent.config import Config, DiploidConfig, PersonaConfig
+    from diploid_agent.metrics import MetricsCollector
+    from diploid_agent.runtime.metrics import RuntimeMetrics
+
+    runtime = SimpleNamespace(
+        config=Config(
+            diploid=DiploidConfig(bin="/bin/echo"),
+            persona=PersonaConfig(name="test", profile_root=tmp_path),
+        ),
+        metrics=MetricsCollector(),
+        _lock=threading.RLock(),
+    )
+    metrics = RuntimeMetrics(runtime)
+    result = metrics._record_turn_metrics(
+        "chat-1", 1, "swe-1-7", {"input_tokens": 100}, 0.5, prompt_chars=350
+    )
+    assert result["prompt_chars"] == 350
