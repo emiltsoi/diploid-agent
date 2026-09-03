@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
 
 from diploid_agent.models import ChatResult
+from diploid_agent.runtime.outbox import _is_telegram_chat_id
 from diploid_agent.transport.command_handler import _coerce_chat_result
 from diploid_agent.transport.interactive import (
     extract_ask_block,
@@ -501,14 +502,20 @@ class DeliveryWorker(threading.Thread):
             if raw is None:
                 return None
             if isinstance(raw, tuple):
-                self._next_chat_id = int(raw[0]) if raw[0] is not None else None
+                chat_id = raw[0]
+                if chat_id is None or not _is_telegram_chat_id(str(chat_id)):
+                    logger.debug("Skipping non-Telegram outbox item for chat %s", chat_id)
+                    return None
+                self._next_chat_id = int(str(chat_id))
                 return raw[1]
             if isinstance(raw, dict):
                 if "error" in raw:
                     return None
-                self._next_chat_id = (
-                    int(raw["chat_id"]) if raw.get("chat_id") is not None else None
-                )
+                chat_id = raw.get("chat_id")
+                if chat_id is None or not _is_telegram_chat_id(str(chat_id)):
+                    logger.debug("Skipping non-Telegram outbox item for chat %s", chat_id)
+                    return None
+                self._next_chat_id = int(str(chat_id))
                 result = raw.get("result")
                 if result is None:
                     return None
