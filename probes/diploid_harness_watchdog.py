@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Active watchdog: polls /health, attempts rollback, records incidents, then restarts."""
+
 from __future__ import annotations
 
 import argparse
