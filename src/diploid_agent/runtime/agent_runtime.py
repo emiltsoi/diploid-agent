@@ -434,9 +434,7 @@ class AgentRuntime(RuntimeAPI):
         return_chat_id: bool = False,
     ) -> ChatResult | tuple[str, ChatResult] | None:
         """Return the next ChatResult for a chat, blocking up to ``wait`` seconds."""
-        return self._outbox.outbox_pop(
-            chat_id, wait=wait, return_chat_id=return_chat_id
-        )
+        return self._outbox.outbox_pop(chat_id, wait=wait, return_chat_id=return_chat_id)
 
     def _call_unlocked(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         """Release the RLock while running a long call, then reacquire."""
@@ -1443,7 +1441,9 @@ class AgentRuntime(RuntimeAPI):
             if fallback_chat_id is not None:
                 mesh.fallback_chat_id = fallback_chat_id
             if not self._save_runtime_overrides():
-                raise ConfigPersistenceError("Mesh chat map updated in memory but persistence failed")
+                raise ConfigPersistenceError(
+                    "Mesh chat map updated in memory but persistence failed"
+                )
             return self.get_config()
 
     def graceful_service_restart(
