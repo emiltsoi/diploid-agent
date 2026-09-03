@@ -151,6 +151,7 @@ class RuntimeAPI(abc.ABC):
         self,
         chat_id: str | None = None,
         wait: float = 0.0,
+        return_chat_id: bool = False,
     ) -> Any:
         """Return the next ChatResult from the outbox, optionally for a chat."""
 

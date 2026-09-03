@@ -92,8 +92,14 @@ class RuntimeOutbox:
         self,
         chat_id: str | None = None,
         wait: float = 0.0,
-    ) -> ChatResult | None:
-        """Return the next ChatResult for a chat, blocking up to ``wait`` seconds."""
+        return_chat_id: bool = False,
+    ) -> ChatResult | tuple[str, ChatResult] | None:
+        """Return the next ChatResult for a chat, blocking up to ``wait`` seconds.
+
+        When ``return_chat_id`` is true and ``chat_id`` is None, the full
+        ``(chat_id, ChatResult)`` pair is returned so a global outbox consumer
+        knows which chat to deliver to.
+        """
         deadline = time.monotonic() + wait if wait > 0 else 0.0
         with self._outbox_condition:
             while True:
@@ -101,6 +107,8 @@ class RuntimeOutbox:
                     if chat_id is None or cid == chat_id:
                         popped = self._outbox[i]
                         del self._outbox[i]
+                        if return_chat_id:
+                            return popped
                         return popped[1]
                 if wait <= 0:
                     return None
