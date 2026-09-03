@@ -121,8 +121,11 @@ class CommandHandler:
                 )
             resp.raise_for_status()
             return resp.json()
-        except Exception:
-            logger.exception("HTTP %s %s failed", http_method, http_path)
+        except Exception as exc:
+            if isinstance(exc, (httpx.ConnectError, httpx.TimeoutException, OSError)):
+                logger.debug("HTTP %s %s not yet reachable: %s", http_method, http_path, exc)
+            else:
+                logger.exception("HTTP %s %s failed", http_method, http_path)
             return {"error": f"Sorry, the harness call for {method} failed."}
 
     def handle(self, command: str, chat_id: str | int, arg: str = "") -> ChatResult:

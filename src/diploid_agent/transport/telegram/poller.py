@@ -339,11 +339,24 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
         logger.info("Starting Telegram poller for %s", target)
         self._stop.clear()
         self._cleanup_orphaned_placeholders()
-        # Start the global outbox worker immediately, so mesh wakes, subagent
-        # completions and other outbox items can be delivered before any new
-        # Telegram user message arrives.
-        self._ensure_delivery_worker(0)
+        # Wait briefly for the harness to come up, then start the global
+        # outbox worker so mesh wakes, subagent completions and other outbox
+        # items can be delivered before any new Telegram user message arrives.
+        startup_deadline = time.monotonic() + 10.0
+        while time.monotonic() < startup_deadline:
+            if self._stop.is_set():
+                break
+            self._ensure_delivery_worker(0)
+            if (
+                self._global_delivery_worker is not None
+                and self._global_delivery_worker.is_alive()
+            ):
+                break
+            time.sleep(0.5)
         while not self._stop.is_set():
+            # Keep trying to start the global outbox worker if it failed
+            # during startup (e.g. the harness wasn't ready yet).
+            self._ensure_delivery_worker(0)
             try:
                 params: dict[str, int] = {"limit": 100, "timeout": 25}
                 if self.offset is not None:
