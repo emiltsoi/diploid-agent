@@ -202,14 +202,15 @@ Response when idle:
 }
 ```
 
-## `GET /outbox/{chat_id}`
+## `GET /outbox`
 
-Long-poll the outbound message outbox for a chat. Used by the Telegram
-`DeliveryWorker` (and other outbox consumers) to pick up `ChatResult`s that were
-enqueued by background turns, wake events, or subagent completions.
+Long-poll the outbound message outbox for *any* chat. Used by the global
+`DeliveryWorker` in the Telegram poller to pick up the next `ChatResult` that
+was enqueued by background turns, wake events, mesh messages, or subagent
+completions, regardless of which chat it belongs to.
 
 ```bash
-curl "http://127.0.0.1:4003/outbox/test-1?wait=5.0"
+curl "http://127.0.0.1:4003/outbox?wait=5.0"
 ```
 
 - `wait` (float, 0–60 seconds, default `0.0`) — how long to block before
@@ -232,6 +233,18 @@ Response when a result is available:
   }
 }
 ```
+
+## `GET /outbox/{chat_id}`
+
+Long-poll the outbound message outbox for a specific chat. Still supported for
+per-chat `DeliveryWorker`s and backwards compatibility.
+
+```bash
+curl "http://127.0.0.1:4003/outbox/test-1?wait=5.0"
+```
+
+- `wait` (float, 0–60 seconds, default `0.0`) — how long to block before
+  returning if the outbox is empty.
 
 Response when the outbox is empty (or the wait expired):
 

@@ -82,10 +82,10 @@ The reply is delivered through a `Notifier` or through the per-chat outbox:
 - `WebhookNotifier` — posts the chat id and text as JSON to the configured
   `harness.notifications.webhook_url`.
 - **Outbox delivery** — when `harness.notifications.outbox_delivery` is `true`,
-  the runtime enqueues `ChatResult`s in a per-chat outbox and the Telegram
-  `DeliveryWorker` consumes them via `GET /outbox/{chat_id}`. This is the default
-  for the shipped personas and is required for background turns, subagent
-  completions, and queued-user-message results to reach the user without a
+  the runtime enqueues `ChatResult`s in an outbox and a single global Telegram
+  `DeliveryWorker` consumes them via `GET /outbox`. This is the default for the
+  shipped personas and is required for background turns, subagent completions,
+  mesh wake replies, and queued-user-message results to reach the user without a
   runtime-side `notifier`.
 
 `harness.notifications.enabled` is the master switch. If it is off, every

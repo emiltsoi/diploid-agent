@@ -26,7 +26,7 @@ retention to a Hindsight memory server.
 - Supports state plugins with a rich lifecycle hook surface: plugins can intercept turns, sessions, dispatches, memory transitions, skill/MCP commands, retain/promote, and shutdown.
 - Hardens the ACP transport with typed error classification, restart backoff, and stale-session recovery that attempts ACP `session/resume` (falling back to `session/load`) before prompt rehydration.
 - Sandboxes the ACP child so it cannot run raw `systemctl`, `reboot`, or `shutdown` against the host; restart requests from the agent are routed through the harness and scheduled gracefully with `systemd-run`.
-- Queues incoming user messages as high-priority wake events when a chat is busy instead of dropping them, and pushes the final result through a per-chat outbox consumed by the Telegram `DeliveryWorker` so background turns and subagent completions can still reach the user.
+- Queues incoming user messages as high-priority wake events when a chat is busy instead of dropping them, and pushes the final result through an outbox consumed by the Telegram `DeliveryWorker` so background turns, mesh wake replies, and subagent completions can still reach the user.
 - Sends a `System: service was restarted.` notice to recently active chats on startup and drops stale `auto_continue` wakes so a crash-restart does not immediately re-run an old continuation.
 - Edits the streaming placeholder with a `(still working, Xm)` liveness suffix, and sends `⏳ Still thinking...` outbox heartbeats for long wake-driven turns, so users know whether to wait or send `/stop`.
 - Runs a `diploid-memory` MCP server with `memory_recall`, `memory_retain`, and
@@ -207,7 +207,7 @@ responsibility lives in a focused module:
   - `store.py` — chat/session persistence.
   - `metrics.py` — metrics, health, and prometheus formatting.
   - `config_manager.py` — live runtime configuration overrides.
-  - `outbox.py` — per-chat outbox and notification delivery.
+  - `outbox.py` — outbox queue and notification delivery.
   - `mcp_skills.py` — MCP and skill enablement.
   - `plugins.py` — plugin lifecycle, incidents, and sandbox.
   - `prompts.py` — first/follow-up prompt building and model resolution.

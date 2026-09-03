@@ -50,10 +50,11 @@ System: This chat is busy; your message was queued.
 When the current turn finishes, the queued message is processed. If
 `harness.notifications.outbox_delivery` is `true` (the default in
 `runtime-overrides.yaml` for the shipped personas), the final `ChatResult` is
-pushed to the harness's per-chat outbox and a `DeliveryWorker` in the Telegram
-poller consumes it via `GET /outbox/{chat_id}`. This lets background turns,
-subagent completions, and wake continuations reach the user even when the
-harness process has no runtime-side notifier.
+pushed to the harness's outbox. A single global `DeliveryWorker` in the
+Telegram poller consumes it via `GET /outbox` and delivers the result to the
+chat stored in the popped item. This lets background turns, subagent
+completions, mesh wake replies, and wake continuations reach the user even
+when the harness process has no runtime-side notifier.
 
 While the turn is running, the `TurnWorker` edits the placeholder message every
 few seconds. If the model has produced no visible reply text yet, the
@@ -77,7 +78,8 @@ System: service was restarted. You can resume the conversation at any time.
 ```
 
 This is sent directly through the Telegram Bot API (not the outbox), because the
-`DeliveryWorker` may not be running yet immediately after startup.
+poller and its global `DeliveryWorker` may not be connected to the harness yet
+immediately after the harness starts.
 
 ## Stale-wake cleanup
 
