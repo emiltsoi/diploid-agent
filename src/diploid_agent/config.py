@@ -41,8 +41,10 @@ class EngineConfig(BaseModel):
     acp_control_timeout: float = (
         120.0  # seconds without a control-call response before the transport is reset
     )
-    acp_max_restarts: int = 3  # transport restarts allowed in the backoff window
-    acp_restart_backoff_window: float = 300.0  # seconds for max_restarts budget
+    acp_max_restarts: int = 3  # transport-error restarts allowed in the backoff window
+    acp_restart_backoff_window: float = 300.0  # seconds for the transport-error budget
+    acp_max_mcp_restarts: int = 5  # MCP-change restarts allowed in the backoff window
+    acp_max_user_restarts: int = 5  # user-requested restarts allowed in the backoff window
     acp_resume_enabled: bool = (
         True  # use ACP session/resume (or load) instead of prompt rehydration
     )
@@ -158,6 +160,8 @@ class MemoryConfig(BaseModel):
     max_short_term_chars: int = 6144
     include_short_term: bool = True
     short_term_summary_cache_days: int = 7
+    precompute_short_term_summary: bool = True
+    precompute_short_term_summary_min_turns: int = 5
     recall_on_follow_up: bool = False  # whether to run long-term recall on follow-ups
     hindsight: HindsightConfig = Field(default_factory=HindsightConfig)
 
@@ -353,9 +357,8 @@ class HarnessConfig(BaseModel):
     proactive_new_session_threshold: float = (
         0.85  # estimated prompt ratio that forces a fresh session
     )
-    proactive_input_buffer_factor: float = (
-        1.2  # multiplier for last-turn input tokens when estimating
-    )
+    proactive_input_buffer_factor: float = 1.2  # multiplier for last-turn tokens when estimating
+    proactive_soul_token_budget: int = 500  # cheap fresh-soul token budget for proactive sizing
     session_prune_enabled: bool = True
     session_prune_days: int = 14
     plugin_paths: list[Path] = Field(default_factory=lambda: [Path("~/.devin/plugins")])

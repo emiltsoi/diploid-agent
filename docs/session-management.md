@@ -204,3 +204,23 @@ The proactive trigger is controlled by `harness.proactive_new_session_threshold`
 pairs are summarized into a cached `.cache/short-term-summary-*.md` file. The
 summary is pre-computed after each completed turn and after each `recall_context`
 call so it is ready when a `fresh` reset happens.
+
+## Deferred design notes
+
+### Resend after hard timeout
+
+When a prompt hits the hard deadline, the harness currently cancels the in-flight
+request and returns a partial reply with a "Continue" notice.  Resending the
+interrupted message on the user's behalf is intentionally deferred: it needs a
+careful design that avoids double sends, respects user consent, and integrates
+with the auto-continue / wake queue.  The open questions are:
+
+- Should the resend preserve the exact prompt or rebuild it with a
+  "you were interrupted" prefix?
+- How does the resend interact with the `InstanceManager` queue and the
+  `other_instance_running` check?
+- Should it be gated by `acp_resume_enabled` and the `mcp_change` restart cause?
+
+A future PR should add a dedicated `resend_interrupted_turn` action behind a
+feature flag and pair it with an integration test that simulates a hard timeout
+followed by a successful retry.

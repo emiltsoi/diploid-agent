@@ -277,6 +277,7 @@ class TurnProcess:
             if record is None or model_changed or hard_timeout_before or skills_changed:
                 if record and (model_changed or hard_timeout_before or skills_changed):
                     self.runtime._archive_active_session(chat_id, record)
+                self.runtime._restore_plugin_states(chat_id)
                 pctx = self.runtime.context_builder.build_first(
                     chat_id,
                     user_message,
@@ -426,6 +427,7 @@ class TurnProcess:
                         else None
                     ),
                     soft_timeout=self.runtime.config.engine.soft_timeout,
+                    chat_id=chat_id,
                 )
                 call_ctx = self.runtime._plugins.before_engine_call(
                     chat_id,

@@ -94,8 +94,9 @@ class TurnRehydrate:
             )
         if restart_first:
             logger.warning("%s; restarting ACP transport for %s", log_prefix, chat_id)
+            self.runtime._snapshot_plugin_states(chat_id)
             try:
-                self.runtime.engine.restart(reason=log_prefix)
+                self.runtime.engine.restart(reason=log_prefix, chat_id=chat_id)
                 self.runtime._record_restart_memory(chat_id, reason=log_prefix)
             except Exception:
                 logger.exception("Failed to restart ACP transport for %s", chat_id)
@@ -110,11 +111,13 @@ class TurnRehydrate:
                     notice="The agent is unavailable after a transport restart failure.",
                 )
 
+        resumed_id: str | None = None
         if (
             self.runtime.config.engine.acp_resume_enabled
             and self.controller.session._can_resume_record(chat_id, old_record, use_model)
         ):
             assert old_record is not None
+            self.runtime._restore_plugin_states(chat_id)
             try:
                 logger.warning("%s; attempting ACP session resume for %s", log_prefix, chat_id)
                 resumed_id = self.runtime.call_engine_unlocked(
@@ -152,6 +155,7 @@ class TurnRehydrate:
                     model=follow_model,
                     mcp_servers=None,
                     soft_timeout=self.runtime.config.engine.soft_timeout,
+                    chat_id=chat_id,
                 )
                 result = self.runtime.call_engine_unlocked(
                     self.runtime.engine.prompt,
@@ -172,6 +176,74 @@ class TurnRehydrate:
                         detail={"error": str(exc)},
                     )
 
+        # If resume failed or was skipped, probe the old ACP session directly.
+        # A live session can be reused without running prompt rehydration.
+        if not resumed_id and old_record is not None and old_record.session_id:
+            try:
+                logger.warning(
+                    "%s; probing ACP session %s for %s",
+                    log_prefix,
+                    old_record.session_id,
+                    chat_id,
+                )
+                alive = self.runtime.call_engine_unlocked(
+                    self.runtime.engine.session_alive,
+                    old_record.session_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "%s: ACP session alive probe failed for %s: %s",
+                    log_prefix,
+                    chat_id,
+                    exc,
+                )
+                alive = False
+
+            if alive:
+                logger.warning(
+                    "ACP session %s is still alive for %s",
+                    old_record.session_id,
+                    chat_id,
+                )
+                if self.runtime.lifecycle_log is not None:
+                    self.runtime.lifecycle_log.write(
+                        "rehydrate.session_alive.success",
+                        chat_id=chat_id,
+                        session_id=old_record.session_id,
+                        reason=rehydration_reason.value,
+                    )
+                pctx = self.runtime.context_builder.build_follow_up(
+                    chat_id,
+                    user_message,
+                    old_record,
+                    reply_to=reply_to,
+                    reply_to_is_bot=reply_to_is_bot,
+                    reply_to_message_id=reply_to_message_id,
+                    continuation_anchor=continuation_anchor,
+                    rehydrated=True,
+                    rehydration_reason=RehydrationReason.RESUMED,
+                    wake_event=wake_event,
+                    other_instance_running=other_instance_running,
+                )
+                follow_model = pctx.model or use_model
+                request = TurnRequest(
+                    prompt=pctx.prompt,
+                    cwd=self.runtime._chat_dir(chat_id),
+                    model=follow_model,
+                    mcp_servers=None,
+                    soft_timeout=self.runtime.config.engine.soft_timeout,
+                    chat_id=chat_id,
+                )
+                result = self.runtime.call_engine_unlocked(
+                    self.runtime.engine.prompt,
+                    request,
+                    session_id=old_record.session_id,
+                    on_chunk=on_chunk,
+                    on_update=on_update,
+                )
+                return result, old_record.session_id, pctx
+
+        self.runtime._restore_plugin_states(chat_id)
         pctx = self.runtime.context_builder.build_first(
             chat_id,
             user_message,
@@ -239,8 +311,9 @@ class TurnRehydrate:
                 )
 
                 if attempt == 0:
+                    self.runtime._snapshot_plugin_states(chat_id)
                     try:
-                        self.runtime.engine.restart(reason=log_prefix)
+                        self.runtime.engine.restart(reason=log_prefix, chat_id=chat_id)
                         self.runtime._record_restart_memory(chat_id, reason=log_prefix)
                     except Exception:
                         logger.exception("Failed to restart ACP transport for %s", chat_id)

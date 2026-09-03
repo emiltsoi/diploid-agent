@@ -29,6 +29,19 @@ retention to a Hindsight memory server.
 - Queues incoming user messages as high-priority wake events when a chat is busy instead of dropping them, and pushes the final result through an outbox consumed by the Telegram `DeliveryWorker` so background turns, mesh wake replies, and subagent completions can still reach the user.
 - Sends a `System: service was restarted.` notice to recently active chats on startup and drops stale `auto_continue` wakes so a crash-restart does not immediately re-run an old continuation.
 - Edits the streaming placeholder with a `(still working, Xm)` liveness suffix, and sends `⏳ Still thinking...` outbox heartbeats for long wake-driven turns, so users know whether to wait or send `/stop`.
+- Curates a `/promote`-driven **promoted memory** pocket that survives `fresh`
+  compact mode and is always re-injected at the top of the prompt.
+- Wakes with a one-sentence continuity narrative built from the ACP lifecycle
+  log, so the user and the model know whether the session was resumed, rebuilt,
+  or restarted.
+- Snapshots and restores plugin and body-state files across ACP transport
+  restarts, keeping per-chat state intact when the child process is replaced.
+- Sizes the next prompt with data from the last turn's actual token usage and a
+  hand-maintained chars-per-token table, instead of a fixed 4:1 guess.
+- Pre-computes the smart short-term summary only when the recent-turn window is
+  overflowing, avoiding unnecessary summarizer calls.
+- Records resume / load / new latency and outcome telemetry in the lifecycle log
+  and exposes it in `/status`.
 - Runs a `diploid-memory` MCP server with `memory_recall`, `memory_retain`, and
   `memory_promote` tools, plus a shared `memory` skill that lets the agent use them.
 - Supports agent-to-agent mesh messaging via [`diploid-mesh`](https://github.com/emiltsoi/diploid-mesh), with `reply=yes/no/end` semantics, DSN recording, and per-turn nudges/caps to prevent mesh-send loops.
@@ -87,7 +100,7 @@ curl -X POST http://127.0.0.1:4003/switch-model \
 
 ## Telegram commands
 
-- `/status` — current model, session id, working directory, and context-window usage.
+- `/status` — current model, session id, working directory, context-window usage, ACP continuity state, and resume telemetry.
 - `/metrics` — token usage and latency for this chat.
 - `/models` — list available ACP models.
 - `/model <name>` — switch this chat to a new model.
@@ -103,7 +116,7 @@ curl -X POST http://127.0.0.1:4003/switch-model \
 - `/memory` — show the per-chat memory.
 - `/summarize` — manually trigger a file-backend summarization.
 - `/recall <query>` — search the memory backend.
-- `/promote <fact>` — append a fact to the persona's global memory.
+- `/promote <fact>` — append a fact to the chat's curated promoted memory (always loaded in `fresh` mode).
 - `/stream_thoughts on|off` — toggle the optional real-time thought stream.
 - `/config <section> <key>=<value> [key=value...]` — update live runtime config without restarting the harness.
 

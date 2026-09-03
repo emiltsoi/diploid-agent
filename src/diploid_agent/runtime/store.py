@@ -19,7 +19,9 @@ logger = logging.getLogger(__name__)
 _CHAT_DURABLE_FILES = {
     "chat_transcript.jsonl",
     "chat_MEMORY.md",
+    "chat_PROMOTED.md",
     "chat_self_state.md",
+    "chat_body_state.json",
     "hindsight-pending-retain.jsonl",
 }
 
@@ -142,7 +144,7 @@ class ChatSessionStore:
             return
         durable = self._durable_file_names()
         for item in active_dir.iterdir():
-            if item.name in durable or item.name == ".archive":
+            if item.name in durable or item.name in (".archive", ".snapshots"):
                 continue
             if item.is_dir():
                 shutil.rmtree(item)

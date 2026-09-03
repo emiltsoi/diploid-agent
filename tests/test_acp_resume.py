@@ -309,3 +309,52 @@ def test_resume_session_writes_lifecycle_log(
     events = [json.loads(line)["event"] for line in lines if line]
     assert "session.resume.attempt" in events
     assert "session.resume.success" in events
+
+
+def test_process_stale_session_uses_session_alive_when_resume_disabled(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """When ACP resume is disabled, a stale session falls back to session_alive."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root, acp_resume_enabled=False)
+    harness = ConversationHarness(config)
+
+    call_order: list[str] = []
+
+    def fake_create_session(prompt: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("create")
+        return AcpPromptResult(reply="Ready.", session_id=f"session-{len(call_order)}")
+
+    def fake_resume(session_id: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("resume")
+        return session_id
+
+    def fake_session_alive(session_id: str) -> bool:
+        call_order.append("alive")
+        return True
+
+    def fake_send_message(session_id: str, prompt: str, *, cwd=None, model=None, **kwargs):
+        if call_order.count("send") == 0:
+            call_order.append("send")
+            raise RuntimeError("ACP session/prompt failed: Session not found")
+        call_order.append("send")
+        return AcpPromptResult(reply="Follow-up after alive.", session_id=session_id)
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+    monkeypatch.setattr(harness.client, "send_message", fake_send_message)
+    monkeypatch.setattr(harness.client, "resume_session", fake_resume)
+    monkeypatch.setattr(harness.client, "session_alive", fake_session_alive)
+
+    try:
+        result1 = harness.process("chat-r4", "hello")
+        assert result1.session_id == "session-1"
+        assert result1.session_number == 1
+
+        result2 = harness.process("chat-r4", "follow-up")
+        assert result2.session_number == 1
+        assert result2.session_id == "session-1"
+        assert "alive" in call_order
+        assert "resume" not in call_order
+        assert call_order.count("create") == 1
+    finally:
+        harness.client.close()

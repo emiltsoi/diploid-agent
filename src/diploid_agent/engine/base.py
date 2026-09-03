@@ -18,6 +18,7 @@ class TurnRequest:
     model: str | None = None
     mcp_servers: list[dict[str, Any]] | None = None
     soft_timeout: float | None = None
+    chat_id: str | None = None
 
 
 @dataclass
@@ -86,7 +87,7 @@ class AgentEngine(abc.ABC):
     def close(self) -> None:
         """Close the engine and release resources."""
 
-    def restart(self, reason: str | None = None) -> None:
+    def restart(self, reason: str | None = None, chat_id: str | None = None) -> None:
         """Restart the underlying transport, if supported."""
         return
 

@@ -312,6 +312,7 @@ class TurnSession:
         use_model = source.model
 
         if self.runtime.config.engine.acp_resume_enabled:
+            self.runtime._restore_plugin_states(chat_id)
             try:
                 logger.debug("Attempting ACP session resume for %s", source.session_id)
                 resumed_id = self.runtime._call_unlocked(
@@ -363,6 +364,7 @@ class TurnSession:
                 use_model = start_ctx.model or source.model
                 user_message = start_ctx.user_message
 
+                self.runtime._restore_plugin_states(chat_id)
                 pctx = self.runtime.context_builder.build_first(
                     chat_id,
                     user_message,
@@ -431,6 +433,7 @@ class TurnSession:
                 model=use_model,
                 mcp_servers=None,
                 soft_timeout=self.runtime.config.engine.soft_timeout,
+                chat_id=chat_id,
             )
             result = self.runtime.call_engine_unlocked(
                 self.runtime.engine.prompt,
@@ -556,6 +559,7 @@ class TurnSession:
                 model=use_model,
                 mcp_servers=None,
                 soft_timeout=self.runtime.config.engine.soft_timeout,
+                chat_id=chat_id,
             )
             result = self.runtime.call_engine_unlocked(
                 self.runtime.engine.prompt,

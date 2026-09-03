@@ -292,6 +292,7 @@ class RuntimePrompts:
             model=model,
             mcp_servers=mcp_servers or self._mcp_skills._active_mcp_servers(chat_id),
             soft_timeout=self.config.engine.soft_timeout,
+            chat_id=chat_id,
         )
         result = self.engine.prompt(request, on_chunk=on_chunk, on_update=on_update)
         if result.session_id is None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import shutil
 import subprocess
 import sys
 import threading
@@ -236,6 +237,7 @@ class AgentRuntime(RuntimeAPI):
             self.skills,
             self._active_skill_names,
             context_window_fn=self.engine.model_context_window,
+            lifecycle_log=self.lifecycle_log,
         )
         self.context_builder.metrics = self._runtime_metrics._per_chat_metrics
 
@@ -473,8 +475,37 @@ class AgentRuntime(RuntimeAPI):
 
     # ---------------------------------------------------------------- session dirs
 
+    _BODY_STATE_FILES = ("chat_body_state.json", "body_state.json", "body.json")
+
     def _chat_dir(self, chat_id: str) -> Path:
         return self._chat_store._chat_dir(chat_id)
+
+    def _snapshot_plugin_states(self, chat_id: str) -> None:
+        """Snapshot durable plugin and body state files before a transport restart."""
+        chat_dir = self._chat_dir(chat_id)
+        snapshot_dir = chat_dir / ".snapshots"
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+        files = set(self._plugins.durable_files())
+        files.update(self._BODY_STATE_FILES)
+
+        for filename in files:
+            src = chat_dir / filename
+            if src.exists():
+                dst = snapshot_dir / f"{filename}.snapshot"
+                shutil.copy2(src, dst)
+
+    def _restore_plugin_states(self, chat_id: str) -> None:
+        """Restore durable plugin and body state files after a transport wake."""
+        chat_dir = self._chat_dir(chat_id)
+        snapshot_dir = chat_dir / ".snapshots"
+        if not snapshot_dir.exists():
+            return
+
+        for snapshot in snapshot_dir.glob("*.snapshot"):
+            original = chat_dir / snapshot.stem
+            if snapshot.exists():
+                shutil.copy2(snapshot, original)
 
     def _archive_dir(self, chat_id: str, session_number: int) -> Path:
         return self._chat_store._archive_dir(chat_id, session_number)

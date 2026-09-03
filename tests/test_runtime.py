@@ -354,7 +354,7 @@ def test_agent_runtime_restarts_transport(tmp_path: Path) -> None:
     called: list[bool] = []
 
     class _RestartEngine(_ChunkingEngine):
-        def restart(self, reason: str | None = None) -> None:
+        def restart(self, reason: str | None = None, chat_id: str | None = None) -> None:
             called.append(True)
 
     runtime.engine = _RestartEngine()

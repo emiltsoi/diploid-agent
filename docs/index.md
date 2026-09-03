@@ -27,5 +27,7 @@ a `ChatResult` outbox with a global Telegram `DeliveryWorker`, liveness heartbea
 a restart notice, optional MCP servers and reusable skills, robust ACP transport
 recovery with ACP session resume, a per-harness ACP lifecycle audit log,
 proactive context-window sizing with a `fresh` compact soul mode, smart
-short-term summarization, and a rich plugin lifecycle hook surface for
+short-term summarization, a `/promote` pocket that survives `fresh` resets,
+wake-time continuity narrative, plugin/body-state snapshot and restore,
+resume/load/new telemetry, and a rich plugin lifecycle hook surface for
 intercepting and extending conversations.

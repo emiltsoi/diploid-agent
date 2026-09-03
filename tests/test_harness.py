@@ -772,7 +772,10 @@ def test_status_exposes_continuity(monkeypatch, tmp_path: Path) -> None:
 
     process_result = harness.process("chat-continuity", "hello")
     harness.runtime.lifecycle_log.write(
-        "session.new", session_id=process_result.session_id, model="swe-1-7"
+        "session.new",
+        chat_id="chat-continuity",
+        session_id=process_result.session_id,
+        model="swe-1-7",
     )
     result = harness.status("chat-continuity")
     cont = result["continuity"]
@@ -1136,7 +1139,9 @@ def test_hard_timeout_rehydrates_and_restarts_transport(monkeypatch, tmp_path: P
 
     restarts: list[None] = []
     monkeypatch.setattr(
-        harness.client, "restart_transport", lambda reason=None: restarts.append(None)
+        harness.client,
+        "restart_transport",
+        lambda reason=None, chat_id=None: restarts.append(None),
     )
 
     call_count = [0]
@@ -1169,7 +1174,7 @@ def test_restart_records_memory_item(monkeypatch, tmp_path: Path) -> None:
     config = _make_config(tmp_path, fixture_root)
     harness = ConversationHarness(config)
 
-    monkeypatch.setattr(harness.client, "restart_transport", lambda reason=None: None)
+    monkeypatch.setattr(harness.client, "restart_transport", lambda reason=None, chat_id=None: None)
 
     result = harness.restart("chat-restart")
     assert "restarted" in result.reply.lower()
