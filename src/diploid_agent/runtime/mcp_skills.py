@@ -167,11 +167,14 @@ class RuntimeMcpSkills:
         if self._plugins is None or self.mcp is None:
             return []
         record = self._active_record(chat_id)
-        if record and record.enabled_mcp_servers is not None:
-            return record.enabled_mcp_servers
-        return sorted(
-            set(self.mcp.default_enabled_names()) | set(self._plugins.default_mcp_names())
+        # Merge the chat record with the current default set so new default
+        # servers (e.g. diploid-mesh) become available in older sessions.
+        names: set[str] = set(self.mcp.default_enabled_names()) | set(
+            self._plugins.default_mcp_names()
         )
+        if record and record.enabled_mcp_servers is not None:
+            names |= set(record.enabled_mcp_servers)
+        return sorted(names)
 
     def _active_mcp_servers(self, chat_id: str) -> list[dict[str, Any]]:
         if self.mcp is None:
