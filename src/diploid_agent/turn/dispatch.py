@@ -103,6 +103,26 @@ class TurnDispatch:
     def rehydrate(self) -> Any:
         return self.controller.rehydrate
 
+    @staticmethod
+    def _recompute_message_text(active: ActiveTurn) -> None:
+        """Keep message_text as full_text with the current thought prefix removed."""
+        if not active.thought_text or not active.full_text:
+            active.message_text = active.full_text
+        elif active.full_text.startswith(active.thought_text):
+            active.message_text = active.full_text[len(active.thought_text) :]
+        else:
+            active.message_text = active.full_text
+        if len(active.message_text) > _MAX_THOUGHT_TEXT_CHARS:
+            active.message_text = active.message_text[-_MAX_THOUGHT_TEXT_CHARS:]
+
+    @staticmethod
+    def _final_reply_text(active: ActiveTurn, reply: str) -> str:
+        """Return the final reply with any leading thought text removed."""
+        thought = active.thought_text
+        if thought and reply.startswith(thought):
+            return reply[len(thought) :].lstrip("\n")
+        return reply
+
     @_locked
     def dispatch(
         self,
@@ -252,9 +272,10 @@ class TurnDispatch:
             with self._lock:
                 a = self.runtime._active_turns.get(chat_id)
                 if a:
-                    a.message_text += text
-                    if len(a.message_text) > _MAX_THOUGHT_TEXT_CHARS:
-                        a.message_text = a.message_text[-_MAX_THOUGHT_TEXT_CHARS:]
+                    a.full_text += text
+                    if len(a.full_text) > _MAX_THOUGHT_TEXT_CHARS:
+                        a.full_text = a.full_text[-_MAX_THOUGHT_TEXT_CHARS:]
+                    self._recompute_message_text(a)
             if a:
                 with a._condition:
                     a._condition.notify_all()
@@ -278,6 +299,7 @@ class TurnDispatch:
                     a.thought_text += text
                     if len(a.thought_text) > _MAX_THOUGHT_TEXT_CHARS:
                         a.thought_text = a.thought_text[-_MAX_THOUGHT_TEXT_CHARS:]
+                    self._recompute_message_text(a)
             if a:
                 with a._condition:
                     a._condition.notify_all()
@@ -322,7 +344,7 @@ class TurnDispatch:
                         on_update=call_ctx.on_update,
                     )
                     session_id = turn_result.session_id or old_record.session_id
-                    reply = turn_result.reply
+                    reply = self._final_reply_text(active, turn_result.reply)
 
                 result_ctx = self.runtime._plugins.after_engine_call(
                     chat_id,
@@ -344,7 +366,7 @@ class TurnDispatch:
                     turn_result.usage = result_ctx.usage
                     turn_result.stop_reason = result_ctx.stop_reason
                     session_id = turn_result.session_id or session_id
-                reply = turn_result.reply
+                reply = self._final_reply_text(active, turn_result.reply)
             except (RuntimeError, TimeoutError) as exc:
                 if isinstance(exc, TimeoutError) or self.runtime.engine.is_transport_error(exc):
                     log_prefix = "ACP transport unresponsive"
@@ -391,9 +413,9 @@ class TurnDispatch:
                 use_model = pctx.model or use_model
                 is_new = session_id != (old_record.session_id if old_record else None)
                 active.session_id = turn_result.session_id
-                reply = turn_result.reply
+                reply = self._final_reply_text(active, turn_result.reply)
 
-            if not reply and turn_result and not turn_result.partial:
+            if not turn_result.reply and turn_result and not turn_result.partial:
                 empty_id = session_id or (old_record.session_id if old_record else "unknown")
                 logger.warning(
                     "ACP session %s returned an empty reply; rehydrating for %s",
@@ -419,7 +441,7 @@ class TurnDispatch:
                 use_model = pctx.model or use_model
                 is_new = session_id != (old_record.session_id if old_record else None)
                 active.session_id = turn_result.session_id
-                reply = turn_result.reply
+                reply = self._final_reply_text(active, turn_result.reply)
 
             continue_word = (
                 self.runtime.config.engine.continuation_triggers[0].capitalize()
