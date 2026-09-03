@@ -358,3 +358,60 @@ def test_process_stale_session_uses_session_alive_when_resume_disabled(
         assert call_order.count("create") == 1
     finally:
         harness.client.close()
+
+
+def test_resume_session_retries_transient_errors(client: AcpClient, monkeypatch) -> None:
+    """_resume_session retries session/resume before giving up on transient errors."""
+    client.acp_resume_max_retries = 2
+    calls: list[tuple[str, dict[str, Any]]] = []
+    attempts = [0]
+
+    async def fake_call(method: str, params: dict[str, Any], **kwargs: Any) -> Any:
+        calls.append((method, params))
+        if method == "session/resume":
+            attempts[0] += 1
+            if attempts[0] < 3:
+                raise AcpError(method, {"code": -32000, "message": "transient transport error"})
+            return {}
+        return {}
+
+    monkeypatch.setattr(client, "_call", fake_call)
+    monkeypatch.setattr(client, "_resume_jitter", lambda attempt: 0.0)
+    result = client._loop.run_until_complete(client._resume_session("s-retry", cwd=Path("/")))
+    assert result == "s-retry"
+    resume_calls = [c[0] for c in calls if c[0] == "session/resume"]
+    assert len(resume_calls) == 3
+
+
+def test_resume_session_retries_session_load_after_resume_not_found(client: AcpClient, monkeypatch) -> None:
+    """When session/resume is not found, session/load is also retried on transient errors."""
+    client.acp_resume_max_retries = 1
+    calls: list[tuple[str, dict[str, Any]]] = []
+    load_attempts = [0]
+
+    async def fake_call(method: str, params: dict[str, Any], **kwargs: Any) -> Any:
+        calls.append((method, params))
+        if method == "session/resume":
+            raise AcpError(method, {"code": -32601, "message": "Method not found"})
+        if method == "session/load":
+            load_attempts[0] += 1
+            if load_attempts[0] == 1:
+                raise AcpError(method, {"code": -32000, "message": "transient transport error"})
+            return {}
+        return {}
+
+    monkeypatch.setattr(client, "_call", fake_call)
+    monkeypatch.setattr(client, "_resume_jitter", lambda attempt: 0.0)
+    result = client._loop.run_until_complete(client._resume_session("s-load-retry", cwd=Path("/")))
+    assert result == "s-load-retry"
+    assert client.acp_resume_max_retries + 1 == load_attempts[0]
+
+
+def test_resume_session_jitter_is_bounded(client: AcpClient) -> None:
+    """_resume_jitter returns a non-negative, capped delay."""
+    delay0 = client._resume_jitter(0)
+    delay1 = client._resume_jitter(1)
+    delay10 = client._resume_jitter(10)
+    assert 0 <= delay0 <= client.acp_resume_retry_max_seconds
+    assert 0 <= delay1 <= client.acp_resume_retry_max_seconds
+    assert 0 <= delay10 <= client.acp_resume_retry_max_seconds

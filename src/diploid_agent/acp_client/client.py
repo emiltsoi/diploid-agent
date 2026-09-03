@@ -12,6 +12,7 @@ import atexit
 import concurrent.futures
 import logging
 import os
+import random
 import threading
 import time
 from collections.abc import Callable
@@ -85,6 +86,9 @@ class AcpClient:
         max_mcp_restarts: int = 5,
         max_user_restarts: int = 5,
         restart_backoff_window: float = 300.0,
+        acp_resume_max_retries: int = 1,
+        acp_resume_retry_base_seconds: float = 0.5,
+        acp_resume_retry_max_seconds: float = 5.0,
         agent_bin: str | Path = "~/.local/bin/devin",
         start_args: list[str] | None = None,
         api_key: str | None = None,
@@ -99,6 +103,9 @@ class AcpClient:
         self.agent_bin = _resolve_agent_bin(agent_bin)
         self.start_args = start_args or _devin_default_start_args(self.model)
         self.metrics = metrics
+        self.acp_resume_max_retries = max(0, acp_resume_max_retries)
+        self.acp_resume_retry_base_seconds = acp_resume_retry_base_seconds
+        self.acp_resume_retry_max_seconds = acp_resume_retry_max_seconds
 
         self._api_key = (
             api_key
@@ -641,6 +648,40 @@ class AcpClient:
                 return False
             raise
 
+    def _resume_jitter(self, attempt: int) -> float:
+        """Return an exponential-backoff delay with a small amount of jitter."""
+        base = self.acp_resume_retry_base_seconds
+        cap = self.acp_resume_retry_max_seconds
+        delay = min(base * (2**attempt), cap) + random.uniform(0, 0.1)
+        return min(delay, cap)
+
+    async def _call_with_resume_retry(
+        self,
+        method: str,
+        params: dict[str, Any],
+        call_timeout: float,
+    ) -> Any:
+        """Call an ACP resume method, retrying transient errors with jitter.
+
+        Does not retry a JSON-RPC "method not found" error; that is the
+        caller's signal to try a different method.
+        """
+        last_exc: Exception | None = None
+        max_attempts = self.acp_resume_max_retries + 1
+        for attempt in range(max_attempts):
+            try:
+                return await self._call(method, params, timeout=call_timeout)
+            except AcpError as exc:
+                if self._is_method_not_found(exc):
+                    raise
+                last_exc = exc
+            except TimeoutError as exc:
+                last_exc = exc
+            if attempt < max_attempts - 1:
+                await asyncio.sleep(self._resume_jitter(attempt))
+        assert last_exc is not None
+        raise last_exc
+
     async def _resume_session(
         self,
         session_id: str,
@@ -692,10 +733,10 @@ class AcpClient:
         try:
             call_timeout = self._control.call_timeout()
             try:
-                await self._call(
+                await self._call_with_resume_retry(
                     "session/resume",
                     resume_params,
-                    timeout=call_timeout,
+                    call_timeout,
                 )
             except AcpError as exc:
                 if self._is_method_not_found(exc):
@@ -703,10 +744,10 @@ class AcpClient:
                         "session/resume not supported; trying session/load for %s", session_id
                     )
                     resume_method = "load"
-                    await self._call(
+                    await self._call_with_resume_retry(
                         "session/load",
                         load_params,
-                        timeout=call_timeout,
+                        call_timeout,
                     )
                 else:
                     raise
