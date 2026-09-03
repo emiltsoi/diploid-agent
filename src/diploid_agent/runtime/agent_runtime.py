@@ -77,6 +77,12 @@ _WAKE_RETRY_REPLIES = {
     "A turn is already in progress; continuation queued.",
 }
 
+# Replies that should be dropped rather than delivered to the user. These are
+# internal diagnostics, not conversation content.
+_WAKE_DROP_REPLIES = {
+    "Unknown or already completed wake event.",
+}
+
 
 def _locked(method):
     """Run a AgentRuntime method under its RLock."""
@@ -887,6 +893,11 @@ class AgentRuntime(RuntimeAPI):
                 # cases; otherwise just drop without completing.
                 if result.reply in _WAKE_RETRY_REPLIES:
                     self.wake_queue.fail(event_id, retry_after=retry_after)
+                    return
+                # Some wake results are internal diagnostics that should not be
+                # surfaced as user-visible replies.
+                if result.reply in _WAKE_DROP_REPLIES:
+                    self.wake_queue.complete(event_id)
                     return
                 # Some wake results are final messages (e.g. budget notice or
                 # "dispatch already completed") that should still be delivered.

@@ -110,6 +110,28 @@ class TurnProcess:
         thought_text = wake_event.payload.get("thought_text") or ""
         active.message_text = message_text[-_MAX_THOUGHT_TEXT_CHARS:]
         active.thought_text = thought_text[-_MAX_THOUGHT_TEXT_CHARS:]
+        active.full_text = active.thought_text + active.message_text
+        self._recompute_message_text(active)
+
+    @staticmethod
+    def _recompute_message_text(active: ActiveTurn) -> None:
+        """Keep message_text as full_text with the current thought prefix removed."""
+        if not active.thought_text or not active.full_text:
+            active.message_text = active.full_text
+        elif active.full_text.startswith(active.thought_text):
+            active.message_text = active.full_text[len(active.thought_text) :]
+        else:
+            active.message_text = active.full_text
+        if len(active.message_text) > _MAX_THOUGHT_TEXT_CHARS:
+            active.message_text = active.message_text[-_MAX_THOUGHT_TEXT_CHARS:]
+
+    @staticmethod
+    def _final_reply_text(active: ActiveTurn, reply: str) -> str:
+        """Return the final reply with any leading thought text removed."""
+        thought = active.thought_text
+        if thought and reply.startswith(thought):
+            return reply[len(thought) :].lstrip("\n")
+        return reply
 
     def process(
         self,
@@ -274,9 +296,10 @@ class TurnProcess:
             with self.runtime._lock:
                 a = self.runtime._active_turns.get(chat_id)
                 if a:
-                    a.message_text += text
-                    if len(a.message_text) > _MAX_THOUGHT_TEXT_CHARS:
-                        a.message_text = a.message_text[-_MAX_THOUGHT_TEXT_CHARS:]
+                    a.full_text += text
+                    if len(a.full_text) > _MAX_THOUGHT_TEXT_CHARS:
+                        a.full_text = a.full_text[-_MAX_THOUGHT_TEXT_CHARS:]
+                    self._recompute_message_text(a)
             if a:
                 with a._condition:
                     a._condition.notify_all()
@@ -300,6 +323,7 @@ class TurnProcess:
                     a.thought_text += text
                     if len(a.thought_text) > _MAX_THOUGHT_TEXT_CHARS:
                         a.thought_text = a.thought_text[-_MAX_THOUGHT_TEXT_CHARS:]
+                    self._recompute_message_text(a)
             if a:
                 with a._condition:
                     a._condition.notify_all()
@@ -439,11 +463,12 @@ class TurnProcess:
                 use_model = pctx.model or use_model
                 is_new = session_id != (old_record.session_id if old_record else None)
                 active.session_id = result.session_id
-                reply = result.reply
+                reply = self._final_reply_text(active, result.reply)
 
             # If a prompt came back with a genuinely empty reply,
             # the ACP session is almost certainly stale. Rehydrate once.
-            if not reply and not result.partial:
+            # Use the raw ACP reply so a thought-only prefix does not look empty.
+            if not result.reply and not result.partial:
                 empty_id = session_id or (old_record.session_id if old_record else "unknown")
                 logger.warning(
                     "ACP session %s returned an empty reply; rehydrating for %s",
@@ -474,7 +499,7 @@ class TurnProcess:
                 use_model = pctx.model or use_model
                 is_new = session_id != (old_record.session_id if old_record else None)
                 active.session_id = result.session_id
-                reply = result.reply
+                reply = self._final_reply_text(active, result.reply)
 
             if result.partial:
                 partial = self.runtime._partial_notice(result, continue_word=continue_word)

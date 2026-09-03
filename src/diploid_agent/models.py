@@ -104,6 +104,7 @@ class ActiveTurn:
     start_time: float
     message_text: str = ""
     thought_text: str = ""
+    full_text: str = ""
     stopped: bool = False
     _condition: threading.Condition = field(default_factory=threading.Condition, repr=False)
 
