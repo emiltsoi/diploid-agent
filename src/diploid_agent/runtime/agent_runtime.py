@@ -431,9 +431,12 @@ class AgentRuntime(RuntimeAPI):
         self,
         chat_id: str | None = None,
         wait: float = 0.0,
-    ) -> ChatResult | None:
+        return_chat_id: bool = False,
+    ) -> ChatResult | tuple[str, ChatResult] | None:
         """Return the next ChatResult for a chat, blocking up to ``wait`` seconds."""
-        return self._outbox.outbox_pop(chat_id, wait=wait)
+        return self._outbox.outbox_pop(
+            chat_id, wait=wait, return_chat_id=return_chat_id
+        )
 
     def _call_unlocked(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         """Release the RLock while running a long call, then reacquire."""

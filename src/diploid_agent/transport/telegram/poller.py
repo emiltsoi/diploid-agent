@@ -104,6 +104,7 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
         self._active_workers: dict[int, TurnWorker] = {}
         self._pending_inputs: dict[int, deque[ChatInput]] = {}
         self._delivery_workers: dict[int, DeliveryWorker] = {}
+        self._global_delivery_worker: DeliveryWorker | None = None
         self._last_user_message_ids: dict[int, int] = {}
         self._send_locks: dict[int, threading.RLock] = {}
         self._worker_lock = threading.RLock()
@@ -151,9 +152,17 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
         return self._stream_thoughts.get(chat_id, self._live_telegram_config.stream_thoughts)
 
     def _ensure_delivery_worker(self, chat_id: int) -> None:
-        """Start a DeliveryWorker for this chat if outbox delivery is enabled."""
+        """Start the global DeliveryWorker if outbox delivery is enabled.
+
+        The worker long-polls ``/outbox`` without a chat scope, so queued
+        messages (including mesh wake replies) are delivered even when no
+        Telegram user message has arrived yet.
+        """
         with self._worker_lock:
-            if chat_id in self._delivery_workers and self._delivery_workers[chat_id].is_alive():
+            if (
+                self._global_delivery_worker is not None
+                and self._global_delivery_worker.is_alive()
+            ):
                 return
             config = self.command_handler.call(
                 method="get_config",
@@ -167,9 +176,8 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
             notifications = config.get("harness", {}).get("notifications", {})
             if not notifications.get("outbox_delivery"):
                 return
-            worker = DeliveryWorker(self, chat_id)
-            self._delivery_workers[chat_id] = worker
-            worker.start()
+            self._global_delivery_worker = DeliveryWorker(self, chat_id=None)
+            self._global_delivery_worker.start()
 
     def _deliver_outbox_result(self, chat_id: int, chat_result: ChatResult) -> None:
         """Deliver an outbox ChatResult to Telegram, registering sent message IDs."""
@@ -331,6 +339,10 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
         logger.info("Starting Telegram poller for %s", target)
         self._stop.clear()
         self._cleanup_orphaned_placeholders()
+        # Start the global outbox worker immediately, so mesh wakes, subagent
+        # completions and other outbox items can be delivered before any new
+        # Telegram user message arrives.
+        self._ensure_delivery_worker(0)
         while not self._stop.is_set():
             try:
                 params: dict[str, int] = {"limit": 100, "timeout": 25}

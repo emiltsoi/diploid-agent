@@ -2220,11 +2220,19 @@ class _FakeDeliveryRuntime:
             }
         }
 
-    def outbox_pop(self, chat_id: str | None = None, wait: float = 0.0) -> ChatResult | None:
-        self.outbox_calls.append((chat_id or "", wait))
-        if self._outbox:
-            return self._outbox.pop(0)
-        return None
+    def outbox_pop(
+        self,
+        chat_id: str | None = None,
+        wait: float = 0.0,
+        return_chat_id: bool = False,
+    ) -> ChatResult | tuple[str, ChatResult] | None:
+        self.outbox_calls.append((chat_id or "", wait, return_chat_id))
+        if not self._outbox:
+            return None
+        result = self._outbox.pop(0)
+        if return_chat_id:
+            return (chat_id or "12345", result)
+        return result
 
     def process(
         self,

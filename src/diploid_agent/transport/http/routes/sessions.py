@@ -54,6 +54,25 @@ def register_sessions(
             catch=False,
         )
 
+    @app.get("/outbox", response_model=OutboxResponse)
+    def outbox_global(wait: float = Query(0.0, ge=0, le=60)) -> OutboxResponse:
+        """Long-poll the next outbox item for any chat."""
+        raw = command_handler.call(
+            method="outbox_pop",
+            http_path="/outbox",
+            http_method="GET",
+            wait=wait,
+            requires_chat_id=False,
+            return_chat_id=True,
+            catch=False,
+        )
+        if raw is None:
+            return OutboxResponse(chat_id=None, result=None)
+        if isinstance(raw, tuple):
+            return OutboxResponse(chat_id=raw[0], result=_to_response(raw[1]))
+        # Fallback for older runtimes that don't support return_chat_id.
+        return OutboxResponse(chat_id=None, result=_to_response(raw))
+
     @app.get("/outbox/{chat_id}", response_model=OutboxResponse)
     def outbox(chat_id: str, wait: float = Query(0.0, ge=0, le=60)) -> OutboxResponse:
         raw = command_handler.call(

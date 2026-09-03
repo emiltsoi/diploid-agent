@@ -457,27 +457,67 @@ class TurnWorker(threading.Thread):
 
 
 class DeliveryWorker(threading.Thread):
-    """Long-poll the runtime outbox and deliver ChatResults to Telegram."""
+    """Long-poll the runtime outbox and deliver ChatResults to Telegram.
+
+    A worker may be scoped to one chat or, when ``chat_id`` is None, act as a
+    global outbox consumer that pulls the next item for *any* chat and starts
+    per-chat delivery on demand. The global worker is the default starting with
+    this harness; per-chat workers remain for tests and callers that need them.
+    """
 
     _POLL_WAIT = 5.0
 
-    def __init__(self, poller: TelegramPoller, chat_id: int) -> None:
-        super().__init__(daemon=True, name=f"delivery-{chat_id}")
+    def __init__(self, poller: TelegramPoller, chat_id: int | None = None) -> None:
+        name = "delivery-global" if chat_id is None else f"delivery-{chat_id}"
+        super().__init__(daemon=True, name=name)
         self.poller = poller
         self.chat_id = chat_id
+        self._next_chat_id: int | None = None
         self._should_stop = threading.Event()
 
     def stop(self) -> None:
         self._should_stop.set()
 
     def _fetch_outbox(self) -> ChatResult | None:
-        raw = self.poller.command_handler.call(
-            method="outbox_pop",
-            chat_id=self.chat_id,
-            http_path="/outbox/{chat_id}",
-            http_method="GET",
-            wait=self._POLL_WAIT,
-        )
+        """Poll the outbox and return the next ChatResult (or None if empty)."""
+        if self.chat_id is not None:
+            raw = self.poller.command_handler.call(
+                method="outbox_pop",
+                chat_id=self.chat_id,
+                http_path="/outbox/{chat_id}",
+                http_method="GET",
+                wait=self._POLL_WAIT,
+            )
+        else:
+            self._next_chat_id = None
+            raw = self.poller.command_handler.call(
+                method="outbox_pop",
+                http_path="/outbox",
+                http_method="GET",
+                wait=self._POLL_WAIT,
+                requires_chat_id=False,
+                return_chat_id=True,
+            )
+            if raw is None:
+                return None
+            if isinstance(raw, tuple):
+                self._next_chat_id = int(raw[0]) if raw[0] is not None else None
+                return raw[1]
+            if isinstance(raw, dict):
+                if "error" in raw:
+                    return None
+                self._next_chat_id = (
+                    int(raw["chat_id"]) if raw.get("chat_id") is not None else None
+                )
+                result = raw.get("result")
+                if result is None:
+                    return None
+                if isinstance(result, dict):
+                    return _coerce_chat_result(result)
+                if isinstance(result, ChatResult):
+                    return result
+                return _coerce_chat_result(result)
+
         if raw is None:
             return None
         if isinstance(raw, ChatResult):
@@ -501,7 +541,14 @@ class DeliveryWorker(threading.Thread):
                 if chat_result is None:
                     time.sleep(self._POLL_WAIT)
                     continue
-                self.poller._deliver_outbox_result(self.chat_id, chat_result)
+                if self.chat_id is not None:
+                    self.poller._deliver_outbox_result(self.chat_id, chat_result)
+                else:
+                    chat_id = self._next_chat_id
+                    if chat_id is None:
+                        time.sleep(self._POLL_WAIT)
+                        continue
+                    self.poller._deliver_outbox_result(chat_id, chat_result)
             except Exception:
                 logger.exception("DeliveryWorker error for chat %s", self.chat_id)
                 time.sleep(self._POLL_WAIT)

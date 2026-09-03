@@ -211,6 +211,14 @@ class AcpTransport:
             with self._client._lock:
                 self._inflight_future = None
                 self._inflight_deadline = 0.0
+            # Cancel the underlying asyncio task if the caller timed out or
+            # raised, so it is not left pending and garbage-collected when the
+            # event loop shuts down.
+            try:
+                if future is not None and not future.done():
+                    future.cancel()
+            except (RuntimeError, OSError, ValueError) as exc:
+                logger.debug("Could not cancel pending ACP task: %s", exc)
 
     # ---------------------------------------------------------------- internal
 
