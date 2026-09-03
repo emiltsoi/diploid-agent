@@ -167,6 +167,8 @@ class TurnWorker(threading.Thread):
         last_thought = ""
         last_thought_sent = ""
         text = ""
+        display_text = ""
+        visible = ""
         committed_text = ""
         committed_display = ""
         committed_message_id = None
@@ -197,10 +199,28 @@ class TurnWorker(threading.Thread):
         while not chat_future.done():
             now = time.monotonic()
             remaining = _HEARTBEAT_INTERVAL - (now - last_edit_at)
-            # Clamp wait between 5 s and 25 s. The 5 s floor prevents a tight
-            # busy loop if the heartbeat has no placeholder to edit (e.g. the
-            # initial sendMessage failed) while still letting us react quickly.
-            wait = min(25.0, max(remaining, 5.0))
+            idle = now - last_growth_at
+            # If the current uncommitted tail is a candidate for an
+            # intermediate-message split, wake at the configured idle deadline
+            # (not just at the heartbeat). This prevents two separate answer
+            # blocks separated by a tool-call gap from being glued into one
+            # Telegram message.
+            tail = _uncommitted_tail(display_text)
+            if _should_commit(tail, idle):
+                # Tail is already idle enough; poll very soon to commit it.
+                commit_wait = 0.0
+            elif (
+                config.intermediate_messages
+                and len(tail) >= config.intermediate_min_chars
+                and (tail.rstrip() and tail.rstrip()[-1] in ".!?\n")
+            ):
+                commit_wait = max(0.0, config.intermediate_idle - idle)
+            else:
+                commit_wait = float("inf")
+            # Wake for the earlier of the heartbeat deadline and the commit
+            # deadline. A 0.5 s floor prevents a tight busy loop when no
+            # placeholder can be edited, while still letting us react quickly.
+            wait = min(25.0, max(0.5, min(remaining, commit_wait)))
             status = self._harness_turn_status(wait=wait)
             now = time.monotonic()
             running = status.get("status") == "running"
