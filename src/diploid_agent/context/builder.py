@@ -1029,7 +1029,9 @@ class ContextBuilder:
                 wake_narrative = self._wake_narrative(chat_id, self._last_wake_event(chat_id))
                 soul_notice = (
                     "Fresh ACP session for context pressure. "
-                    "Persona memory is compacted and long-term recall is skipped."
+                    "Persona memory is compacted and long-term recall is skipped "
+                    "unless the user asks about memory. If you need long-term facts, "
+                    "call `memory_recall(query, tags)`."
                 )
                 if wake_narrative:
                     soul_notice += f" {wake_narrative}"

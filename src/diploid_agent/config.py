@@ -169,10 +169,26 @@ class MemoryConfig(BaseModel):
     fresh_recall_triggers: list[str] = Field(
         default_factory=lambda: [
             "do you remember",
-            "what did we decide about",
-            "where did we leave off",
+            "what did we",
+            "where did we",
+            "what were we",
+            "where were we",
             "did we discuss",
+            "did we agree",
+            "did we decide",
             "remind me",
+            "where did we leave off",
+            "what just happened",
+            "where are we",
+            "as we discussed",
+            "as i said",
+            "last time",
+            "earlier",
+            "continue from",
+            "pick up where",
+            "recall",
+            "what did i say",
+            "what did we say",
         ]
     )
     fresh_recall_max_chars: int = 1024
