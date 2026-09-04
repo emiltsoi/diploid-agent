@@ -755,6 +755,62 @@ def test_build_follow_up_fresh_soul_at_high_pressure(
     assert pctx.force_new_session
 
 
+def test_build_follow_up_fresh_uses_compact_prompt_parts(tmp_path: Path) -> None:
+    """Fresh compact prompts use one-line notices, capped on-disk chat memory, and compact skills."""
+    skills_root = tmp_path / "skills"
+    skills_root.mkdir(parents=True)
+    skill_dir = skills_root / "model-review"
+    skill_dir.mkdir(parents=True)
+    skill_dir.joinpath("SKILL.md").write_text(
+        "---\nname: model-review\n---\n\nRun model review.\n", encoding="utf-8"
+    )
+
+    manager = SkillManager(
+        personas_root=tmp_path / "personas",
+        shared_root=tmp_path,
+        chat_cwd_root=tmp_path,
+    )
+
+    builder = _make_builder(tmp_path)
+    builder.skill_manager = manager
+    builder.active_skill_names = lambda chat_id: {"model-review"}
+
+    mgr = builder.memory_factory("chat-1")
+    fb = mgr._file_backend
+    assert fb is not None
+    fb.retain([MemoryItem(content="We agreed on Postgres.", tags=["memory"])])
+
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="session-1",
+        model="swe-1-7",
+        persona="test-pilot",
+        cwd=str(tmp_path),
+        created_at=time.time(),
+        updated_at=time.time(),
+        turn_number=5,
+        cumulative_metrics={"total_tokens": 950},
+        last_turn_metrics={"input_tokens": 100},
+    )
+    builder.config.engine.context_window = 1000
+
+    pctx = builder.build_follow_up("chat-1", "how are you?", record=record)
+    assert pctx.force_new_session
+    assert pctx.compact
+    # System notice is a one-liner, not a section.
+    assert "Fresh ACP session for context pressure" in pctx.prompt
+    assert "## System notice" not in pctx.prompt
+    assert "[Context budget:" in pctx.prompt
+    # Chat memory is still present but compact.
+    assert "## Chat memory (on disk)" in pctx.prompt
+    assert "Postgres" in pctx.prompt
+    # Skill index is a compact tag list.
+    assert "## Available skills" in pctx.prompt
+    assert "/model-review" in pctx.prompt
+    assert "Run model review." not in pctx.prompt
+
+
 def test_build_follow_up_fresh_recalls_on_memory_triggers(tmp_path: Path, monkeypatch) -> None:
     """Fresh compact mode still runs a capped recall when the user asks a memory question."""
     profile_root = tmp_path / "profile"
@@ -897,9 +953,7 @@ def test_build_follow_up_fresh_recalls_on_indirect_question(tmp_path: Path, monk
 
     monkeypatch.setattr(MemoryManager, "recall_context", fake_recall_context)
 
-    pctx = builder.build_follow_up(
-        "chat-1", "where were we on the database?", record=record
-    )
+    pctx = builder.build_follow_up("chat-1", "where were we on the database?", record=record)
     assert pctx.force_new_session
     assert "## Recalled" in pctx.prompt
     assert "memory_recall(query, tags)" in pctx.prompt

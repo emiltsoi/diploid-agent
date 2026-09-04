@@ -186,6 +186,34 @@ def test_skill_manager_builds_index_and_active_text(tmp_path: Path) -> None:
     assert "exec" in active
 
 
+def test_skill_manager_compact_index_lists_tags(tmp_path: Path) -> None:
+    """Compact skill index is a one-line tag list without full descriptions."""
+    shared = tmp_path / "shared"
+    shared.mkdir(parents=True)
+    _write_skill(
+        shared / "skills",
+        "review",
+        "---\nname: review\ndescription: Review staged changes\n---\n\nRun git diff --staged.\n",
+    )
+    _write_skill(
+        shared / "skills",
+        "body",
+        "---\nname: body\ndescription: Body state\n---\n\nBody.\n",
+    )
+
+    manager = SkillManager(
+        personas_root=tmp_path,
+        shared_root=shared,
+        chat_cwd_root=None,
+    )
+    compact = manager.skill_index_text(None, active={"review"}, compact=True, relevant_only=True)
+    assert compact is not None
+    assert "/review" in compact
+    assert "Review staged changes" not in compact
+    assert "/body" not in compact
+    assert "Say `/skills`" in compact
+
+
 def test_skill_manager_matches_slash_command(tmp_path: Path) -> None:
     """A slash command like /review should activate the matching skill."""
     shared = tmp_path / "shared"

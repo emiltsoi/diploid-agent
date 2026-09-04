@@ -50,7 +50,7 @@ class JsonStatePlugin(StatePlugin):
             return True
         return mtime > since
 
-    def prompt_block(self, max_chars: int | None = None) -> str | None:
+    def prompt_block(self, max_chars: int | None = None, compact: bool = False) -> str | None:
         template = self.config.prompt_template
         if not template:
             return None

@@ -12,5 +12,5 @@ class FailedPlugin(StatePlugin):
         super().__init__(config, chat_id, sessions_root, runtime=runtime)
         self.error = error
 
-    def prompt_block(self, max_chars: int | None = None) -> str | None:
+    def prompt_block(self, max_chars: int | None = None, compact: bool = False) -> str | None:
         return None

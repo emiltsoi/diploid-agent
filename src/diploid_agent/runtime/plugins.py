@@ -262,7 +262,7 @@ class RuntimePlugins:
             f"        runtime: Any = None,\n"
             f"    ) -> None:\n"
             f"        super().__init__(config, chat_id, sessions_root, runtime=runtime)\n\n"
-            f"    def prompt_block(self, max_chars: int | None = None) -> str | None:\n"
+            f"    def prompt_block(self, max_chars: int | None = None, compact: bool = False) -> str | None:\n"
             f"        return None\n",
             encoding="utf-8",
         )

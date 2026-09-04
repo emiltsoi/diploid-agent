@@ -134,7 +134,7 @@ class StatePlugin(abc.ABC):
     def mcp_server(self) -> McpServerConfig | None:
         return self.config.mcp_server
 
-    def prompt_block(self, max_chars: int | None = None) -> str | None:
+    def prompt_block(self, max_chars: int | None = None, compact: bool = False) -> str | None:
         """Return a prompt block for the current chat, or None to skip."""
         return None
 

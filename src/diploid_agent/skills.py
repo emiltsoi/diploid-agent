@@ -233,13 +233,42 @@ class SkillManager:
         self,
         chat_id: str | None = None,
         active: set[str] | None = None,
+        compact: bool = False,
+        relevant_only: bool = False,
     ) -> str | None:
-        """Build a compact, prompt-friendly index of available skills."""
+        """Build a prompt-friendly index of available skills.
+
+        In compact mode only active/relevant skills are listed as slash tags,
+        with a pointer to `/skills` for the full catalog.
+        """
         skills = self.list_skills(chat_id)
         if not skills:
             return None
 
         active = active or set()
+        if relevant_only:
+            skills = [s for s in skills if s.name in active]
+
+        if not skills:
+            return None
+
+        if compact:
+            names = [s.name for s in skills]
+            active_names = [n for n in names if n in active]
+            other_names = [n for n in names if n not in active]
+            if active_names and other_names:
+                return (
+                    f"## Available skills\n\n"
+                    f"Active: {', '.join(f'/{n}' for n in active_names)}. "
+                    f"Others: {', '.join(f'/{n}' for n in other_names)}. "
+                    "Say `/skills` for full descriptions."
+                )
+            return (
+                f"## Available skills\n\n"
+                f"{', '.join(f'/{n}' for n in names)}. "
+                "Say `/skills` for full descriptions."
+            )
+
         lines: list[str] = ["## Available skills", ""]
         for skill in skills:
             slash = f"/{skill.name}"

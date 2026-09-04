@@ -178,9 +178,7 @@ class ContextBuilder:
 
         if ev == "transport.restart" and reason == "mcp_change":
             notes.append("I restarted a moment ago so a new tool could load.")
-        elif ev == "rehydrate.transport_restart_failure" or (
-            "restart" in ev and "failure" in ev
-        ):
+        elif ev == "rehydrate.transport_restart_failure" or ("restart" in ev and "failure" in ev):
             notes.append("I had trouble restarting the ACP transport and rebuilt from files.")
         elif "restart" in ev:
             notes.append("I restarted a moment ago; the thread is intact.")
@@ -230,6 +228,24 @@ class ContextBuilder:
         if self.lifecycle_log is None:
             return None
         return self.lifecycle_log.last_wake_event_for(chat_id)
+
+    def _compact_wake_state_line(self, record: SessionRecord | None) -> str:
+        """Return a one-line wake state for compact prompts."""
+        parts: list[str] = []
+        if record is not None:
+            stop = record.last_stop_reason or "completed"
+            session = record.session_number or 0
+            turn = record.turn_number or 0
+            parts.append(f"Last turn: session {session}, turn {turn}, {stop}.")
+        return " ".join(parts)
+
+    def _format_system_notice(self, parts: list[str], compact: bool) -> str | None:
+        """Render a system notice, one-line in compact mode or a section otherwise."""
+        if not parts:
+            return None
+        if compact:
+            return " ".join(parts)
+        return "## System notice\n\n" + "\n\n".join(parts)
 
     def _context_window_for(self, model: str | None) -> int | None:
         """Resolve the context window for a model, if known."""
@@ -430,11 +446,30 @@ class ContextBuilder:
             f"Keep the context budget in mind."
         )
 
-    def _skill_context(self, chat_id: str, skill_names: set[str] | None = None) -> str | None:
-        """Build a compact skill index for the prompt.
+    def _context_budget_line(self, record: SessionRecord | None, soul_mode: str) -> str:
+        """Return a one-line context budget/pressure indicator."""
+        pressure = self._context_pressure(record)
+        context_window = pressure.get("context_window") or 0
+        cumulative = pressure.get("cumulative_ratio", 0.0)
+        if not context_window:
+            return f"[Context mode: {soul_mode}; window unknown]"
+        used = int(cumulative * context_window)
+        return (
+            f"[Context budget: {used}/{context_window} tokens "
+            f"({cumulative * 100:.1f}%); mode: {soul_mode}]"
+        )
 
-        Full skill content is no longer injected here.  Active skills are
-        copied into the chat workspace by ``SkillManager.sync_to_chat`` so
+    def _skill_context(
+        self,
+        chat_id: str,
+        skill_names: set[str] | None = None,
+        compact: bool = False,
+    ) -> str | None:
+        """Build a skill index for the prompt.
+
+        In compact/fresh mode only the active/relevant skills are shown as a
+        tag list. Full skill content is no longer injected here; active skills
+        are copied into the chat workspace by ``SkillManager.sync_to_chat`` so
         ``devin acp`` discovers and loads them at session start.
         """
         if self.skill_manager is None:
@@ -443,7 +478,13 @@ class ContextBuilder:
         if skill_names is None and self.active_skill_names is not None:
             skill_names = self.active_skill_names(chat_id)
 
-        return self.skill_manager.skill_index_text(chat_id, active=skill_names or set())
+        active = skill_names or set()
+        return self.skill_manager.skill_index_text(
+            chat_id,
+            active=active,
+            compact=compact,
+            relevant_only=compact,
+        )
 
     def build_system_notice(
         self,
@@ -774,6 +815,7 @@ class ContextBuilder:
             if rehydration_reason is not None
             else (RehydrationReason.STALE if rehydrated else RehydrationReason.NONE)
         )
+        is_compact = resolved_reason == RehydrationReason.FRESH
         build_ctx = PromptBuildContext(
             chat_id=chat_id,
             record=record,
@@ -782,6 +824,7 @@ class ContextBuilder:
             continuation_anchor=continuation_anchor,
             rehydrated=rehydrated,
             rehydration_reason=resolved_reason,
+            compact=is_compact,
         )
         build_ctx = self.plugin_manager.before_build_prompt(chat_id, build_ctx)
         effective_model = build_ctx.model or self.config.engine.model
@@ -798,7 +841,13 @@ class ContextBuilder:
         recall = mgr.recall_context(formatted, model=effective_model)
         chat_status = mgr.chat_memory_status()
         promoted = mgr.promoted_memory()
-        pm = mgr.persona_memory(self.config.harness.memory.max_persona_memory_chars)
+        persona_mem_max = self.config.harness.memory.max_persona_memory_chars
+        if is_compact:
+            persona_mem_max = min(
+                persona_mem_max,
+                self.config.harness.memory.max_compact_persona_memory_chars,
+            )
+        pm = mgr.persona_memory(persona_mem_max)
         persona.memory_text = pm["text"]
         persona.memory_truncated = pm["truncated"]
         persona.memory_path = pm["path"]
@@ -834,9 +883,11 @@ class ContextBuilder:
                 chat_id, self._last_wake_event(chat_id), record=record
             )
 
-        if notice or rehydration_notice or wake_narrative:
-            parts = [p for p in [rehydration_notice, wake_narrative, notice] if p]
-            slots["system_notice"].append("## System notice\n\n" + "\n\n".join(parts))
+        system_parts = [p for p in [rehydration_notice, wake_narrative, notice] if p]
+        if is_compact:
+            system_parts.append(self._context_budget_line(record, "fresh"))
+        if system_parts:
+            slots["system_notice"].append(self._format_system_notice(system_parts, is_compact))
         if persona.memory_text:
             slots["memory"].append(
                 f"## Current memory ({persona.memory_path.name})\n\n{persona.memory_text}"
@@ -846,7 +897,11 @@ class ContextBuilder:
         if promoted["text"]:
             slots["promoted"].append(f"## Promoted memory\n\n{promoted['text']}")
 
-        chat_mem = self.memory_factory(chat_id).chat_memory_block()
+        chat_mem = self.memory_factory(chat_id).chat_memory_block(
+            max_chars=(
+                self.config.harness.memory.max_compact_chat_memory_chars if is_compact else None
+            )
+        )
         if chat_mem:
             slots["chat_memory"].append("## Chat memory (on disk)\n\n" + chat_mem)
 
@@ -860,16 +915,17 @@ class ContextBuilder:
             slots,
             is_first=True,
             last_blocks=self._last_blocks[chat_id],
+            compact=is_compact,
         )
 
-        metrics_context = self.metrics_context_for_prompt(chat_id)
+        metrics_context = self.metrics_context_for_prompt(chat_id, compact=is_compact)
         if metrics_context:
             slots["metrics"].append(metrics_context)
 
         if build_ctx.continuation_anchor:
             slots["continuation"].append(build_ctx.continuation_anchor)
 
-        skill_context = self._skill_context(chat_id, skill_names)
+        skill_context = self._skill_context(chat_id, skill_names, compact=is_compact)
         if skill_context:
             slots["skills"].append(skill_context)
 
@@ -912,7 +968,14 @@ class ContextBuilder:
         }
 
         prompt = "\n\n".join(parts)
-        pctx = PromptContext(prompt, notice, flags, slots, model=effective_model)
+        pctx = PromptContext(
+            prompt,
+            notice,
+            flags,
+            slots,
+            model=effective_model,
+            compact=is_compact,
+        )
         pctx = self.plugin_manager.after_prompt_built(chat_id, pctx)
         return self.plugin_manager.after_first_prompt_built(chat_id, pctx)
 
@@ -965,6 +1028,7 @@ class ContextBuilder:
         )
         if soul_mode == "fresh":
             resolved_reason = RehydrationReason.FRESH
+        is_compact = soul_mode == "fresh"
         build_ctx = PromptBuildContext(
             chat_id=chat_id,
             record=record,
@@ -973,6 +1037,7 @@ class ContextBuilder:
             continuation_anchor=continuation_anchor,
             rehydrated=rehydrated,
             rehydration_reason=resolved_reason,
+            compact=is_compact,
         )
         build_ctx = self.plugin_manager.before_build_prompt(chat_id, build_ctx)
         effective_model = build_ctx.model or self.config.engine.model
@@ -988,7 +1053,7 @@ class ContextBuilder:
                     formatted,
                     model=effective_model,
                     max_chars=self.config.harness.memory.fresh_recall_max_chars,
-                    max_tokens=self.config.harness.memory.fresh_recall_max_results * 250,
+                    max_tokens=self.config.harness.memory.fresh_recall_max_results * 150,
                 )
             else:
                 recall = RecallResult(
@@ -1000,6 +1065,10 @@ class ContextBuilder:
                     total=0,
                 )
             short_term = mgr.compaction_context(model=effective_model)
+            if short_term and is_compact:
+                short_term = _trim_to_section(
+                    short_term, self.config.harness.memory.max_compact_short_term_chars
+                )
         elif soul_mode == "full" or self.config.harness.memory.recall_on_follow_up:
             recall = mgr.recall_context(formatted, model=effective_model)
             short_term = ""
@@ -1026,8 +1095,11 @@ class ContextBuilder:
             soul_mode == "fresh" and self._file_changed(chat_id, persona_memory_path)
         ):
             max_chars = self.config.harness.memory.max_persona_memory_chars
-            if soul_mode == "fresh":
-                max_chars = min(1500, max_chars)
+            if is_compact:
+                max_chars = min(
+                    max_chars,
+                    self.config.harness.memory.max_compact_persona_memory_chars,
+                )
             pm = mgr.persona_memory(max_chars)
             self._record_file(chat_id, persona_memory_path)
         else:
@@ -1109,9 +1181,11 @@ class ContextBuilder:
                 "and identity slots."
             )
 
-        if notice or rehydration_notice or soul_notice:
-            parts = [p for p in [rehydration_notice, soul_notice, notice] if p]
-            slots["system_notice"].append("## System notice\n\n" + "\n\n".join(parts))
+        system_parts = [p for p in [rehydration_notice, soul_notice, notice] if p]
+        if is_compact:
+            system_parts.append(self._context_budget_line(record, soul_mode))
+        if system_parts:
+            slots["system_notice"].append(self._format_system_notice(system_parts, is_compact))
         if persona.memory_text:
             slots["memory"].append(
                 f"## Current memory ({persona.memory_path.name})\n\n{persona.memory_text}"
@@ -1128,7 +1202,11 @@ class ContextBuilder:
         chat_mem = None
         chat_memory_path = mgr.chat_memory_path
         if soul_mode in ("full", "fresh") or self._file_changed(chat_id, chat_memory_path):
-            chat_mem = mgr.chat_memory_block()
+            chat_mem = mgr.chat_memory_block(
+                max_chars=(
+                    self.config.harness.memory.max_compact_chat_memory_chars if is_compact else None
+                )
+            )
             self._record_file(chat_id, chat_memory_path)
         if chat_mem:
             slots["chat_memory"].append("## Chat memory (on disk)\n\n" + chat_mem)
@@ -1145,6 +1223,7 @@ class ContextBuilder:
             last_blocks=self._last_blocks[chat_id],
             last_prompt_time=self._last_prompt_time.get(chat_id),
             force_slots=force_slots,
+            compact=is_compact,
         )
 
         self._last_prompt_time[chat_id] = time.time()
@@ -1154,7 +1233,7 @@ class ContextBuilder:
         if build_ctx.continuation_anchor:
             slots["continuation"].append(build_ctx.continuation_anchor)
 
-        skill_context = self._skill_context(chat_id, skill_names)
+        skill_context = self._skill_context(chat_id, skill_names, compact=is_compact)
         if skill_context:
             slots["skills"].append(skill_context)
 
@@ -1200,5 +1279,6 @@ class ContextBuilder:
             slots,
             model=effective_model,
             force_new_session=force_new_session,
+            compact=is_compact,
         )
         return self.plugin_manager.after_prompt_built(chat_id, pctx)

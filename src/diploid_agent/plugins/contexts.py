@@ -35,6 +35,7 @@ class PromptContext:
     slots: dict[str, list[str]]
     model: str | None = None
     force_new_session: bool = False
+    compact: bool = False
 
 
 @dataclass
@@ -74,6 +75,7 @@ class PromptBuildContext:
     continuation_anchor: str | None = None
     rehydrated: bool = False
     rehydration_reason: RehydrationReason = RehydrationReason.NONE
+    compact: bool = False
 
 
 @dataclass

@@ -198,7 +198,14 @@ class MemoryConfig(BaseModel):
     fresh_recall_max_results: int = 3
     auto_promote_enabled: bool = True
     auto_promote_tags: list[str] = Field(
-        default_factory=lambda: ["preference", "plan", "watchpoint", "decision", "agreement", "fact"]
+        default_factory=lambda: [
+            "preference",
+            "plan",
+            "watchpoint",
+            "decision",
+            "agreement",
+            "fact",
+        ]
     )
     auto_promote_triggers: list[str] = Field(
         default_factory=lambda: [
@@ -211,6 +218,9 @@ class MemoryConfig(BaseModel):
         ]
     )
     max_promoted_lines: int = 20
+    max_compact_chat_memory_chars: int = 256
+    max_compact_persona_memory_chars: int = 512
+    max_compact_short_term_chars: int = 512
     hindsight: HindsightConfig = Field(default_factory=HindsightConfig)
 
 
@@ -409,6 +419,7 @@ class HarnessConfig(BaseModel):
     proactive_soul_token_budget: int = 500  # cheap fresh-soul token budget for proactive sizing
     proactive_calibration_enabled: bool = True  # live-calibrate chars/token from last-turn metrics
     proactive_calibration_min_prompt_chars: int = 100  # minimum prompt length to trust calibration
+    compact_plugin_max_chars: int = 200  # cap for plugin prompt blocks in compact/fresh mode
     session_prune_enabled: bool = True
     session_prune_days: int = 14
     plugin_paths: list[Path] = Field(default_factory=lambda: [Path("~/.devin/plugins")])

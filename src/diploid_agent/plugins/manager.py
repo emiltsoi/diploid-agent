@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import inspect
 import logging
 import re
 import time
@@ -485,6 +486,7 @@ class PluginManager:
         last_blocks: dict[tuple[str, str], str | None] | None = None,
         last_prompt_time: float | None = None,
         force_slots: set[str] | None = None,
+        compact: bool = False,
     ) -> dict[str, list[str]]:
         force_slots = force_slots or set()
         for plugin in self._plugins_for(chat_id):
@@ -500,10 +502,16 @@ class PluginManager:
                 if changed is not None and not changed:
                     continue
 
-            try:
-                block = plugin.prompt_block(plugin.max_prompt_chars)
-            except Exception:
-                logger.exception("prompt_block failed for plugin %s", plugin.name)
+            max_chars = plugin.max_prompt_chars
+            if compact and max_chars != 0:
+                max_chars = (
+                    min(max_chars, self._runtime.config.harness.compact_plugin_max_chars)
+                    if self._runtime is not None
+                    else min(max_chars, 200)
+                )
+
+            block = self._plugin_prompt_block(plugin, max_chars, compact=compact)
+            if block is None:
                 continue
 
             if not is_first and last_blocks is not None:
@@ -516,6 +524,33 @@ class PluginManager:
             if block:
                 slots.setdefault(slot, []).append(block)
         return slots
+
+    def _plugin_accepts_compact(self, plugin: StatePlugin) -> bool:
+        """Return True if the plugin's prompt_block accepts a `compact` keyword."""
+        try:
+            sig = inspect.signature(plugin.prompt_block)
+        except (ValueError, TypeError):
+            return False
+        for name, param in sig.parameters.items():
+            if name == "compact":
+                return True
+            if param.kind == inspect.Parameter.VAR_KEYWORD:
+                return True
+        return False
+
+    def _plugin_prompt_block(
+        self, plugin: StatePlugin, max_chars: int | None, compact: bool
+    ) -> str | None:
+        """Call a plugin's prompt_block, passing `compact` only if it supports it."""
+        try:
+            if compact and self._plugin_accepts_compact(plugin):
+                block = plugin.prompt_block(max_chars, compact=True)
+            else:
+                block = plugin.prompt_block(max_chars)
+        except Exception:
+            logger.exception("prompt_block failed for plugin %s", plugin.name)
+            return None
+        return block
 
     def mcp_server_configs(self) -> list[McpServerConfig]:
         servers = []
