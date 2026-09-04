@@ -880,11 +880,19 @@ class MemoryManager:
             f.write(f"- {content.strip()}\n")
         self._tidy_promoted_memory()
 
-    def _append_transcript(self, user_message: str, reply: str, notice: str | None = None) -> None:
+    def _append_transcript(
+        self,
+        user_message: str,
+        reply: str,
+        notice: str | None = None,
+        system_note: str | None = None,
+    ) -> None:
         path = self._transcript_path
         path.parent.mkdir(parents=True, exist_ok=True)
         assistant_content = reply if reply else (notice or "")
         with open(path, "a") as f:
+            if system_note:
+                f.write(json.dumps({"role": "system", "content": system_note}) + "\n")
             f.write(json.dumps({"role": "user", "content": user_message}) + "\n")
             f.write(json.dumps({"role": "assistant", "content": assistant_content}) + "\n")
 
@@ -1241,10 +1249,11 @@ class MemoryManager:
         session_number: int = 0,
         extra_items: list[MemoryItem] | None = None,
         notice: str | None = None,
+        system_note: str | None = None,
     ) -> None:
         """Append to local transcript and retain to the active backend."""
         assistant_content = reply if reply else (notice or "")
-        self._append_transcript(user_message, reply, notice=notice)
+        self._append_transcript(user_message, reply, notice=notice, system_note=system_note)
 
         pair_content = f"User: {user_message}\n\nAssistant: {assistant_content}"
         item = MemoryItem(

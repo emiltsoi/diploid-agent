@@ -274,6 +274,35 @@ class TurnProcess:
             skills_changed = record is not None and previous_skills != active_skill_names
             force_new_session = False
 
+            continue_word = (
+                self.runtime.config.engine.continuation_triggers[0].capitalize()
+                if self.runtime.config.engine.continuation_triggers
+                else "Continue"
+            )
+
+            if (
+                hard_timeout_before
+                and not self.runtime.config.engine.acp_timeout_auto_resend
+                and not self.runtime.context_builder.is_continuation_message(user_message)
+            ):
+                return ChatResult(
+                    reply=(
+                        f"The previous turn was interrupted by the hard time limit and did not "
+                        f"complete. Reply `{continue_word}` to retry it, or send a new message to "
+                        f"start fresh."
+                    ),
+                    notice="Waiting for confirmation before resending the interrupted turn.",
+                    session_id=record.session_id,
+                    session_number=record.session_number,
+                    turn_number=record.turn_number,
+                )
+
+            resend_system_note: str | None = None
+            if hard_timeout_before:
+                resend_system_note = (
+                    "Resuming the previous turn after it was interrupted by a hard timeout."
+                )
+
             if record is None or model_changed or hard_timeout_before or skills_changed:
                 if record and (model_changed or hard_timeout_before or skills_changed):
                     self.runtime._archive_active_session(chat_id, record)
@@ -407,11 +436,6 @@ class TurnProcess:
             _maybe_emit_partial()
 
         turn_start = time.perf_counter()
-        continue_word = (
-            self.runtime.config.engine.continuation_triggers[0].capitalize()
-            if self.runtime.config.engine.continuation_triggers
-            else "Continue"
-        )
 
         rehydrate_notice: str | None = None
 
@@ -684,6 +708,7 @@ class TurnProcess:
                     turn_number=record.turn_number,
                     extra_items=extra_items,
                     notice=assistant_notice,
+                    system_note=resend_system_note,
                 )
 
                 turn = TurnInfo(

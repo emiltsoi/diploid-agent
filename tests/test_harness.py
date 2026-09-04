@@ -1,5 +1,6 @@
 """Tests for the conversational harness."""
 
+import json
 import threading
 import time
 from pathlib import Path
@@ -25,12 +26,14 @@ def _make_config(
     fixture_root: Path,
     *,
     acp_resume_enabled: bool = False,
+    acp_timeout_auto_resend: bool = False,
 ) -> Config:
     return Config(
         diploid=DiploidConfig(
             bin="/bin/echo",
             model="swe-1-7",
             acp_resume_enabled=acp_resume_enabled,
+            acp_timeout_auto_resend=acp_timeout_auto_resend,
         ),
         persona=PersonaConfig(
             name="test-pilot",
@@ -1207,6 +1210,94 @@ def test_hard_timeout_rehydrates_and_restarts_transport(monkeypatch, tmp_path: P
     assert "Resumed." in result2.reply
     assert len(restarts) == 1
     assert call_count[0] == 2
+
+
+def test_hard_timeout_ask_first_when_auto_resend_off(monkeypatch, tmp_path: Path) -> None:
+    """With auto-resend disabled, a non-continuation message after a hard timeout asks first."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root)
+    harness = ConversationHarness(config)
+
+    def fake_create_session(
+        prompt: str, *, cwd: Path | None = None, model: str | None = None, **kwargs: Any
+    ):
+        return AcpPromptResult(
+            reply="",
+            session_id="s-1",
+            partial=True,
+            stop_reason="timeout",
+            timed_out=True,
+        )
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+
+    result1 = harness.process("chat-ask", "hello")
+    assert result1.session_number == 1
+    assert result1.reply == ""
+    assert "Continue" in (result1.notice or "")
+    assert harness._active_record("chat-ask").last_stop_reason == "timeout"
+
+    second_calls: list[str] = []
+
+    def fake_create_session2(
+        prompt: str, *, cwd: Path | None = None, model: str | None = None, **kwargs: Any
+    ) -> AcpPromptResult:
+        second_calls.append(prompt)
+        return AcpPromptResult(reply="should not be called", session_id="s-2")
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session2)
+
+    result2 = harness.process("chat-ask", "what about this instead")
+    assert result2.session_number == 1
+    assert "hard time limit" in result2.reply.lower()
+    assert "Continue" in result2.reply
+    assert len(second_calls) == 0
+    assert harness._active_record("chat-ask").last_stop_reason == "timeout"
+
+
+def test_hard_timeout_auto_resend_does_not_ask(monkeypatch, tmp_path: Path) -> None:
+    """With auto-resend enabled, a non-continuation message after a hard timeout is resent."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root, acp_timeout_auto_resend=True)
+    harness = ConversationHarness(config)
+
+    def fake_create_session(
+        prompt: str, *, cwd: Path | None = None, model: str | None = None, **kwargs: Any
+    ):
+        return AcpPromptResult(
+            reply="",
+            session_id="s-1",
+            partial=True,
+            stop_reason="timeout",
+            timed_out=True,
+        )
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+
+    result1 = harness.process("chat-auto", "hello")
+    assert result1.session_number == 1
+    assert result1.reply == ""
+    assert "Continue" in (result1.notice or "")
+    assert harness._active_record("chat-auto").last_stop_reason == "timeout"
+
+    def fake_create_session2(
+        prompt: str, *, cwd: Path | None = None, model: str | None = None, **kwargs: Any
+    ) -> AcpPromptResult:
+        return AcpPromptResult(reply="Resumed.", session_id="s-2")
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session2)
+
+    result2 = harness.process("chat-auto", "what about this instead")
+    assert result2.session_number == 2
+    assert result2.session_id == "s-2"
+    assert "Resumed." in result2.reply
+
+    transcript_path = harness._chat_dir("chat-auto") / "chat_transcript.jsonl"
+    assert transcript_path.exists()
+    transcript = [json.loads(line) for line in transcript_path.read_text().splitlines() if line.strip()]
+    system_notes = [e for e in transcript if e.get("role") == "system"]
+    assert len(system_notes) == 1
+    assert "interrupted by a hard timeout" in system_notes[0]["content"]
 
 
 def test_restart_records_memory_item(monkeypatch, tmp_path: Path) -> None:

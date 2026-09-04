@@ -51,6 +51,9 @@ class EngineConfig(BaseModel):
     acp_resume_max_retries: int = 1  # retries per resume method (resume or load)
     acp_resume_retry_base_seconds: float = 0.5
     acp_resume_retry_max_seconds: float = 5.0
+    acp_timeout_auto_resend: bool = (
+        False  # if True, automatically resend a hard-timeout turn; if False, ask first
+    )
     continuation_triggers: list[str] = Field(
         default_factory=lambda: ["continue", "go on", "proceed", "resume"]
     )
