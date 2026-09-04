@@ -232,6 +232,11 @@ class AcpEngine(AgentEngine):
         """Return the ACP session id currently in flight, if any."""
         return self._client.active_session_id()
 
+    @property
+    def transport_pid(self) -> int | None:
+        """Return the OS pid of the ACP child process, or None if not running."""
+        return self._client.transport_pid
+
     def restart(self, reason: str | None = None, chat_id: str | None = None) -> None:
         self.restart_transport(reason=reason, chat_id=chat_id)
 

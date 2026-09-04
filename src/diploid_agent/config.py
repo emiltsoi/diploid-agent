@@ -177,6 +177,21 @@ class MemoryConfig(BaseModel):
     )
     fresh_recall_max_chars: int = 1024
     fresh_recall_max_results: int = 3
+    auto_promote_enabled: bool = True
+    auto_promote_tags: list[str] = Field(
+        default_factory=lambda: ["preference", "plan", "watchpoint", "decision", "agreement", "fact"]
+    )
+    auto_promote_triggers: list[str] = Field(
+        default_factory=lambda: [
+            "i prefer",
+            "we agreed",
+            "we decided",
+            "watchpoint",
+            "this matters",
+            "remember that i",
+        ]
+    )
+    max_promoted_lines: int = 20
     hindsight: HindsightConfig = Field(default_factory=HindsightConfig)
 
 

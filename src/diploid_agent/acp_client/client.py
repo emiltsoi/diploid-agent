@@ -194,6 +194,14 @@ class AcpClient:
     # Watchdog and control aliases.
 
     @property
+    def transport_pid(self) -> int | None:
+        """Return the OS pid of the ACP child process, or None if not running."""
+        proc = self._proc
+        if proc is None:
+            return None
+        return proc.pid
+
+    @property
     def _control_socket_path(self) -> Path:
         """Backward-compatible alias for tests that introspect the control socket."""
         return self._control.socket_path

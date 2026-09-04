@@ -850,12 +850,35 @@ class MemoryManager:
         raw_text = self._format_recent_turns(recent)
         return len(raw_text) > self.memory_config.max_short_term_chars
 
+    def _tidy_promoted_memory(self) -> None:
+        """Cap the promoted pocket to the most recent max_promoted_lines entries."""
+        max_lines = getattr(self.memory_config, "max_promoted_lines", 0)
+        if not max_lines:
+            return
+        path = self.promoted_memory_path
+        if not path.exists():
+            return
+
+        raw = path.read_text(encoding="utf-8")
+        lines = [line for line in raw.splitlines() if line.strip()]
+        if len(lines) <= max_lines:
+            return
+
+        # Drop the oldest lines, then collapse adjacent duplicates.
+        kept = lines[-max_lines:]
+        deduped: list[str] = []
+        for line in kept:
+            if line != (deduped[-1] if deduped else None):
+                deduped.append(line)
+        path.write_text("\n".join(deduped) + "\n", encoding="utf-8")
+
     def _append_promoted_memory(self, content: str) -> None:
         """Append a user-promoted fact to the curated pocket file."""
         path = self.promoted_memory_path
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as f:
             f.write(f"- {content.strip()}\n")
+        self._tidy_promoted_memory()
 
     def _append_transcript(self, user_message: str, reply: str, notice: str | None = None) -> None:
         path = self._transcript_path
@@ -1156,6 +1179,26 @@ class MemoryManager:
             total=total,
         )
 
+    def _should_auto_promote(self, content: str, tags: list[str]) -> bool:
+        """Return True when a retained fact looks durable enough for the promoted pocket."""
+        if not getattr(self.memory_config, "auto_promote_enabled", True):
+            return False
+        if "promoted" in tags or "no-promote" in tags:
+            return False
+
+        lower_tags = {t.lower() for t in tags}
+        auto_tags = set(getattr(self.memory_config, "auto_promote_tags", []))
+        if lower_tags & {t.lower() for t in auto_tags}:
+            return True
+
+        lower = content.lower()
+        triggers = getattr(self.memory_config, "auto_promote_triggers", [])
+        for trigger in triggers:
+            if trigger.lower() in lower:
+                return True
+
+        return False
+
     def retain(
         self,
         content: str,
@@ -1170,7 +1213,9 @@ class MemoryManager:
         if "memory" not in item_tags:
             item_tags.append("memory")
 
-        if "promoted" in item_tags:
+        if "promoted" in item_tags or self._should_auto_promote(content, item_tags):
+            if "promoted" not in item_tags:
+                item_tags.append("promoted")
             self._append_promoted_memory(content)
 
         item = MemoryItem(
@@ -1321,11 +1366,7 @@ class MemoryManager:
         Promoted facts are always loaded in compact/fresh mode so the user can
         curate a small "me" pocket that the compactor cannot throw away.
         """
-        path = self.promoted_memory_path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        new_block = f"- {fact.strip()}\n"
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(new_block)
+        self._append_promoted_memory(fact)
 
     def promote_to_persona(self, fact: str) -> None:
         """Append a fact to the persona's MEMORY.md and, for Hindsight, index it.

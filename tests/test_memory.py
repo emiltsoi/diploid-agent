@@ -430,6 +430,102 @@ def test_memory_manager_retain_appends_to_file(tmp_path: Path) -> None:
     assert "agreement" in text
 
 
+def test_retain_auto_promotes_matching_tags(tmp_path: Path) -> None:
+    from diploid_agent.config import MemoryConfig, PersonaConfig
+
+    class FakeClient:
+        pass
+
+    persona = PersonaConfig(name="test-persona", profile_root=tmp_path / "persona")
+    persona.profile_root.mkdir(parents=True, exist_ok=True)
+    config = MemoryConfig(backend="file")
+    manager = MemoryManager(
+        config=config,
+        persona=persona,
+        sessions_root=tmp_path,
+        chat_id="chat-1",
+        devin_client=FakeClient(),
+    )
+    manager.retain("I prefer tea.", tags=["preference"])
+
+    assert manager.promoted_memory_path.exists()
+    assert "I prefer tea." in manager.promoted_memory_path.read_text()
+    assert "promoted" in manager._file_backend._load_memory_text()
+
+
+def test_retain_auto_promotes_matching_content_triggers(tmp_path: Path) -> None:
+    from diploid_agent.config import MemoryConfig, PersonaConfig
+
+    class FakeClient:
+        pass
+
+    persona = PersonaConfig(name="test-persona", profile_root=tmp_path / "persona")
+    persona.profile_root.mkdir(parents=True, exist_ok=True)
+    config = MemoryConfig(backend="file")
+    manager = MemoryManager(
+        config=config,
+        persona=persona,
+        sessions_root=tmp_path,
+        chat_id="chat-1",
+        devin_client=FakeClient(),
+    )
+    manager.retain("We decided to use Postgres for the store.", tags=["memory"])
+
+    assert manager.promoted_memory_path.exists()
+    assert "Postgres" in manager.promoted_memory_path.read_text()
+
+
+def test_retain_no_promote_tag_skips_auto_promote(tmp_path: Path) -> None:
+    from diploid_agent.config import MemoryConfig, PersonaConfig
+
+    class FakeClient:
+        pass
+
+    persona = PersonaConfig(name="test-persona", profile_root=tmp_path / "persona")
+    persona.profile_root.mkdir(parents=True, exist_ok=True)
+    config = MemoryConfig(backend="file")
+    manager = MemoryManager(
+        config=config,
+        persona=persona,
+        sessions_root=tmp_path,
+        chat_id="chat-1",
+        devin_client=FakeClient(),
+    )
+    manager.retain("We decided to use Postgres.", tags=["memory", "no-promote"])
+
+    assert not manager.promoted_memory_path.exists()
+
+
+def test_promoted_memory_caps_and_dedupes(tmp_path: Path) -> None:
+    from diploid_agent.config import MemoryConfig, PersonaConfig
+
+    class FakeClient:
+        pass
+
+    persona = PersonaConfig(name="test-persona", profile_root=tmp_path / "persona")
+    persona.profile_root.mkdir(parents=True, exist_ok=True)
+    config = MemoryConfig(backend="file", max_promoted_lines=3)
+    manager = MemoryManager(
+        config=config,
+        persona=persona,
+        sessions_root=tmp_path,
+        chat_id="chat-1",
+        devin_client=FakeClient(),
+    )
+    for i in range(5):
+        manager.promote(f"fact {i}")
+
+    lines = manager.promoted_memory_path.read_text().splitlines()
+    assert len(lines) == 3
+    assert lines[0] == "- fact 2"
+    assert lines[-1] == "- fact 4"
+
+    # Duplicate the most recent line; the tidy pass should collapse it.
+    manager.promote("fact 4")
+    lines = manager.promoted_memory_path.read_text().splitlines()
+    assert lines == ["- fact 3", "- fact 4"]
+
+
 def test_record_turn_uses_notice_when_reply_empty(tmp_path: Path) -> None:
     from diploid_agent.config import MemoryConfig, PersonaConfig
 
