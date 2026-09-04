@@ -76,6 +76,36 @@ class ContextBuilder:
         }
     )
 
+    # Order used to render prompt slots into the final string.
+    PROMPT_SLOT_ORDER: ClassVar[list[str]] = [
+        "identity",
+        "self_narrative",
+        "system_notice",
+        "memory",
+        "promoted",
+        "recall",
+        "chat_memory",
+        "persistent_memory",
+        "wake",
+        "working_memory",
+        "body",
+        "self_state",
+        "mesh",
+        "metrics",
+        "skills",
+        "continuation",
+        "user",
+    ]
+
+    # Trim steps for first-turn compact prompts that exceed wake_context_token_budget.
+    # Each step clears the listed slots and re-renders. Earlier steps drop lower-value
+    # context before higher-value context.
+    WAKE_TRIM_STEPS: ClassVar[list[frozenset[str]]] = [
+        frozenset({"metrics"}),
+        frozenset({"memory", "chat_memory", "persistent_memory", "mesh"}),
+        frozenset({"promoted", "recall", "self_narrative", "working_memory", "body", "self_state"}),
+    ]
+
     def __init__(
         self,
         config: Config,
@@ -470,11 +500,108 @@ class ContextBuilder:
             f"({cumulative * 100:.1f}%); mode: {soul_mode}]"
         )
 
+    @staticmethod
+    def _render_slots(slots: dict[str, list[str]]) -> str:
+        """Join slot contents into the final prompt in the canonical order."""
+        parts: list[str] = []
+        for slot in ContextBuilder.PROMPT_SLOT_ORDER:
+            parts.extend(slots.get(slot, []))
+        return "\n\n".join(parts)
+
+    def _estimate_prompt_tokens(self, prompt: str, record: SessionRecord | None) -> int:
+        """Return a rough token estimate for a prompt string."""
+        return int(len(prompt) / self._chars_per_token(record.model if record else None, record))
+
+    def _chat_memory_summary(self, chat_status: dict[str, Any]) -> str | None:
+        """Return a one-line summary of the on-disk chat memory file."""
+        total = chat_status.get("total", 0) or 0
+        if not total:
+            return None
+        path = chat_status.get("path")
+        name = path.name if path else "chat memory"
+        return (
+            f"{total} bytes in {name}. "
+            "Say `/memory` or a memory phrase to recall the full history."
+        )
+
+    def _combined_chat_memory_block(
+        self,
+        recall: RecallResult,
+        short_term: str,
+        chat_mem: str | None,
+    ) -> tuple[str | None, str | None]:
+        """Build a merged `## Chat memory` block split across two prompt slots.
+
+        The first non-empty part carries the top-level `## Chat memory` header.
+        The continuation uses sub-headings (`### Recalled`, `### Recent turns`,
+        `### On disk`) so trim steps can drop the on-disk slice earlier without
+        losing recalled/recent content.
+        """
+        recall_parts: list[str] = []
+        if recall.text:
+            recall_parts.append(f"### Recalled\n\n{recall.text}")
+        if short_term:
+            recall_parts.append(f"### Recent turns\n\n{short_term}")
+
+        chat_mem_part: str | None = None
+        if chat_mem:
+            chat_mem_part = f"### On disk\n\n{chat_mem}"
+
+        if not recall_parts and not chat_mem_part:
+            return None, None
+
+        if not recall_parts:
+            # On-disk only; it must carry the top-level header.
+            return None, f"## Chat memory\n\n{chat_mem_part}"
+
+        return "## Chat memory\n\n" + "\n\n".join(recall_parts), chat_mem_part
+
+    def _wake_context_budget_line(
+        self,
+        record: SessionRecord | None,
+        soul_mode: str,
+        estimated_tokens: int,
+    ) -> str | None:
+        """Return a one-line wake-context budget/pressure indicator, or None if disabled."""
+        budget = self.config.harness.wake_context_token_budget
+        if not budget:
+            return None
+        ratio = min(estimated_tokens / budget, 9.99) if budget else 0.0
+        return (
+            f"[Wake context budget: {estimated_tokens}/{budget} tokens "
+            f"({ratio * 100:.1f}%); mode: {soul_mode}]"
+        )
+
+    def _trim_slots_to_budget(
+        self,
+        slots: dict[str, list[str]],
+        record: SessionRecord | None,
+        budget: int,
+    ) -> tuple[dict[str, list[str]], str]:
+        """Drop lower-value slots until the prompt fits the wake budget.
+
+        Returns the (possibly mutated) slots and the re-rendered prompt.
+        """
+        prompt = self._render_slots(slots)
+        if self._estimate_prompt_tokens(prompt, record) <= budget:
+            return slots, prompt
+
+        for step in self.WAKE_TRIM_STEPS:
+            for slot in step:
+                if slot in slots:
+                    slots[slot] = []
+            prompt = self._render_slots(slots)
+            if self._estimate_prompt_tokens(prompt, record) <= budget:
+                return slots, prompt
+
+        return slots, prompt
+
     def _skill_context(
         self,
         chat_id: str,
         skill_names: set[str] | None = None,
         compact: bool = False,
+        message: str | None = None,
     ) -> str | None:
         """Build a skill index for the prompt.
 
@@ -495,6 +622,7 @@ class ContextBuilder:
             active=active,
             compact=compact,
             relevant_only=compact,
+            message=message,
         )
 
     def build_system_notice(
@@ -847,7 +975,11 @@ class ContextBuilder:
             reply_to_message_id,
             chat_id,
         )
-        persona = compose_persona(self.config.persona)
+        tiered_compact = is_compact and self.config.harness.wake_context_token_budget > 0
+        if tiered_compact:
+            persona = PersonaPrompt(text=identity_anchor(self.config.persona))
+        else:
+            persona = compose_persona(self.config.persona)
         mgr = self.memory_factory(chat_id)
         if is_compact and not self._wants_memory_recall(formatted):
             # Compact fresh session: don’t run heavy long-term recall unless the
@@ -935,20 +1067,25 @@ class ContextBuilder:
             slots["memory"].append(
                 f"## Current memory ({persona.memory_path.name})\n\n{persona.memory_text}"
             )
-        if recall.text:
-            slots["recall"].append("## Chat memory\n\n" + recall.text)
-        if short_term:
-            slots["recall"].append("## Chat memory\n\n" + short_term)
         if promoted["text"]:
             slots["promoted"].append(f"## Promoted memory\n\n{promoted['text']}")
 
-        chat_mem = self.memory_factory(chat_id).chat_memory_block(
-            max_chars=(
-                self.config.harness.memory.max_compact_chat_memory_chars if is_compact else None
+        if tiered_compact and not self._wants_memory_recall(formatted):
+            chat_mem = self._chat_memory_summary(chat_status)
+        else:
+            chat_mem = self.memory_factory(chat_id).chat_memory_block(
+                max_chars=(
+                    self.config.harness.memory.max_compact_chat_memory_chars if is_compact else None
+                )
             )
+
+        recall_block, chat_block = self._combined_chat_memory_block(
+            recall, short_term, chat_mem
         )
-        if chat_mem:
-            slots["chat_memory"].append("## Chat memory (on disk)\n\n" + chat_mem)
+        if recall_block:
+            slots["recall"].append(recall_block)
+        if chat_block:
+            slots["chat_memory"].append(chat_block)
 
         # Record mtimes for the files we just loaded so follow-ups can tell if
         # persona or chat memory has changed.
@@ -963,14 +1100,17 @@ class ContextBuilder:
             compact=is_compact,
         )
 
-        metrics_context = self.metrics_context_for_prompt(chat_id, compact=is_compact)
-        if metrics_context:
-            slots["metrics"].append(metrics_context)
+        if not tiered_compact:
+            metrics_context = self.metrics_context_for_prompt(chat_id, compact=is_compact)
+            if metrics_context:
+                slots["metrics"].append(metrics_context)
 
         if build_ctx.continuation_anchor:
             slots["continuation"].append(build_ctx.continuation_anchor)
 
-        skill_context = self._skill_context(chat_id, skill_names, compact=is_compact)
+        skill_context = self._skill_context(
+            chat_id, skill_names, compact=is_compact, message=formatted
+        )
         if skill_context:
             slots["skills"].append(skill_context)
 
@@ -978,30 +1118,32 @@ class ContextBuilder:
         # change detection on the next follow-up.
         self._last_prompt_time[chat_id] = time.time()
 
-        parts: list[str] = []
-        # Slots are rendered in this order.  The former `persona_state` slot
-        # is split into three dedicated slots: body (sensation), self_state
-        # (private mood/resume note), and mesh (external protocol).
-        for slot in [
-            "identity",
-            "self_narrative",
-            "system_notice",
-            "memory",
-            "promoted",
-            "recall",
-            "chat_memory",
-            "persistent_memory",
-            "wake",
-            "working_memory",
-            "body",
-            "self_state",
-            "mesh",
-            "metrics",
-            "skills",
-            "continuation",
-            "user",
-        ]:
-            parts.extend(slots.get(slot, []))
+        prompt = self._render_slots(slots)
+
+        if tiered_compact:
+            budget = self.config.harness.wake_context_token_budget
+            estimated = self._estimate_prompt_tokens(prompt, record)
+            wake_budget_line = self._wake_context_budget_line(record, "fresh", estimated)
+            if wake_budget_line:
+                # Add the wake budget/pressure line and re-render.
+                system_parts.append(wake_budget_line)
+                slots["system_notice"] = [self._format_system_notice(system_parts, is_compact)]
+                prompt = self._render_slots(slots)
+
+            # If the prompt still exceeds the wake budget, drop lower-tier slots.
+            if self._estimate_prompt_tokens(prompt, record) > budget:
+                slots, prompt = self._trim_slots_to_budget(slots, record, budget)
+                estimated = self._estimate_prompt_tokens(prompt, record)
+                wake_budget_line = self._wake_context_budget_line(record, "fresh", estimated)
+                if wake_budget_line and system_parts:
+                    if system_parts[-1].startswith("[Wake context budget:"):
+                        system_parts[-1] = wake_budget_line
+                    else:
+                        system_parts.append(wake_budget_line)
+                    slots["system_notice"] = [
+                        self._format_system_notice(system_parts, is_compact)
+                    ]
+                    prompt = self._render_slots(slots)
 
         flags = {
             "persona_memory_exceeded": persona.memory_truncated,
@@ -1012,7 +1154,6 @@ class ContextBuilder:
             "chat_memory_exceeded": chat_status.get("exceeded", False),
         }
 
-        prompt = "\n\n".join(parts)
         pctx = PromptContext(
             prompt,
             notice,
@@ -1235,10 +1376,6 @@ class ContextBuilder:
             slots["memory"].append(
                 f"## Current memory ({persona.memory_path.name})\n\n{persona.memory_text}"
             )
-        if recall.text:
-            slots["recall"].append("## Chat memory\n\n" + recall.text)
-        if short_term:
-            slots["recall"].append("## Chat memory\n\n" + short_term)
         if promoted["text"]:
             slots["promoted"].append(f"## Promoted memory\n\n{promoted['text']}")
 
@@ -1253,8 +1390,14 @@ class ContextBuilder:
                 )
             )
             self._record_file(chat_id, chat_memory_path)
-        if chat_mem:
-            slots["chat_memory"].append("## Chat memory (on disk)\n\n" + chat_mem)
+
+        recall_block, chat_block = self._combined_chat_memory_block(
+            recall, short_term, chat_mem
+        )
+        if recall_block:
+            slots["recall"].append(recall_block)
+        if chat_block:
+            slots["chat_memory"].append(chat_block)
 
         # Force cheap soul slots under pressure so they survive compression.
         # Full soul also re-injects the cheap slots in case they were skipped.
@@ -1278,7 +1421,9 @@ class ContextBuilder:
         if build_ctx.continuation_anchor:
             slots["continuation"].append(build_ctx.continuation_anchor)
 
-        skill_context = self._skill_context(chat_id, skill_names, compact=is_compact)
+        skill_context = self._skill_context(
+            chat_id, skill_names, compact=is_compact, message=formatted
+        )
         if skill_context:
             slots["skills"].append(skill_context)
 
@@ -1286,37 +1431,12 @@ class ContextBuilder:
         if metrics_context:
             slots["metrics"].append(metrics_context)
 
-        parts: list[str] = []
-        # Slots are rendered in this order.  The former `persona_state` slot
-        # is split into three dedicated slots: body (sensation), self_state
-        # (private mood/resume note), and mesh (external protocol).
-        for slot in [
-            "identity",
-            "self_narrative",
-            "system_notice",
-            "memory",
-            "promoted",
-            "recall",
-            "chat_memory",
-            "persistent_memory",
-            "wake",
-            "working_memory",
-            "body",
-            "self_state",
-            "mesh",
-            "metrics",
-            "skills",
-            "continuation",
-            "user",
-        ]:
-            parts.extend(slots.get(slot, []))
+        prompt = self._render_slots(slots)
 
         flags = {
             "persona_memory_exceeded": persona.memory_truncated,
             "chat_memory_exceeded": chat_status.get("exceeded", False),
         }
-
-        prompt = "\n\n".join(parts)
         pctx = PromptContext(
             prompt,
             notice,

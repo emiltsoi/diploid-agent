@@ -1518,5 +1518,6 @@ def test_first_prompt_includes_chat_memory_block(monkeypatch, tmp_path: Path) ->
 
     harness.process("chat-mem", "hello")
     assert len(prompts) == 1
-    assert "## Chat memory (on disk)" in prompts[0]
+    assert "## Chat memory" in prompts[0]
+    assert "### On disk" in prompts[0]
     assert "Postgres" in prompts[0]

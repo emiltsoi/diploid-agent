@@ -235,6 +235,7 @@ class SkillManager:
         active: set[str] | None = None,
         compact: bool = False,
         relevant_only: bool = False,
+        message: str | None = None,
     ) -> str | None:
         """Build a prompt-friendly index of available skills.
 
@@ -254,15 +255,12 @@ class SkillManager:
 
         if compact:
             names = [s.name for s in skills]
-            active_names = [n for n in names if n in active]
-            other_names = [n for n in names if n not in active]
-            if active_names and other_names:
-                return (
-                    f"## Available skills\n\n"
-                    f"Active: {', '.join(f'/{n}' for n in active_names)}. "
-                    f"Others: {', '.join(f'/{n}' for n in other_names)}. "
-                    "Say `/skills` for full descriptions."
-                )
+            if message:
+                matched = self.match_skills(message, chat_id, enabled=set(names))
+                if matched:
+                    names = [n for n in names if n in matched]
+                elif relevant_only:
+                    names = [n for n in names if n in active]
             return (
                 f"## Available skills\n\n"
                 f"{', '.join(f'/{n}' for n in names)}. "

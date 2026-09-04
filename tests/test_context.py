@@ -217,7 +217,8 @@ def test_build_follow_up_includes_recall_when_enabled(tmp_path: Path, monkeypatc
 
     assert calls
     assert "RECALL" in pctx.prompt
-    assert pctx.slots.get("recall") == ["## Chat memory\n\nRECALL"]
+    assert pctx.slots.get("recall") == ["## Chat memory\n\n### Recalled\n\nRECALL"]
+    assert "### Recalled" in pctx.prompt
 
 
 def test_build_first_prompt_trims_reply_quote_and_injects_continuation(tmp_path: Path) -> None:
@@ -371,6 +372,42 @@ def test_build_first_timeout_restart_uses_compact_prompt(tmp_path: Path) -> None
         assert "[Context" in pctx.prompt, f"context budget for {reason.value}"
 
 
+def test_build_first_tiered_compact_uses_anchor_and_budget(tmp_path: Path) -> None:
+    """When wake_context_token_budget is set, compact first prompts use a small identity anchor."""
+    builder = _make_builder(tmp_path)
+    builder.config.harness.wake_context_token_budget = 800
+
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="session-1",
+        model="swe-1-7",
+        persona="test-pilot",
+        cwd=str(tmp_path),
+        created_at=time.time() - 600,
+        updated_at=time.time() - 120,
+        turn_number=3,
+        last_stop_reason="timeout",
+    )
+
+    pctx = builder.build_first(
+        "chat-1",
+        "Continue.",
+        record=record,
+        rehydrated=True,
+        rehydration_reason=RehydrationReason.TIMEOUT,
+    )
+    assert pctx.compact
+    # Identity is anchored, not the full SOUL/AGENTS text.
+    assert "You are test-pilot" in pctx.prompt
+    assert "I am **Test Pilot**" not in pctx.prompt
+    # Wake context budget/pressure line is present.
+    assert "[Wake context budget:" in pctx.prompt
+    # Usage footer is omitted in tiered compact first prompts.
+    assert "## Cumulative usage" not in pctx.prompt
+    assert "[Cumulative usage" not in pctx.prompt
+
+
 def test_build_first_stale_or_resumed_uses_full_prompt(tmp_path: Path) -> None:
     """Stale and resumed sessions still inject the full first-turn prompt."""
     builder = _make_builder(tmp_path)
@@ -470,7 +507,8 @@ def test_build_first_includes_chat_memory_block(tmp_path: Path) -> None:
     assert fb is not None
     fb.retain([MemoryItem(content="We agreed on Postgres.", tags=["memory"])])
     pctx = builder.build_first("chat-1", "hello", record=None)
-    assert "## Chat memory (on disk)" in pctx.prompt
+    assert "## Chat memory" in pctx.prompt
+    assert "### On disk" in pctx.prompt
     assert "Postgres" in pctx.prompt
 
 
@@ -482,7 +520,8 @@ def test_build_follow_up_includes_chat_memory_anchor(tmp_path: Path) -> None:
     assert fb is not None
     fb.retain([MemoryItem(content="We agreed on Postgres.", tags=["memory"])])
     pctx = builder.build_follow_up("chat-1", "what next?", record=None)
-    assert "## Chat memory (on disk)" in pctx.prompt
+    assert "## Chat memory" in pctx.prompt
+    assert "### On disk" in pctx.prompt
     assert "Postgres" in pctx.prompt
 
 
@@ -498,7 +537,7 @@ def test_build_follow_up_skips_unchanged_chat_memory(tmp_path: Path) -> None:
     assert "Postgres" in pctx_first.prompt
 
     pctx_follow = builder.build_follow_up("chat-1", "what next?", record=None)
-    assert "## Chat memory (on disk)" not in pctx_follow.prompt
+    assert "## Chat memory" not in pctx_follow.prompt
     assert "Postgres" not in pctx_follow.prompt
 
 
@@ -717,7 +756,8 @@ def test_build_follow_up_reinjects_full_soul_on_rehydrated(tmp_path: Path) -> No
 
     pctx = builder.build_follow_up("chat-1", "how are you?", record=record, rehydrated=True)
     assert "We value kindness." in pctx.prompt
-    assert "## Chat memory (on disk)" in pctx.prompt
+    assert "## Chat memory" in pctx.prompt
+    assert "### On disk" in pctx.prompt
 
 
 def test_build_follow_up_small_soul_under_context_pressure(tmp_path: Path) -> None:
@@ -819,7 +859,8 @@ def test_build_follow_up_fresh_soul_at_high_pressure(
 
     pctx = builder.build_follow_up("chat-1", "how are you?", record=record)
     assert "We value kindness." in pctx.prompt
-    assert "## Chat memory (on disk)" in pctx.prompt
+    assert "## Chat memory" in pctx.prompt
+    assert "### On disk" in pctx.prompt
     assert pctx.force_new_session
 
 
@@ -871,7 +912,8 @@ def test_build_follow_up_fresh_uses_compact_prompt_parts(tmp_path: Path) -> None
     assert "## System notice" not in pctx.prompt
     assert "[Context budget:" in pctx.prompt
     # Chat memory is still present but compact.
-    assert "## Chat memory (on disk)" in pctx.prompt
+    assert "## Chat memory" in pctx.prompt
+    assert "### On disk" in pctx.prompt
     assert "Postgres" in pctx.prompt
     # Skill index is a compact tag list.
     assert "## Available skills" in pctx.prompt
