@@ -223,6 +223,8 @@ class AcpTransport:
         """Check whether the running ACP subprocess and event loop are still usable."""
         if not self._initialized:
             return False
+        if not self._transport_healthy:
+            return False
         if self._loop is None or self._loop.is_closed() or not self._loop.is_running():
             return False
         if self._proc is None:

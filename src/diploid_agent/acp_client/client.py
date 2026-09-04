@@ -251,7 +251,7 @@ class AcpClient:
             ),
             timeout=self.timeout + 30.0 if self.timeout is not None else None,
         )
-        if result and (result.timed_out or result.stop_reason == "timeout"):
+        if result and result.stop_reason == "timeout":
             # Force a transport restart so the next turn does not hang on
             # session/new while the old child is still busy.
             with self._lock:
@@ -285,7 +285,7 @@ class AcpClient:
             ),
             timeout=self.timeout + 30.0 if self.timeout is not None else None,
         )
-        if result and (result.timed_out or result.stop_reason == "timeout"):
+        if result and result.stop_reason == "timeout":
             with self._lock:
                 self._transport_healthy = False
         return result
