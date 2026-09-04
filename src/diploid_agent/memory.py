@@ -787,10 +787,11 @@ class MemoryManager:
         safe = self.chat_id.replace("/", "_")
         return self.sessions_root / safe / "chat_PROMOTED.md"
 
-    def promoted_memory(self, max_chars: int = 1000) -> dict[str, Any]:
+    def promoted_memory(self, max_chars: int | None = None) -> dict[str, Any]:
         """Load the promoted memory pocket, always capped tightly."""
         from diploid_agent.persona_composer import _trim_to_section
 
+        cap = max_chars or 1000
         path = self.promoted_memory_path
         text = ""
         total = 0
@@ -800,8 +801,8 @@ class MemoryManager:
         if path.exists():
             raw = path.read_text()
             total = len(raw)
-            if total > max_chars:
-                text = _trim_to_section(raw, max_chars)
+            if total > cap:
+                text = _trim_to_section(raw, cap)
                 loaded = len(text)
                 truncated = True
             else:
@@ -812,7 +813,7 @@ class MemoryManager:
             "text": text,
             "path": path if total > 0 else None,
             "truncated": truncated,
-            "limit": max_chars,
+            "limit": cap,
             "loaded": loaded,
             "total": total,
         }
@@ -1135,14 +1136,19 @@ class MemoryManager:
         *,
         max_chars: int | None = None,
         max_tokens: int | None = None,
+        include_short_term: bool = True,
     ) -> RecallResult:
         """Return a memory block for the prompt, combining short-term + recall.
 
         The long-term recall is loaded first and capped, then the short-term
         transcript is appended so recent context is always visible. The
         `truncated` flag is set if the long-term recall had to be trimmed.
+
+        Set `include_short_term=False` to get the long-term recall slice only,
+        which is useful when the caller already provides a compact short-term
+        summary and wants to keep the two under separate headings.
         """
-        short = self._short_term_context(model)
+        short = self._short_term_context(model) if include_short_term else ""
         cap = self.memory_config.max_chat_memory_chars
         max_recall_chars = min(
             max_chars if max_chars is not None else (self.memory_config.max_recall_chars or cap),

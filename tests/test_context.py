@@ -976,8 +976,8 @@ def test_build_follow_up_fresh_recalls_on_memory_triggers(tmp_path: Path, monkey
     assert calls[0][1].get("max_chars") == builder.config.harness.memory.fresh_recall_max_chars
 
 
-def test_build_follow_up_fresh_skips_recall_without_trigger(tmp_path: Path, monkeypatch) -> None:
-    """Fresh compact mode skips long-term recall for ordinary follow-ups."""
+def test_build_follow_up_fresh_runs_tiny_recall_without_trigger(tmp_path: Path, monkeypatch) -> None:
+    """Fresh compact mode runs a tiny capped recall for ordinary follow-ups."""
     profile_root = tmp_path / "profile"
     profile_root.mkdir()
     (profile_root / "SOUL.md").write_text("# SOUL")
@@ -1014,7 +1014,9 @@ def test_build_follow_up_fresh_skips_recall_without_trigger(tmp_path: Path, monk
     pctx = builder.build_follow_up("chat-1", "how are you?", record=record)
     assert pctx.force_new_session
     assert "## Recalled" not in pctx.prompt
-    assert not calls
+    assert calls
+    assert calls[0][1].get("max_chars") == builder.config.harness.memory.fresh_auto_recall_max_chars
+    assert calls[0][1].get("include_short_term") is False
 
 
 def test_build_follow_up_fresh_recalls_on_indirect_question(tmp_path: Path, monkeypatch) -> None:

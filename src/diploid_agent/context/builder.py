@@ -55,6 +55,8 @@ class ContextBuilder:
 
     # Plugin slots that are cheap and identity-defining; they are forced into
     # the prompt whenever the ACP session is under context pressure.
+    # Promoted memory is included because it is the user-curated "me" pocket
+    # that must survive compact/fresh mode.
     SOUL_SLOTS: frozenset[str] = frozenset(
         {
             "self_narrative",
@@ -62,6 +64,7 @@ class ContextBuilder:
             "body",
             "wake",
             "mesh",
+            "promoted",
         }
     )
 
@@ -74,6 +77,9 @@ class ContextBuilder:
             "continuation",
         }
     )
+
+    # Slots that must survive the tiered wake-budget trimmer.
+    PROTECTED_SLOTS: frozenset[str] = PROMPT_REQUIRED_SLOTS | SOUL_SLOTS
 
     # Rehydration reasons that create a fresh ACP child and should use the
     # compact prompt layout to avoid dumping the full conversation context.
@@ -212,6 +218,14 @@ class ContextBuilder:
         if hours == 1:
             return f"1h {minutes}m" if minutes else "1h"
         return f"{hours}h {minutes}m" if minutes else f"{hours}h"
+
+    @staticmethod
+    def _strip_recall_heading(text: str) -> str:
+        """Remove the backend's default recall prefix so headings stay clean."""
+        prefix = "Memory from previous turns:\n\n"
+        if text.startswith(prefix):
+            return text[len(prefix):]
+        return text
 
     def _wake_narrative(
         self,
@@ -630,6 +644,8 @@ class ContextBuilder:
 
         for step in self.WAKE_TRIM_STEPS:
             for slot in step:
+                if slot in self.PROTECTED_SLOTS:
+                    continue
                 if slot in slots:
                     slots[slot] = []
             prompt = self._render_slots(slots)
@@ -1023,41 +1039,50 @@ class ContextBuilder:
         else:
             persona = compose_persona(self.config.persona)
         mgr = self.memory_factory(chat_id)
-        if is_compact and not self._wants_memory_recall(formatted):
-            # Compact fresh session: don’t run heavy long-term recall unless the
-            # user is asking about a remembered fact. Use a tight short-term
-            # summary so the conversation is not lost.
-            recall = RecallResult(
-                text="",
-                truncated=False,
-                memory_path=None,
-                limit=0,
-                loaded=0,
-                total=0,
-            )
-        else:
+        is_fresh_memory_query = is_compact and self._wants_memory_recall(formatted)
+        if is_fresh_memory_query:
+            # The user is asking a memory question in compact fresh mode.
+            # Run a capped recall that includes short-term context.
             recall = mgr.recall_context(
                 formatted,
                 model=effective_model,
-                max_chars=(
-                    self.config.harness.memory.fresh_recall_max_chars if is_compact else None
-                ),
-                max_tokens=(
-                    self.config.harness.memory.fresh_recall_max_results * 150
-                    if is_compact
-                    else None
-                ),
+                max_chars=self.config.harness.memory.fresh_recall_max_chars,
+                max_tokens=self.config.harness.memory.fresh_recall_max_results * 150,
             )
-        short_term = ""
-        if is_compact and not recall.text:
+            short_term = ""
+        elif is_compact:
+            # Always pull a tiny long-term slice on wake, even when the user is
+            # not asking about memory. Keep the short-term summary separate so
+            # it can render under its own heading.
+            auto_recall = mgr.recall_context(
+                formatted or "current threads and open state",
+                model=effective_model,
+                max_chars=self.config.harness.memory.fresh_auto_recall_max_chars,
+                max_tokens=self.config.harness.memory.fresh_auto_recall_max_results * 150,
+                include_short_term=False,
+            )
+            recall = RecallResult(
+                text=self._strip_recall_heading(auto_recall.text),
+                truncated=auto_recall.truncated,
+                memory_path=auto_recall.memory_path,
+                limit=auto_recall.limit,
+                loaded=len(auto_recall.text),
+                total=auto_recall.total,
+            )
             short_term = mgr.compaction_context(model=effective_model)
             if short_term:
                 short_term = _trim_to_section(
                     short_term,
                     self.config.harness.memory.max_compact_short_term_chars,
                 )
+        else:
+            # Non-compact first turn: load full long-term recall.
+            recall = mgr.recall_context(formatted, model=effective_model)
+            short_term = ""
         chat_status = mgr.chat_memory_status()
-        promoted = mgr.promoted_memory()
+        promoted = mgr.promoted_memory(
+            max_chars=self.config.harness.memory.max_compact_promoted_chars if is_compact else None
+        )
         persona_mem_max = self.config.harness.memory.max_persona_memory_chars
         if is_compact:
             persona_mem_max = min(
@@ -1112,10 +1137,10 @@ class ContextBuilder:
         if promoted["text"]:
             slots["promoted"].append(f"## Promoted memory\n\n{promoted['text']}")
 
-        if is_compact and not self._wants_memory_recall(formatted):
+        if is_compact and not is_fresh_memory_query:
             chat_mem = self._chat_memory_summary(chat_status)
         else:
-            chat_mem = self.memory_factory(chat_id).chat_memory_block(
+            chat_mem = mgr.chat_memory_block(
                 max_chars=(
                     self.config.harness.memory.max_compact_chat_memory_chars if is_compact else None
                 )
@@ -1155,7 +1180,8 @@ class ContextBuilder:
         if skill_context:
             slots["skills"].append(skill_context)
 
-        self._apply_prompt_blocks(slots, is_compact)
+        force_slots = self.SOUL_SLOTS if is_compact else set()
+        self._apply_prompt_blocks(slots, is_compact, force_slots=force_slots)
 
         # Remember when this prompt was built so plugins can use mtime-based
         # change detection on the next follow-up.
@@ -1273,26 +1299,35 @@ class ContextBuilder:
 
         anchor = identity_anchor(self.config.persona)
         mgr = self.memory_factory(chat_id)
-        # Recall is expensive; skip it in fresh compact mode unless the user is
-        # explicitly asking about something we might remember. Fresh still keeps
-        # the most recent min_short_term_turns raw.
-        if soul_mode == "fresh":
-            if self._wants_memory_recall(formatted):
-                recall = mgr.recall_context(
-                    formatted,
-                    model=effective_model,
-                    max_chars=self.config.harness.memory.fresh_recall_max_chars,
-                    max_tokens=self.config.harness.memory.fresh_recall_max_results * 150,
-                )
-            else:
-                recall = RecallResult(
-                    text="",
-                    truncated=False,
-                    memory_path=None,
-                    limit=0,
-                    loaded=0,
-                    total=0,
-                )
+        # Recall is expensive; in fresh compact mode we still run a tiny slice so
+        # the wake is not amnesiac, but only do a full capped recall when the user
+        # is explicitly asking about memory. Fresh still keeps the most recent
+        # min_short_term_turns raw.
+        is_fresh_memory_query = is_compact and self._wants_memory_recall(formatted)
+        if is_fresh_memory_query:
+            recall = mgr.recall_context(
+                formatted,
+                model=effective_model,
+                max_chars=self.config.harness.memory.fresh_recall_max_chars,
+                max_tokens=self.config.harness.memory.fresh_recall_max_results * 150,
+            )
+            short_term = ""
+        elif soul_mode == "fresh":
+            auto_recall = mgr.recall_context(
+                formatted or "current threads and open state",
+                model=effective_model,
+                max_chars=self.config.harness.memory.fresh_auto_recall_max_chars,
+                max_tokens=self.config.harness.memory.fresh_auto_recall_max_results * 150,
+                include_short_term=False,
+            )
+            recall = RecallResult(
+                text=self._strip_recall_heading(auto_recall.text),
+                truncated=auto_recall.truncated,
+                memory_path=auto_recall.memory_path,
+                limit=auto_recall.limit,
+                loaded=len(auto_recall.text),
+                total=auto_recall.total,
+            )
             short_term = mgr.compaction_context(model=effective_model)
             if short_term and is_compact:
                 short_term = _trim_to_section(
@@ -1314,7 +1349,9 @@ class ContextBuilder:
         chat_status = mgr.chat_memory_status()
 
         # Promoted memory is a user-curated pocket that survives fresh compact mode.
-        promoted = mgr.promoted_memory()
+        promoted = mgr.promoted_memory(
+            max_chars=self.config.harness.memory.max_compact_promoted_chars if is_compact else None
+        )
 
         # Load persona memory on full soul (rehydration) and when the file has
         # changed since the last prompt.  Fresh compact mode only loads changed

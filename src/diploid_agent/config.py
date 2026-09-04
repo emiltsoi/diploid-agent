@@ -196,6 +196,9 @@ class MemoryConfig(BaseModel):
     )
     fresh_recall_max_chars: int = 1024
     fresh_recall_max_results: int = 3
+    fresh_auto_recall_max_chars: int = 512
+    fresh_auto_recall_max_results: int = 1
+    max_compact_promoted_chars: int = 512
     auto_promote_enabled: bool = True
     auto_promote_tags: list[str] = Field(
         default_factory=lambda: [
