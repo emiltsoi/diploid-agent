@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from diploid_agent.acp_client.lifecycle import AcpLifecycleLog
 from diploid_agent.config import Config, DiploidConfig, HarnessConfig, PersonaConfig, PluginConfig
 from diploid_agent.context import ContextBuilder
 from diploid_agent.dispatch import Dispatch, DispatchStatus, DispatchStore
@@ -293,6 +294,76 @@ def test_build_first_rehydration_notice_is_in_prompt_not_user_notice(tmp_path: P
     )
     assert "rehydrated" in pctx.prompt.lower()
     assert "rehydrated" not in (pctx.notice or "").lower()
+
+
+def test_build_first_includes_wake_narrative_from_lifecycle(tmp_path: Path) -> None:
+    """A rehydrated first prompt includes a richer wake narrative from the lifecycle log."""
+    builder = _make_builder(tmp_path)
+    log = AcpLifecycleLog(tmp_path / "acp-lifecycle.jsonl")
+    builder.lifecycle_log = log
+    now = time.time()
+    log.write(
+        "rehydrate.timeout",
+        chat_id="chat-1",
+        reason="timeout",
+        detail={"last_stop_reason": "timeout"},
+    )
+
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="session-1",
+        model="swe-1-7",
+        persona="test-pilot",
+        cwd=str(tmp_path),
+        created_at=now - 600,
+        updated_at=now - 120,
+        turn_number=3,
+        last_stop_reason="timeout",
+    )
+
+    pctx = builder.build_first(
+        "chat-1",
+        "hello",
+        record=record,
+        rehydrated=True,
+    )
+    assert "hard timeout" in pctx.prompt.lower()
+    assert "silent for 2m" in pctx.prompt.lower()
+
+
+def test_build_follow_up_fresh_includes_wake_narrative(tmp_path: Path) -> None:
+    """A fresh compact follow-up includes the last wake event in the soul notice."""
+    builder = _make_builder(tmp_path)
+    log = AcpLifecycleLog(tmp_path / "acp-lifecycle.jsonl")
+    builder.lifecycle_log = log
+    now = time.time()
+    log.write(
+        "session.resume.success",
+        chat_id="chat-1",
+        session_id="session-resumed",
+        reason="stale",
+    )
+
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="session-resumed",
+        model="swe-1-7",
+        persona="test-pilot",
+        cwd=str(tmp_path),
+        created_at=now - 600,
+        updated_at=now - 90,
+        turn_number=5,
+        cumulative_metrics={"total_tokens": 950},
+        last_turn_metrics={"input_tokens": 100},
+    )
+    builder.config.engine.context_window = 1000
+
+    pctx = builder.build_follow_up("chat-1", "how are you?", record=record)
+    assert "Fresh ACP session for context pressure" in pctx.prompt
+    assert "resumed the previous session" in pctx.prompt.lower()
+    assert "session-resumed" in pctx.prompt
 
 
 def test_skill_context_is_compact_index_no_full_content(tmp_path: Path) -> None:

@@ -130,6 +130,24 @@ class AcpLifecycleLog:
         results.reverse()
         return results
 
+    def last_wake_event_for(self, chat_id: str) -> dict[str, Any] | None:
+        """Return the most recent wake-relevant lifecycle event for a chat."""
+        event_types = [
+            "transport.restart",
+            "session.resume.success",
+            "session.load.success",
+            "rehydrate.resume.success",
+            "rehydrate.session_alive.success",
+            "rehydrate.new_session.success",
+            "rehydrate.timeout",
+            "rehydrate.start",
+            "rehydrate.transport_restart_failure",
+            "session.new",
+            "session.new.success",
+        ]
+        events = self.recent_events_for(chat_id, event_types=event_types, limit=1)
+        return events[0] if events else None
+
 
 class AcpRestartHistory:
     """Persistent, per-harness restart attempt history for ACP transport backoff.

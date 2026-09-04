@@ -12,6 +12,7 @@ import logging
 import re
 import time
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -146,39 +147,89 @@ class ContextBuilder:
                 return ratio
         return 4.0
 
-    def _wake_narrative(self, chat_id: str, event: dict[str, Any] | None) -> str:
-        """Render a one-sentence continuity note from a lifecycle event."""
+    @staticmethod
+    def _format_silent_duration(seconds: float) -> str:
+        """Return a short, human-readable sleep/duration string."""
+        seconds = max(seconds, 0)
+        if seconds < 60:
+            return f"{int(seconds)}s"
+        if seconds < 3600:
+            minutes, secs = divmod(int(seconds), 60)
+            return f"{minutes}m {secs}s" if secs else f"{minutes}m"
+        hours, rem = divmod(int(seconds), 3600)
+        minutes, secs = divmod(rem, 60)
+        if hours == 1:
+            return f"1h {minutes}m" if minutes else "1h"
+        return f"{hours}h {minutes}m" if minutes else f"{hours}h"
+
+    def _wake_narrative(
+        self,
+        chat_id: str,
+        event: dict[str, Any] | None,
+        record: SessionRecord | None = None,
+    ) -> str:
+        """Render a continuity note from a lifecycle event and the prior record."""
         if event is None:
             return ""
         ev = event.get("event", "")
         reason = event.get("reason") or ""
+        session_id = event.get("session_id")
+        notes: list[str] = []
+
         if ev == "transport.restart" and reason == "mcp_change":
-            return "I restarted a moment ago so a new tool could load; my thread is intact."
-        if "restart" in ev:
-            return "I restarted a moment ago; the thread is intact."
-        if ev in ("session.resume.success", "session.load.success"):
-            return "I resumed the previous session; the thread continues."
-        if ev == "session.new":
-            return "I woke in a fresh session; earlier memory is loaded."
-        return ""
+            notes.append("I restarted a moment ago so a new tool could load.")
+        elif ev == "rehydrate.transport_restart_failure" or (
+            "restart" in ev and "failure" in ev
+        ):
+            notes.append("I had trouble restarting the ACP transport and rebuilt from files.")
+        elif "restart" in ev:
+            notes.append("I restarted a moment ago; the thread is intact.")
+        elif ev in (
+            "session.resume.success",
+            "session.load.success",
+            "rehydrate.resume.success",
+        ):
+            notes.append("I resumed the previous session; the thread continues.")
+        elif ev == "rehydrate.session_alive.success":
+            notes.append("The previous session was still alive; I picked up where we left off.")
+        elif ev == "rehydrate.timeout" or reason == "timeout":
+            notes.append("I am waking up after a hard timeout.")
+        elif ev == "rehydrate.start":
+            notes.append("I am waking up and rehydrating my state.")
+        elif ev in ("session.new", "session.new.success", "rehydrate.new_session.success"):
+            notes.append("I woke in a fresh session; earlier memory is loaded.")
+        else:
+            return ""
+
+        # Add how long we were silent, using the prior record's last update.
+        ts = event.get("timestamp")
+        if ts and record is not None and record.updated_at:
+            try:
+                wake_ts = datetime.fromisoformat(ts).timestamp()
+                silent = wake_ts - record.updated_at
+                if silent > 1:
+                    notes.append(f"I was silent for {self._format_silent_duration(silent)}.")
+            except (ValueError, OSError, TypeError):
+                pass
+
+        # Mention the stop reason from the prior record if it adds useful colour.
+        stop = record.last_stop_reason if record is not None else None
+        if stop and stop not in ("completed", "new_session"):
+            if stop == "timeout" and any("hard timeout" in note for note in notes):
+                pass
+            elif not any(stop in note for note in notes):
+                notes.append(f"The previous turn stopped with reason: {stop}.")
+
+        if session_id:
+            notes.append(f"Session: {session_id}.")
+
+        return " ".join(notes)
 
     def _last_wake_event(self, chat_id: str) -> dict[str, Any] | None:
         """Return the last wake-relevant lifecycle event for this chat."""
         if self.lifecycle_log is None:
             return None
-        events = self.lifecycle_log.recent_events_for(
-            chat_id,
-            event_types=[
-                "transport.restart",
-                "session.resume.success",
-                "session.load.success",
-                "rehydrate.resume.success",
-                "rehydrate.new_session.success",
-                "session.new",
-            ],
-            limit=1,
-        )
-        return events[0] if events else None
+        return self.lifecycle_log.last_wake_event_for(chat_id)
 
     def _context_window_for(self, model: str | None) -> int | None:
         """Resolve the context window for a model, if known."""
@@ -777,9 +828,14 @@ class ContextBuilder:
         }
 
         rehydration_notice = self._rehydration_notice(build_ctx.rehydration_reason)
+        wake_narrative = ""
+        if rehydrated or (record is not None and self.lifecycle_log is not None):
+            wake_narrative = self._wake_narrative(
+                chat_id, self._last_wake_event(chat_id), record=record
+            )
 
-        if notice or rehydration_notice:
-            parts = [p for p in [rehydration_notice, notice] if p]
+        if notice or rehydration_notice or wake_narrative:
+            parts = [p for p in [rehydration_notice, wake_narrative, notice] if p]
             slots["system_notice"].append("## System notice\n\n" + "\n\n".join(parts))
         if persona.memory_text:
             slots["memory"].append(
@@ -1026,7 +1082,9 @@ class ContextBuilder:
         soul_notice = ""
         if force_new_session:
             if soul_mode == "fresh":
-                wake_narrative = self._wake_narrative(chat_id, self._last_wake_event(chat_id))
+                wake_narrative = self._wake_narrative(
+                    chat_id, self._last_wake_event(chat_id), record=record
+                )
                 soul_notice = (
                     "Fresh ACP session for context pressure. "
                     "Persona memory is compacted and long-term recall is skipped "

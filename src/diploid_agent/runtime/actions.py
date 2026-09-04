@@ -212,6 +212,11 @@ class RuntimeActions:
             "average_duration_ms": round(sum(durations) / len(durations), 2) if durations else 0.0,
         }
 
+        # Last wake-relevant event for the chat.
+        continuity["last_wake_event"] = (
+            self._runtime.lifecycle_log.last_wake_event_for(chat_id)
+        )
+
         return continuity
 
     def status(self, chat_id: str) -> dict[str, Any]:

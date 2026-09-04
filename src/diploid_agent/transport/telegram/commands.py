@@ -325,6 +325,23 @@ class TelegramCommandMixin:
             if cont.get("last_restart_reason"):
                 lines.append(f"Restart reason: {cont['last_restart_reason']}")
             lines.append(f"Restarts in backoff window: {cont.get('restart_count_in_window', 0)}")
+        resume_metrics = cont.get("resume_metrics") or {}
+        counts = resume_metrics.get("counts") or {}
+        if counts:
+            lines.append(
+                "Resume counts: "
+                + ", ".join(f"{k.replace('_', ' ')}: {v}" for k, v in sorted(counts.items()))
+            )
+        last_wake = cont.get("last_wake_event")
+        if isinstance(last_wake, dict):
+            wake_line = f"Last wake: {last_wake.get('event', 'unknown')}"
+            if last_wake.get("timestamp"):
+                wake_line += f" at {last_wake['timestamp']}"
+            if last_wake.get("reason"):
+                wake_line += f" ({last_wake['reason']})"
+            if last_wake.get("session_id"):
+                wake_line += f" [{last_wake['session_id']}]"
+            lines.append(wake_line)
         active_turn = data.get("active_turn") or {}
         if active_turn.get("status") == "running":
             elapsed = active_turn.get("elapsed_seconds", 0)

@@ -784,6 +784,47 @@ def test_status_exposes_continuity(monkeypatch, tmp_path: Path) -> None:
     assert cont["state"] == "new"
 
 
+def test_status_continuity_reports_last_wake_and_resume_counts(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """status() exposes the last wake event and a resume success/failure summary."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root, acp_resume_enabled=True)
+    harness = ConversationHarness(config)
+
+    def fake_create_session(
+        prompt: str, *, cwd: Path | None = None, model: str | None = None, **kwargs: Any
+    ) -> AcpPromptResult:
+        return AcpPromptResult(reply="Ready.", session_id="s-continuity")
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+
+    harness.process("chat-resume-counts", "hello")
+    lifecycle = harness.runtime.lifecycle_log
+    lifecycle.write(
+        "session.resume.success",
+        chat_id="chat-resume-counts",
+        session_id="s-continuity",
+        reason="stale",
+        detail={"duration_ms": 123.0},
+    )
+    lifecycle.write(
+        "session.load.success",
+        chat_id="chat-resume-counts",
+        session_id="s-continuity",
+        reason="stale",
+        detail={"duration_ms": 45.0},
+    )
+
+    result = harness.status("chat-resume-counts")
+    cont = result["continuity"]
+    assert cont["last_wake_event"]["event"] == "session.load.success"
+    assert cont["last_wake_event"]["session_id"] == "s-continuity"
+    assert cont["resume_metrics"]["counts"]["resume_success"] == 1
+    assert cont["resume_metrics"]["counts"]["load_success"] == 1
+    assert cont["resume_metrics"]["average_duration_ms"] > 0
+
+
 def test_status_exposes_context_usage(monkeypatch, tmp_path: Path) -> None:
     """status() includes a context_usage block with percentages when the window is known."""
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
