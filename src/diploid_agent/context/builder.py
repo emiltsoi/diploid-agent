@@ -65,6 +65,16 @@ class ContextBuilder:
         }
     )
 
+    # Slots that must always be rendered, even when an allowlist/denylist is active.
+    PROMPT_REQUIRED_SLOTS: frozenset[str] = frozenset(
+        {
+            "identity",
+            "system_notice",
+            "user",
+            "continuation",
+        }
+    )
+
     # Rehydration reasons that create a fresh ACP child and should use the
     # compact prompt layout to avoid dumping the full conversation context.
     COMPACT_REASONS: frozenset[RehydrationReason] = frozenset(
@@ -507,6 +517,38 @@ class ContextBuilder:
         for slot in ContextBuilder.PROMPT_SLOT_ORDER:
             parts.extend(slots.get(slot, []))
         return "\n\n".join(parts)
+
+    def _apply_prompt_blocks(
+        self,
+        slots: dict[str, list[str]],
+        compact: bool,
+        force_slots: set[str] | None = None,
+    ) -> dict[str, list[str]]:
+        """Apply per-persona allowlist/denylist/caps to prompt slots."""
+        pb = self.config.harness.prompt_blocks
+        if not pb.allow and not pb.deny and not pb.caps:
+            return slots
+
+        force = force_slots or set()
+        allowed: set[str] = set(pb.allow) if pb.allow else set(slots.keys())
+        denied = set(pb.deny) - self.PROMPT_REQUIRED_SLOTS
+        allowed |= force | self.PROMPT_REQUIRED_SLOTS
+        allowed -= denied
+
+        for slot in list(slots.keys()):
+            if slot not in allowed:
+                slots.pop(slot, None)
+                continue
+            cap = pb.caps.get(slot)
+            if cap is not None and slots[slot]:
+                joined = "\n\n".join(slots[slot])
+                if len(joined) > cap:
+                    trimmed = _trim_to_section(joined, cap)
+                    if trimmed:
+                        slots[slot] = [trimmed]
+                    else:
+                        slots.pop(slot, None)
+        return slots
 
     def _estimate_prompt_tokens(self, prompt: str, record: SessionRecord | None) -> int:
         """Return a rough token estimate for a prompt string."""
@@ -976,7 +1018,7 @@ class ContextBuilder:
             chat_id,
         )
         tiered_compact = is_compact and self.config.harness.wake_context_token_budget > 0
-        if tiered_compact:
+        if is_compact:
             persona = PersonaPrompt(text=identity_anchor(self.config.persona))
         else:
             persona = compose_persona(self.config.persona)
@@ -1070,7 +1112,7 @@ class ContextBuilder:
         if promoted["text"]:
             slots["promoted"].append(f"## Promoted memory\n\n{promoted['text']}")
 
-        if tiered_compact and not self._wants_memory_recall(formatted):
+        if is_compact and not self._wants_memory_recall(formatted):
             chat_mem = self._chat_memory_summary(chat_status)
         else:
             chat_mem = self.memory_factory(chat_id).chat_memory_block(
@@ -1100,19 +1142,20 @@ class ContextBuilder:
             compact=is_compact,
         )
 
-        if not tiered_compact:
-            metrics_context = self.metrics_context_for_prompt(chat_id, compact=is_compact)
-            if metrics_context:
-                slots["metrics"].append(metrics_context)
+        metrics_context = self.metrics_context_for_prompt(chat_id, compact=is_compact)
+        if metrics_context:
+            slots["metrics"].append(metrics_context)
 
         if build_ctx.continuation_anchor:
             slots["continuation"].append(build_ctx.continuation_anchor)
 
         skill_context = self._skill_context(
-            chat_id, skill_names, compact=is_compact, message=formatted
+            chat_id, skill_names, compact=True, message=formatted
         )
         if skill_context:
             slots["skills"].append(skill_context)
+
+        self._apply_prompt_blocks(slots, is_compact)
 
         # Remember when this prompt was built so plugins can use mtime-based
         # change detection on the next follow-up.
@@ -1422,7 +1465,7 @@ class ContextBuilder:
             slots["continuation"].append(build_ctx.continuation_anchor)
 
         skill_context = self._skill_context(
-            chat_id, skill_names, compact=is_compact, message=formatted
+            chat_id, skill_names, compact=True, message=formatted
         )
         if skill_context:
             slots["skills"].append(skill_context)
@@ -1430,6 +1473,8 @@ class ContextBuilder:
         metrics_context = self.metrics_context_for_prompt(chat_id, compact=True)
         if metrics_context:
             slots["metrics"].append(metrics_context)
+
+        self._apply_prompt_blocks(slots, is_compact, force_slots=force_slots)
 
         prompt = self._render_slots(slots)
 

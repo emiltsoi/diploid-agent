@@ -397,6 +397,14 @@ class MeshConfig(BaseModel):
         return v.rstrip("/") if v else None
 
 
+class PromptBlocksConfig(BaseModel):
+    """Per-persona prompt slot allowlist/denylist and caps."""
+
+    allow: list[str] = Field(default_factory=list)
+    deny: list[str] = Field(default_factory=list)
+    caps: dict[str, int] = Field(default_factory=dict)
+
+
 class HarnessConfig(BaseModel):
     sessions_root: Path = Path("sessions")
     session_store_path: Path = Path("sessions.jsonl")
@@ -437,6 +445,7 @@ class HarnessConfig(BaseModel):
     timer: TimerConfig = Field(default_factory=TimerConfig)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     mesh: MeshConfig = Field(default_factory=MeshConfig)
+    prompt_blocks: PromptBlocksConfig = Field(default_factory=PromptBlocksConfig)
 
     @model_validator(mode="after")
     def _set_store_paths(self) -> HarnessConfig:

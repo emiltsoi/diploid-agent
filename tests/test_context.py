@@ -494,8 +494,8 @@ def test_skill_context_is_compact_index_no_full_content(tmp_path: Path) -> None:
     pctx = builder.build_first("chat-1", "Run a model review.", record=None)
 
     assert "## Available skills" in pctx.prompt
-    assert "model-review" in pctx.prompt
-    assert "(active)" in pctx.prompt
+    assert "/model-review" in pctx.prompt
+    assert "Say `/skills` for full descriptions." in pctx.prompt
     assert "Run model review." not in pctx.prompt
 
 
@@ -1145,3 +1145,75 @@ def test_prompt_chars_recorded_in_turn_metrics(tmp_path: Path) -> None:
         "chat-1", 1, "swe-1-7", {"input_tokens": 100}, 0.5, prompt_chars=350
     )
     assert result["prompt_chars"] == 350
+
+
+def test_build_first_compact_uses_identity_anchor_without_budget(tmp_path: Path) -> None:
+    """Compact first prompts use the linked identity anchor even without a wake budget."""
+    builder = _make_builder(tmp_path)
+    builder.config.harness.wake_context_token_budget = 0
+
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="session-1",
+        model="swe-1-7",
+        persona="test-pilot",
+        cwd=str(tmp_path),
+        created_at=time.time() - 600,
+        updated_at=time.time() - 120,
+        turn_number=3,
+        last_stop_reason="timeout",
+    )
+
+    pctx = builder.build_first(
+        "chat-1",
+        "Continue.",
+        record=record,
+        rehydrated=True,
+        rehydration_reason=RehydrationReason.TIMEOUT,
+    )
+    assert pctx.compact
+    assert "You are test-pilot" in pctx.prompt
+    assert "I am **Test Pilot**" not in pctx.prompt
+
+
+def test_prompt_blocks_deny_slot(tmp_path: Path) -> None:
+    """A prompt_blocks denylist suppresses non-required slots."""
+    builder = _make_builder(tmp_path)
+    builder.metrics["chat-1"] = {
+        "cumulative": {
+            "turns": 5,
+            "total_tokens": 1000,
+            "input_tokens": 600,
+            "output_tokens": 400,
+            "latency_seconds": 10.0,
+        }
+    }
+    builder.config.harness.metrics.expose_in_prompt = True
+    builder.config.harness.prompt_blocks.deny = ["metrics"]
+
+    pctx = builder.build_first("chat-1", "hello", record=None)
+    assert "Cumulative usage" not in pctx.prompt
+    assert "## Cumulative usage" not in pctx.prompt
+    assert not pctx.slots.get("metrics")
+
+
+def test_prompt_blocks_caps_slot(tmp_path: Path) -> None:
+    """A prompt_blocks cap trims an over-long slot."""
+    profile_root = tmp_path / "profile"
+    profile_root.mkdir()
+    (profile_root / "SOUL.md").write_text("# SOUL")
+    (profile_root / "AGENTS.md").write_text("# AGENTS")
+    (profile_root / "MEMORY.md").write_text(
+        "We value kindness.\n\n"
+        "This is a much longer paragraph that should be trimmed by the prompt_blocks cap."
+    )
+
+    builder = _make_builder_with_profile_root(tmp_path, profile_root)
+    builder.config.harness.prompt_blocks.caps = {"memory": 60}
+
+    pctx = builder.build_first("chat-1", "hello", record=None)
+    # The memory slot is capped; the long tail is gone.
+    assert "should be trimmed" not in pctx.prompt
+    assert "We value kindness" in pctx.prompt
+
