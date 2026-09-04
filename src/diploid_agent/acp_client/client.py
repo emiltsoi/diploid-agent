@@ -238,7 +238,7 @@ class AcpClient:
         normalized_mcp_servers = self._sandbox.normalize_mcp_servers(mcp_servers)
         if cwd is not None:
             cwd = Path(cwd)
-        return self._run(
+        result = self._run(
             self._create_session(
                 prompt_text,
                 cwd=cwd,
@@ -251,6 +251,12 @@ class AcpClient:
             ),
             timeout=self.timeout + 30.0 if self.timeout is not None else None,
         )
+        if result and (result.timed_out or result.stop_reason == "timeout"):
+            # Force a transport restart so the next turn does not hang on
+            # session/new while the old child is still busy.
+            with self._lock:
+                self._transport_healthy = False
+        return result
 
     def send_message(
         self,
@@ -267,7 +273,7 @@ class AcpClient:
         self._ensure_started()
         if cwd is not None:
             cwd = Path(cwd)
-        return self._run(
+        result = self._run(
             self._send_message(
                 session_id,
                 prompt_text,
@@ -279,6 +285,10 @@ class AcpClient:
             ),
             timeout=self.timeout + 30.0 if self.timeout is not None else None,
         )
+        if result and (result.timed_out or result.stop_reason == "timeout"):
+            with self._lock:
+                self._transport_healthy = False
+        return result
 
     def list_models(self) -> list[str]:
         """Return the model IDs advertised by the ACP server."""
