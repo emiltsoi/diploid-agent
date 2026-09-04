@@ -14,6 +14,7 @@ from diploid_agent.engine.fake import FakeAgentEngine
 from diploid_agent.memory import MemoryItem, MemoryManager, RecallResult
 from diploid_agent.models import SessionRecord
 from diploid_agent.plugins import PluginManager
+from diploid_agent.plugins.contexts import RehydrationReason
 from diploid_agent.skills import SkillManager
 
 
@@ -330,6 +331,73 @@ def test_build_first_includes_wake_narrative_from_lifecycle(tmp_path: Path) -> N
     )
     assert "hard timeout" in pctx.prompt.lower()
     assert "silent for 2m" in pctx.prompt.lower()
+
+
+def test_build_first_timeout_restart_uses_compact_prompt(tmp_path: Path) -> None:
+    """Timeout, restart, and transport-error fresh sessions use compact prompts."""
+    builder = _make_builder(tmp_path)
+
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="session-1",
+        model="swe-1-7",
+        persona="test-pilot",
+        cwd=str(tmp_path),
+        created_at=time.time() - 600,
+        updated_at=time.time() - 120,
+        turn_number=3,
+        last_stop_reason="timeout",
+        cumulative_metrics={"total_tokens": 950},
+        last_turn_metrics={"input_tokens": 100},
+    )
+    builder.config.engine.context_window = 1000
+
+    for reason in (
+        RehydrationReason.TIMEOUT,
+        RehydrationReason.RESTART,
+        RehydrationReason.TRANSPORT_ERROR,
+        RehydrationReason.FRESH,
+    ):
+        pctx = builder.build_first(
+            "chat-1",
+            "Continue.",
+            record=record,
+            rehydrated=True,
+            rehydration_reason=reason,
+        )
+        assert pctx.compact, f"expected compact for {reason.value}"
+        assert "## System notice" not in pctx.prompt, f"one-line notice for {reason.value}"
+        assert "[Context" in pctx.prompt, f"context budget for {reason.value}"
+
+
+def test_build_first_stale_or_resumed_uses_full_prompt(tmp_path: Path) -> None:
+    """Stale and resumed sessions still inject the full first-turn prompt."""
+    builder = _make_builder(tmp_path)
+
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="session-1",
+        model="swe-1-7",
+        persona="test-pilot",
+        cwd=str(tmp_path),
+        created_at=time.time() - 600,
+        updated_at=time.time() - 120,
+        turn_number=3,
+        last_stop_reason="timeout",
+    )
+
+    for reason in (RehydrationReason.STALE, RehydrationReason.RESUMED):
+        pctx = builder.build_first(
+            "chat-1",
+            "hello",
+            record=record,
+            rehydrated=True,
+            rehydration_reason=reason,
+        )
+        assert not pctx.compact, f"expected full prompt for {reason.value}"
+        assert "## System notice" in pctx.prompt, f"full system notice for {reason.value}"
 
 
 def test_build_follow_up_fresh_includes_wake_narrative(tmp_path: Path) -> None:

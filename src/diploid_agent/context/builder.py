@@ -65,6 +65,17 @@ class ContextBuilder:
         }
     )
 
+    # Rehydration reasons that create a fresh ACP child and should use the
+    # compact prompt layout to avoid dumping the full conversation context.
+    COMPACT_REASONS: frozenset[RehydrationReason] = frozenset(
+        {
+            RehydrationReason.FRESH,
+            RehydrationReason.RESTART,
+            RehydrationReason.TIMEOUT,
+            RehydrationReason.TRANSPORT_ERROR,
+        }
+    )
+
     def __init__(
         self,
         config: Config,
@@ -815,7 +826,7 @@ class ContextBuilder:
             if rehydration_reason is not None
             else (RehydrationReason.STALE if rehydrated else RehydrationReason.NONE)
         )
-        is_compact = resolved_reason == RehydrationReason.FRESH
+        is_compact = resolved_reason in self.COMPACT_REASONS
         build_ctx = PromptBuildContext(
             chat_id=chat_id,
             record=record,
@@ -838,7 +849,39 @@ class ContextBuilder:
         )
         persona = compose_persona(self.config.persona)
         mgr = self.memory_factory(chat_id)
-        recall = mgr.recall_context(formatted, model=effective_model)
+        if is_compact and not self._wants_memory_recall(formatted):
+            # Compact fresh session: don’t run heavy long-term recall unless the
+            # user is asking about a remembered fact. Use a tight short-term
+            # summary so the conversation is not lost.
+            recall = RecallResult(
+                text="",
+                truncated=False,
+                memory_path=None,
+                limit=0,
+                loaded=0,
+                total=0,
+            )
+        else:
+            recall = mgr.recall_context(
+                formatted,
+                model=effective_model,
+                max_chars=(
+                    self.config.harness.memory.fresh_recall_max_chars if is_compact else None
+                ),
+                max_tokens=(
+                    self.config.harness.memory.fresh_recall_max_results * 150
+                    if is_compact
+                    else None
+                ),
+            )
+        short_term = ""
+        if is_compact and not recall.text:
+            short_term = mgr.compaction_context(model=effective_model)
+            if short_term:
+                short_term = _trim_to_section(
+                    short_term,
+                    self.config.harness.memory.max_compact_short_term_chars,
+                )
         chat_status = mgr.chat_memory_status()
         promoted = mgr.promoted_memory()
         persona_mem_max = self.config.harness.memory.max_persona_memory_chars
@@ -894,6 +937,8 @@ class ContextBuilder:
             )
         if recall.text:
             slots["recall"].append("## Chat memory\n\n" + recall.text)
+        if short_term:
+            slots["recall"].append("## Chat memory\n\n" + short_term)
         if promoted["text"]:
             slots["promoted"].append(f"## Promoted memory\n\n{promoted['text']}")
 
