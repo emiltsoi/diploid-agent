@@ -647,15 +647,15 @@ def test_stream_turn_finalizes_thought_before_final(tmp_path: Path) -> None:
     worker._stream_turn(FakeFuture(), None, 50)
 
     send_text_calls = [c for c in calls if c[0] == "send_text"]
-    assert len(send_text_calls) == 1
+    assert len(send_text_calls) == 2
     # The thought placeholder is updated with _edit_message_text during streaming.
     edit_calls = [c for c in calls if c[0] == "edit"]
     assert len(edit_calls) == 1
     assert edit_calls[0][2] == 50
     assert "some thought" in edit_calls[0][3]
-    # _send_text is only the final reply using the placeholder created after thinking.
-    assert send_text_calls[0][3] == 100
-    assert send_text_calls[0][2] == "final reply"
+    # The full thought is sent as multi-part messages, then the final reply.
+    assert send_text_calls[0][2] == "Thinking...\nsome thought"
+    assert send_text_calls[1][2] == "final reply"
 
 
 def test_stream_turn_keeps_thought_when_status_goes_idle(tmp_path: Path) -> None:
@@ -730,9 +730,9 @@ def test_stream_turn_keeps_thought_when_status_goes_idle(tmp_path: Path) -> None
     worker._stream_turn(FakeFuture(), None, 50)
 
     send_text_calls = [c for c in calls if c[0] == "send_text"]
-    assert len(send_text_calls) == 1
-    assert send_text_calls[0][3] == 100
-    assert send_text_calls[0][2] == "final reply"
+    assert len(send_text_calls) == 2
+    assert send_text_calls[0][2] == "Thinking...\nsome thought"
+    assert send_text_calls[1][2] == "final reply"
 
     edit_calls = [c for c in calls if c[0] == "edit"]
     assert len(edit_calls) == 1
@@ -818,7 +818,9 @@ def test_stream_turn_thought_tail_updates(tmp_path: Path) -> None:
     assert edit_history[0].endswith("a")
     assert edit_history[1].startswith("... (thinking continues)")
     assert edit_history[2].startswith("... (thinking continues)")
-    assert delete_history == []
+    # The live placeholder is deleted and the full thought is sent in multi-part
+    # messages once the turn completes.
+    assert delete_history == [50]
 
 
 def test_stream_turn_empty_reply_deletes_placeholder(tmp_path: Path) -> None:

@@ -319,82 +319,119 @@ class TurnWorker(threading.Thread):
         continuation = result.get("continuation", False)
 
         if not continuation:
-            # Finalise the thought block (when enabled). The placeholder has already
-            # been live-edited with the latest visible text, so we only touch it if
-            # the final thought is empty (delete) or short enough to fit in one
-            # message without splitting. Long thoughts stay as they are, which avoids
-            # flooding Telegram with multi-part edits.
-            if thought_id is not None:
-                # Once the future completes the harness may have already popped the
-                # active turn, so a fresh /turn call can return idle with no
-                # thought_text. Use the last captured thought as the fallback.
-                final_status = self._harness_turn_status()
-                thought = final_status.get("thought_text") or last_thought
-                if not thought:
-                    self.poller._delete_message(self.chat_id, thought_id)
-                else:
-                    visible = _format_thought(thought)
-                    if visible and visible != last_thought_sent:
-                        self.poller._edit_message_text(self.chat_id, thought_id, visible)
-                thought_id = None
-
-            # The final placeholder is only created after thinking completes, so it
-            # is always below the thought block.
-            if message_id is None:
-                message_id = self._send_placeholder("...")
-                if message_id is not None:
-                    self.poller._save_placeholder_state(self.chat_id, message_id, thought_id)
-
-            # Replace the placeholder with the final reply. If we already committed
-            # an earlier chunk as its own message, send only the uncommitted suffix
-            # so the user does not see the same text twice.
+            thought = last_thought if thought_id is not None else ""
             reply = result.get("reply", "")
-            display_reply, _ = extract_ask_block(reply)
-            display_reply = display_reply.strip()
-            if committed_text and reply.startswith(committed_text):
-                # The raw final reply still contains the already-committed text;
-                # strip the raw prefix so the suffix (which may include a trailing
-                # ask block for the keyboard) is sent below the committed message.
-                reply = reply[len(committed_text) :].lstrip("\n")
-            elif committed_display and display_reply.startswith(committed_display):
-                # The visible prefix was already committed, but the raw reply was
-                # transformed (e.g. the ask block was stripped). Send only the
-                # visible suffix so the committed message is not duplicated.
-                reply = display_reply[len(committed_display) :].lstrip("\n")
-            if not reply or not reply.strip():
-                # If the turn produced no final text, do not leave the placeholder
-                # hanging. Delete it and send the notice (if any) as a fresh message.
+
+            if thought:
+                # A thought was streamed. Delete the live-edited placeholder(s) and
+                # any committed intermediate reply, then send the full thought as
+                # multi-part Telegram messages, then the full final reply below it.
+                # This keeps the reasoning block above the answer and avoids both
+                # interleaving and duplicating committed text.
+                if thought_id is not None:
+                    self.poller._delete_message(self.chat_id, thought_id)
+                    thought_id = None
                 if message_id is not None:
                     self.poller._delete_message(self.chat_id, message_id)
-                sent = []
-            elif message_id is not None:
-                sent = self.poller._send_text(
-                    self.chat_id,
-                    reply,
-                    first_message_id=message_id,
-                    reply_to_message_id=self.chat_input.message_id,
-                )
-            else:
-                sent = self.poller._send_text(
-                    self.chat_id,
-                    reply,
-                    reply_to_message_id=self.chat_input.message_id,
-                )
+                    message_id = None
+                if committed_message_id is not None:
+                    self.poller._delete_message(self.chat_id, committed_message_id)
+                    committed_message_id = None
+                    committed_text = ""
+                    committed_display = ""
 
-            session_number = result.get("session_number")
-            turn_number = result.get("turn_number")
-            if sent and session_number is not None and turn_number is not None:
-                self.poller._register_message_ids(
-                    self.chat_id, sent, session_number, turn_number, reply, kind="reply"
-                )
-
-            notice = result.get("notice")
-            if notice:
                 self.poller._send_text(
                     self.chat_id,
-                    f"System: {notice}",
+                    f"{_THINKING_PREFIX}\n{thought}",
                     reply_to_message_id=self.chat_input.message_id,
                 )
+
+                sent: list[int] = []
+                if reply and reply.strip():
+                    sent = self.poller._send_text(
+                        self.chat_id,
+                        reply,
+                        reply_to_message_id=self.chat_input.message_id,
+                    )
+
+                session_number = result.get("session_number")
+                turn_number = result.get("turn_number")
+                if sent and session_number is not None and turn_number is not None:
+                    self.poller._register_message_ids(
+                        self.chat_id, sent, session_number, turn_number, reply, kind="reply"
+                    )
+
+                notice = result.get("notice")
+                if notice:
+                    self.poller._send_text(
+                        self.chat_id,
+                        f"System: {notice}",
+                        reply_to_message_id=self.chat_input.message_id,
+                    )
+            else:
+                # No thought stream. Use the original placeholder-based finalisation
+                # so intermediate-message commits are preserved and only the suffix
+                # of the final reply is sent.
+                if thought_id is not None:
+                    self.poller._delete_message(self.chat_id, thought_id)
+                    thought_id = None
+
+                # The final placeholder is only created after thinking completes, so it
+                # is always below the thought block.
+                if message_id is None:
+                    message_id = self._send_placeholder("...")
+                    if message_id is not None:
+                        self.poller._save_placeholder_state(self.chat_id, message_id, thought_id)
+
+                # Replace the placeholder with the final reply. If we already committed
+                # an earlier chunk as its own message, send only the uncommitted suffix
+                # so the user does not see the same text twice.
+                display_reply, _ = extract_ask_block(reply)
+                display_reply = display_reply.strip()
+                if committed_text and reply.startswith(committed_text):
+                    # The raw final reply still contains the already-committed text;
+                    # strip the raw prefix so the suffix (which may include a trailing
+                    # ask block for the keyboard) is sent below the committed message.
+                    reply = reply[len(committed_text) :].lstrip("\n")
+                elif committed_display and display_reply.startswith(committed_display):
+                    # The visible prefix was already committed, but the raw reply was
+                    # transformed (e.g. the ask block was stripped). Send only the
+                    # visible suffix so the committed message is not duplicated.
+                    reply = display_reply[len(committed_display) :].lstrip("\n")
+                if not reply or not reply.strip():
+                    # If the turn produced no final text, do not leave the placeholder
+                    # hanging. Delete it and send the notice (if any) as a fresh message.
+                    if message_id is not None:
+                        self.poller._delete_message(self.chat_id, message_id)
+                    sent = []
+                elif message_id is not None:
+                    sent = self.poller._send_text(
+                        self.chat_id,
+                        reply,
+                        first_message_id=message_id,
+                        reply_to_message_id=self.chat_input.message_id,
+                    )
+                else:
+                    sent = self.poller._send_text(
+                        self.chat_id,
+                        reply,
+                        reply_to_message_id=self.chat_input.message_id,
+                    )
+
+                session_number = result.get("session_number")
+                turn_number = result.get("turn_number")
+                if sent and session_number is not None and turn_number is not None:
+                    self.poller._register_message_ids(
+                        self.chat_id, sent, session_number, turn_number, reply, kind="reply"
+                    )
+
+                notice = result.get("notice")
+                if notice:
+                    self.poller._send_text(
+                        self.chat_id,
+                        f"System: {notice}",
+                        reply_to_message_id=self.chat_input.message_id,
+                    )
         else:
             if committed_message_id is not None and committed_message_id != message_id:
                 self.poller._delete_message(self.chat_id, committed_message_id)
