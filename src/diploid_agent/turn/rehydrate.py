@@ -155,6 +155,7 @@ class TurnRehydrate:
                     model=follow_model,
                     mcp_servers=None,
                     soft_timeout=self.runtime.config.engine.soft_timeout,
+                    timeout=self.runtime.config.engine.timeout,
                     chat_id=chat_id,
                 )
                 result = self.runtime.call_engine_unlocked(
@@ -232,6 +233,7 @@ class TurnRehydrate:
                     model=follow_model,
                     mcp_servers=None,
                     soft_timeout=self.runtime.config.engine.soft_timeout,
+                    timeout=self.runtime.config.engine.timeout,
                     chat_id=chat_id,
                 )
                 result = self.runtime.call_engine_unlocked(

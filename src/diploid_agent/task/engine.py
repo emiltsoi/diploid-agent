@@ -276,6 +276,7 @@ class TaskEngine:
             model=model,
             mcp_servers=task.mcp_servers,
             soft_timeout=soft_timeout,
+            timeout=soft_timeout + 30.0 if soft_timeout is not None else None,
         )
         try:
             turn_result = engine.prompt(request)

@@ -1117,7 +1117,8 @@ class MemoryManager:
                 prompt=prompt,
                 cwd=cwd,
                 model=model,
-                soft_timeout=30.0,
+                soft_timeout=self.memory_config.summary_soft_timeout,
+                timeout=self.memory_config.summary_timeout,
             )
             result = self.devin_client.prompt(request)
             summary = result.reply.strip()
@@ -1335,7 +1336,13 @@ class MemoryManager:
 
         try:
             cwd = self.sessions_root / self.chat_id.replace("/", "_") / ".summarize"
-            request = TurnRequest(prompt=prompt, cwd=cwd, model=model)
+            request = TurnRequest(
+                prompt=prompt,
+                cwd=cwd,
+                model=model,
+                soft_timeout=self.memory_config.summary_soft_timeout,
+                timeout=self.memory_config.summary_timeout,
+            )
             result = self.devin_client.prompt(request)
             reply = result.reply
             summary_item = MemoryItem(

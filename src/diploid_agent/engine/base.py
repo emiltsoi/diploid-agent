@@ -18,6 +18,7 @@ class TurnRequest:
     model: str | None = None
     mcp_servers: list[dict[str, Any]] | None = None
     soft_timeout: float | None = None
+    timeout: float | None = None
     chat_id: str | None = None
 
 

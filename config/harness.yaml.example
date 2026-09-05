@@ -9,6 +9,7 @@ engine:                 # `diploid:` is the YAML alias for this block
   acp_watchdog_interval: 10.0 # seconds between transport health checks
   acp_watchdog_timeout: 120.0 # seconds without a control-call response before transport reset
   acp_resume_enabled: true  # use ACP session/resume (or load) instead of prompt rehydration
+  acp_resume_timeout: 300.0 # hard deadline for ACP session resume/load calls
   continuation_triggers:  # plain-text replies that resume a partial turn
     - continue
     - go on
@@ -206,6 +207,8 @@ harness:
     webhook_url: null          # set to receive HTTP push on continuation
   memory:
     backend: file                  # file | hindsight
+    summary_timeout: 600.0         # hard ACP deadline for memory summarization calls
+    summary_soft_timeout: 30.0     # soft cancel for memory summarization calls
     n_turns_summarization: 100     # auto-summarize every N turns
     max_chat_memory_chars: 16384
     max_recall_chars: 8192         # extra client-side cap on recall results

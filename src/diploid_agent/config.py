@@ -51,6 +51,7 @@ class EngineConfig(BaseModel):
     acp_resume_max_retries: int = 1  # retries per resume method (resume or load)
     acp_resume_retry_base_seconds: float = 0.5
     acp_resume_retry_max_seconds: float = 5.0
+    acp_resume_timeout: float = 300.0  # hard timeout for ACP session resume/load calls
     acp_timeout_auto_resend: bool = (
         False  # if True, automatically resend a hard-timeout turn; if False, ask first
     )
@@ -154,6 +155,18 @@ class HindsightConfig(BaseModel):
 
 class MemoryConfig(BaseModel):
     backend: str = "file"  # file | hindsight
+    summary_timeout: float | None = Field(
+        default=600.0,
+        gt=0,
+        le=86400,
+        description="Hard ACP timeout for memory summarization calls.",
+    )
+    summary_soft_timeout: float | None = Field(
+        default=30.0,
+        gt=0,
+        le=86400,
+        description="Soft ACP timeout before cancel for memory summarization calls.",
+    )
     n_turns_summarization: int | None = None
     max_chat_memory_chars: int = 8192
     max_recall_chars: int | None = None  # extra client-side cap on recall results

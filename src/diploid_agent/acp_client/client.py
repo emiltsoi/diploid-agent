@@ -229,6 +229,7 @@ class AcpClient:
         model: str | None = None,
         mcp_servers: list[dict[str, Any]] | None = None,
         soft_timeout: float | None = None,
+        timeout: float | None = None,
         chat_id: str | None = None,
         on_chunk: Callable[[str], None] | None = None,
         on_update: Callable[[dict[str, Any]], None] | None = None,
@@ -238,6 +239,7 @@ class AcpClient:
         normalized_mcp_servers = self._sandbox.normalize_mcp_servers(mcp_servers)
         if cwd is not None:
             cwd = Path(cwd)
+        effective_timeout = timeout if timeout is not None else self.timeout
         result = self._run(
             self._create_session(
                 prompt_text,
@@ -245,11 +247,14 @@ class AcpClient:
                 model=model,
                 mcp_servers=normalized_mcp_servers,
                 soft_timeout=soft_timeout,
+                timeout=timeout,
                 chat_id=chat_id,
                 on_chunk=on_chunk,
                 on_update=on_update,
             ),
-            timeout=self.timeout + 30.0 if self.timeout is not None else None,
+            timeout=effective_timeout + self._control_timeout + 30.0
+            if effective_timeout is not None
+            else None,
         )
         if result and result.stop_reason == "timeout":
             # Force a transport restart so the next turn does not hang on
@@ -266,6 +271,7 @@ class AcpClient:
         cwd: str | Path | None = None,
         model: str | None = None,
         soft_timeout: float | None = None,
+        timeout: float | None = None,
         on_chunk: Callable[[str], None] | None = None,
         on_update: Callable[[dict[str, Any]], None] | None = None,
     ) -> AcpPromptResult:
@@ -273,6 +279,7 @@ class AcpClient:
         self._ensure_started()
         if cwd is not None:
             cwd = Path(cwd)
+        effective_timeout = timeout if timeout is not None else self.timeout
         result = self._run(
             self._send_message(
                 session_id,
@@ -280,10 +287,13 @@ class AcpClient:
                 cwd=cwd,
                 model=model,
                 soft_timeout=soft_timeout,
+                timeout=timeout,
                 on_chunk=on_chunk,
                 on_update=on_update,
             ),
-            timeout=self.timeout + 30.0 if self.timeout is not None else None,
+            timeout=effective_timeout + self._control_timeout + 30.0
+            if effective_timeout is not None
+            else None,
         )
         if result and result.stop_reason == "timeout":
             with self._lock:
@@ -314,6 +324,7 @@ class AcpClient:
         cwd: Path | None = None,
         model: str | None = None,
         mcp_servers: list[dict[str, Any]] | None = None,
+        timeout: float | None = None,
     ) -> str:
         """Resume a persisted ACP session and return the active session id.
 
@@ -322,6 +333,7 @@ class AcpClient:
         After a successful resume the session mode and model are re-applied.
         """
         self._ensure_started(mcp_servers)
+        effective_timeout = timeout if timeout is not None else self.timeout
         return self._run(
             self._resume_session(
                 session_id,
@@ -329,7 +341,9 @@ class AcpClient:
                 model=model,
                 mcp_servers=mcp_servers,
             ),
-            timeout=self.timeout + 30.0 if self.timeout is not None else None,
+            timeout=effective_timeout + self._control_timeout + 30.0
+            if effective_timeout is not None
+            else None,
         )
 
     def cancel(self, session_id: str) -> None:
@@ -902,6 +916,7 @@ class AcpClient:
         model: str | None = None,
         mcp_servers: list[dict[str, Any]] | None = None,
         soft_timeout: float | None = None,
+        timeout: float | None = None,
         chat_id: str | None = None,
         on_chunk: Callable[[str], None] | None = None,
         on_update: Callable[[dict[str, Any]], None] | None = None,
@@ -979,6 +994,7 @@ class AcpClient:
             session_id,
             prompt_text,
             soft_timeout=soft_timeout,
+            timeout=timeout,
             on_chunk=on_chunk,
             on_update=on_update,
         )
@@ -990,6 +1006,7 @@ class AcpClient:
         cwd: Path | None = None,
         model: str | None = None,
         soft_timeout: float | None = None,
+        timeout: float | None = None,
         on_chunk: Callable[[str], None] | None = None,
         on_update: Callable[[dict[str, Any]], None] | None = None,
     ) -> AcpPromptResult:
@@ -1008,6 +1025,7 @@ class AcpClient:
             session_id,
             prompt_text,
             soft_timeout=soft_timeout,
+            timeout=timeout,
             on_chunk=on_chunk,
             on_update=on_update,
         )
@@ -1036,6 +1054,7 @@ class AcpClient:
         session_id: str,
         text: str,
         soft_timeout: float | None = None,
+        timeout: float | None = None,
         on_chunk: Callable[[str], None] | None = None,
         on_update: Callable[[dict[str, Any]], None] | None = None,
     ) -> AcpPromptResult:
@@ -1095,11 +1114,12 @@ class AcpClient:
                     self._soft_timeout_canceller(prompt, soft_timeout)
                 )
 
+            prompt_timeout = timeout if timeout is not None else self.timeout
             start = self._loop.time()
             done, _pending = await asyncio.wait(
                 [prompt.future, prompt.cancel_done],
                 return_when=asyncio.FIRST_COMPLETED,
-                timeout=self.timeout,
+                timeout=prompt_timeout,
             )
 
             raw: dict[str, Any] | None = None
@@ -1109,8 +1129,8 @@ class AcpClient:
                 # Cancel was requested. Give the server a short grace period to
                 # finish the aborted turn and send the prompt response.
                 elapsed = self._loop.time() - start
-                if self.timeout is not None:
-                    remaining = max(0.0, self.timeout - elapsed)
+                if prompt_timeout is not None:
+                    remaining = max(0.0, prompt_timeout - elapsed)
                     wait_for = min(5.0, remaining)
                 else:
                     wait_for = 5.0

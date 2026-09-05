@@ -121,6 +121,7 @@ class AcpEngine(AgentEngine):
         model: str | None = None,
         mcp_servers: list[dict[str, Any]] | None = None,
         soft_timeout: float | None = None,
+        timeout: float | None = None,
         chat_id: str | None = None,
         on_chunk: Callable[[str], None] | None = None,
         on_update: Callable[[dict[str, Any]], None] | None = None,
@@ -134,6 +135,7 @@ class AcpEngine(AgentEngine):
             model=model,
             mcp_servers=mcp_servers,
             soft_timeout=soft_timeout,
+            timeout=timeout,
             chat_id=chat_id,
             on_chunk=on_chunk,
             on_update=on_update,
@@ -147,6 +149,7 @@ class AcpEngine(AgentEngine):
         cwd: Path | None = None,
         model: str | None = None,
         soft_timeout: float | None = None,
+        timeout: float | None = None,
         on_chunk: Callable[[str], None] | None = None,
         on_update: Callable[[dict[str, Any]], None] | None = None,
     ) -> AcpPromptResult:
@@ -159,6 +162,7 @@ class AcpEngine(AgentEngine):
             cwd=cwd,
             model=model,
             soft_timeout=soft_timeout,
+            timeout=timeout,
             on_chunk=on_chunk,
             on_update=on_update,
         )
@@ -183,6 +187,7 @@ class AcpEngine(AgentEngine):
                 model=request.model,
                 mcp_servers=request.mcp_servers,
                 soft_timeout=request.soft_timeout,
+                timeout=request.timeout,
                 chat_id=request.chat_id,
                 on_chunk=on_chunk,
                 on_update=on_update,
@@ -194,6 +199,7 @@ class AcpEngine(AgentEngine):
                 cwd=request.cwd,
                 model=request.model,
                 soft_timeout=request.soft_timeout,
+                timeout=request.timeout,
                 on_chunk=on_chunk,
                 on_update=on_update,
             )
@@ -226,6 +232,7 @@ class AcpEngine(AgentEngine):
             cwd=cwd,
             model=model,
             mcp_servers=mcp_servers,
+            timeout=self.config.acp_resume_timeout,
         )
 
     def active_session_id(self) -> str | None:

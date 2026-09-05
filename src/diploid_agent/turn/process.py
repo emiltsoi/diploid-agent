@@ -451,6 +451,7 @@ class TurnProcess:
                         else None
                     ),
                     soft_timeout=self.runtime.config.engine.soft_timeout,
+                    timeout=self.runtime.config.engine.timeout,
                     chat_id=chat_id,
                 )
                 call_ctx = self.runtime._plugins.before_engine_call(
