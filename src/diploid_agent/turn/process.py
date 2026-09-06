@@ -623,7 +623,15 @@ class TurnProcess:
             mcp_names = self.runtime._active_mcp_server_names(chat_id)
             skill_names = self.runtime._active_skill_names(chat_id)
             with self.runtime._lock:
-                if is_new:
+                # `force_new_session` (context-pressure fresh mode) also crosses
+                # an ACP session boundary even though it took the follow-up
+                # prompt path — give it a new record so session_number tracks
+                # real ACP sessions instead of mutating the old record's
+                # session_id in place.
+                record_is_new = is_new or force_new_session
+                if record_is_new:
+                    if not is_new:
+                        session_number = self.runtime._next_session_number(chat_id)
                     record = self.runtime._create_record(
                         chat_id,
                         session_number,

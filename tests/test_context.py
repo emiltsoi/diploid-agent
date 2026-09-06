@@ -350,7 +350,7 @@ def test_build_first_timeout_restart_uses_compact_prompt(tmp_path: Path) -> None
         turn_number=3,
         last_stop_reason="timeout",
         cumulative_metrics={"total_tokens": 950},
-        last_turn_metrics={"input_tokens": 100},
+        last_turn_metrics={"input_tokens": 950},
     )
     builder.config.engine.context_window = 1000
 
@@ -461,7 +461,7 @@ def test_build_follow_up_fresh_includes_wake_narrative(tmp_path: Path) -> None:
         updated_at=now - 90,
         turn_number=5,
         cumulative_metrics={"total_tokens": 950},
-        last_turn_metrics={"input_tokens": 100},
+        last_turn_metrics={"input_tokens": 950},
     )
     builder.config.engine.context_window = 1000
 
@@ -777,7 +777,7 @@ def test_build_follow_up_small_soul_under_context_pressure(tmp_path: Path) -> No
     pctx_first = builder.build_first("chat-1", "hello", record=None)
     assert "Mood: calm" in pctx_first.prompt
 
-    # High input ratio, but cumulative low enough to stay below full threshold.
+    # High input ratio, but still below the full/fresh threshold.
     record = SessionRecord(
         chat_id="chat-1",
         session_number=1,
@@ -826,6 +826,78 @@ def test_build_follow_up_proactive_fresh_session(
     assert pctx.force_new_session
 
 
+def test_build_follow_up_no_fresh_on_lifetime_tokens(tmp_path: Path) -> None:
+    """Lifetime cumulative tokens must not force a fresh session.
+
+    Regression: ``cumulative_metrics`` counts every token the chat has ever
+    used and never resets, so it can only grow past the full-soul threshold and
+    permanently pin the chat into fresh sessions.  Only the *current* session's
+    occupancy (last-turn input tokens / window) may trigger it.
+    """
+    builder = _make_builder(tmp_path)
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="session-1",
+        model="swe-1-7",
+        persona="test-pilot",
+        cwd=str(tmp_path),
+        created_at=time.time(),
+        updated_at=time.time(),
+        turn_number=700,
+        cumulative_metrics={"total_tokens": 50_000_000},
+        last_turn_metrics={"input_tokens": 100, "prompt_chars": 400},
+    )
+    builder.config.engine.context_window = 100_000
+    # Keep the proactive estimate out of the way so this isolates the pressure
+    # signal.
+    builder.config.harness.proactive_new_session_threshold = 50.0
+
+    pctx = builder.build_follow_up("chat-1", "how are you?", record=record)
+    assert not pctx.force_new_session
+
+
+def test_build_follow_up_fresh_carries_session_tail(tmp_path: Path) -> None:
+    """A forced fresh session prompt carries a real tail of the previous session.
+
+    The recent-turns block must not be starved to the 512-char compact cap —
+    the new session starts with an empty context window and can afford a real
+    tail (``new_session_tail_max_chars``).
+    """
+    builder = _make_builder(tmp_path)
+    chat_dir = tmp_path / "sessions" / "chat-1"
+    chat_dir.mkdir(parents=True, exist_ok=True)
+    tail_text = "the previous session tail must survive this reset " * 30
+    transcript = chat_dir / "chat_transcript.jsonl"
+    transcript.write_text(
+        json.dumps({"role": "user", "content": tail_text})
+        + "\n"
+        + json.dumps({"role": "assistant", "content": tail_text})
+        + "\n"
+    )
+
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="session-1",
+        model="swe-1-7",
+        persona="test-pilot",
+        cwd=str(tmp_path),
+        created_at=time.time(),
+        updated_at=time.time(),
+        turn_number=5,
+        cumulative_metrics={"total_tokens": 950},
+        last_turn_metrics={"input_tokens": 950},
+    )
+    builder.config.engine.context_window = 1000
+
+    pctx = builder.build_follow_up("chat-1", "continue", record=record)
+    assert pctx.force_new_session
+    assert "### Recent turns" in pctx.prompt
+    # More than the old 512-char compact cap must survive into the prompt.
+    assert tail_text[:600] in pctx.prompt
+
+
 def test_build_follow_up_fresh_soul_at_high_pressure(
     tmp_path: Path,
 ) -> None:
@@ -853,7 +925,7 @@ def test_build_follow_up_fresh_soul_at_high_pressure(
         updated_at=time.time(),
         turn_number=5,
         cumulative_metrics={"total_tokens": 950},
-        last_turn_metrics={"input_tokens": 100},
+        last_turn_metrics={"input_tokens": 950},
     )
     builder.config.engine.context_window = 1000
 
@@ -900,7 +972,7 @@ def test_build_follow_up_fresh_uses_compact_prompt_parts(tmp_path: Path) -> None
         updated_at=time.time(),
         turn_number=5,
         cumulative_metrics={"total_tokens": 950},
-        last_turn_metrics={"input_tokens": 100},
+        last_turn_metrics={"input_tokens": 950},
     )
     builder.config.engine.context_window = 1000
 
@@ -946,7 +1018,7 @@ def test_build_follow_up_fresh_recalls_on_memory_triggers(tmp_path: Path, monkey
         updated_at=time.time(),
         turn_number=5,
         cumulative_metrics={"total_tokens": 950},
-        last_turn_metrics={"input_tokens": 100},
+        last_turn_metrics={"input_tokens": 950},
     )
     builder.config.engine.context_window = 1000
 
@@ -997,7 +1069,7 @@ def test_build_follow_up_fresh_runs_tiny_recall_without_trigger(tmp_path: Path, 
         updated_at=time.time(),
         turn_number=5,
         cumulative_metrics={"total_tokens": 950},
-        last_turn_metrics={"input_tokens": 100},
+        last_turn_metrics={"input_tokens": 950},
     )
     builder.config.engine.context_window = 1000
 
@@ -1044,7 +1116,7 @@ def test_build_follow_up_fresh_recalls_on_indirect_question(tmp_path: Path, monk
         updated_at=time.time(),
         turn_number=5,
         cumulative_metrics={"total_tokens": 950},
-        last_turn_metrics={"input_tokens": 100},
+        last_turn_metrics={"input_tokens": 950},
     )
     builder.config.engine.context_window = 1000
 

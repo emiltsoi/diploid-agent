@@ -196,7 +196,14 @@ class ContextBuilder:
                 prompt_chars >= self.config.harness.proactive_calibration_min_prompt_chars
                 and input_tokens > 0
             ):
-                return prompt_chars / input_tokens
+                ratio = prompt_chars / input_tokens
+                # Only trust the live calibration when the measured prompt is
+                # dominated by the text we sent. On established sessions
+                # `input_tokens` includes the accumulated session history, so
+                # prompt_chars / input_tokens collapses toward zero and the
+                # next-prompt estimate explodes.
+                if 1.0 <= ratio <= 10.0:
+                    return ratio
 
         model_lower = model.lower()
         for name, ratio in self._CHARS_PER_TOKEN.items():
@@ -414,10 +421,10 @@ class ContextBuilder:
 
         pressure = self._context_pressure(record)
         context_window = pressure["context_window"]
-        cumulative_ratio = pressure["cumulative_ratio"]
         input_ratio = pressure["input_ratio"]
 
         thresholds = self.config.harness
+        estimated_ratio = 0.0
 
         # Proactive sizing: estimate the next prompt and trigger a compact fresh
         # session before the prompt overflows the ACP child context window.
@@ -433,7 +440,12 @@ class ContextBuilder:
             if estimated_ratio > thresholds.proactive_new_session_threshold:
                 return "fresh", True
 
-        if cumulative_ratio > thresholds.reinject_soul_full_threshold:
+        # Context pressure must reflect the *current* session's occupancy.
+        # `input_ratio` (last turn's input tokens / window) is that signal: the
+        # ACP child reports the full prompt it consumed, including accumulated
+        # history.  `cumulative_ratio` is lifetime chat usage and never resets,
+        # so it must not drive fresh-session decisions.
+        if input_ratio > thresholds.reinject_soul_full_threshold:
             return "fresh", True
 
         last_full = self._last_full_soul_turn.get(chat_id, 0)
@@ -441,7 +453,7 @@ class ContextBuilder:
         turns_since = turn_number - last_full
 
         if context_window and (
-            cumulative_ratio > thresholds.reinject_soul_threshold
+            estimated_ratio > thresholds.reinject_soul_threshold
             or input_ratio > thresholds.reinject_soul_input_threshold
         ):
             return "small", False
@@ -512,16 +524,22 @@ class ContextBuilder:
         )
 
     def _context_budget_line(self, record: SessionRecord | None, soul_mode: str) -> str:
-        """Return a one-line context budget/pressure indicator."""
+        """Return a one-line context budget/pressure indicator.
+
+        Reports the *current session's* occupancy (last turn's input tokens),
+        not lifetime cumulative usage — the latter only grows and is not a
+        measure of how full the context window is.
+        """
         pressure = self._context_pressure(record)
         context_window = pressure.get("context_window") or 0
-        cumulative = pressure.get("cumulative_ratio", 0.0)
         if not context_window:
             return f"[Context mode: {soul_mode}; window unknown]"
-        used = int(cumulative * context_window)
+        last_turn = record.last_turn_metrics if record else {}
+        used = int((last_turn or {}).get("input_tokens", 0) or 0)
+        ratio = pressure.get("input_ratio", 0.0)
         return (
             f"[Context budget: {used}/{context_window} tokens "
-            f"({cumulative * 100:.1f}%); mode: {soul_mode}]"
+            f"({ratio * 100:.1f}%); mode: {soul_mode}]"
         )
 
     @staticmethod
@@ -1071,9 +1089,11 @@ class ContextBuilder:
             )
             short_term = mgr.compaction_context(model=effective_model)
             if short_term:
+                # A new session starts with an empty context window — carry a
+                # real tail of the previous session, not a 512-char stub.
                 short_term = _trim_to_section(
                     short_term,
-                    self.config.harness.memory.max_compact_short_term_chars,
+                    self.config.harness.memory.new_session_tail_max_chars,
                 )
         else:
             # Non-compact first turn: load full long-term recall.
@@ -1330,8 +1350,10 @@ class ContextBuilder:
             )
             short_term = mgr.compaction_context(model=effective_model)
             if short_term and is_compact:
+                # Fresh session: the new context window is empty, so carry a
+                # real tail of the previous session, not a 512-char stub.
                 short_term = _trim_to_section(
-                    short_term, self.config.harness.memory.max_compact_short_term_chars
+                    short_term, self.config.harness.memory.new_session_tail_max_chars
                 )
         elif soul_mode == "full" or self.config.harness.memory.recall_on_follow_up:
             recall = mgr.recall_context(formatted, model=effective_model)

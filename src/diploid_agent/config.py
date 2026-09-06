@@ -237,6 +237,11 @@ class MemoryConfig(BaseModel):
     max_compact_chat_memory_chars: int = 256
     max_compact_persona_memory_chars: int = 512
     max_compact_short_term_chars: int = 512
+    # Cap for the "Recent turns" tail carried into a *new* ACP session prompt
+    # (fresh/compact session-boundary builds). The new session starts with an
+    # empty context window, so this can be much larger than the compact caps —
+    # it is what preserves the thread of the previous session.
+    new_session_tail_max_chars: int = 4096
     hindsight: HindsightConfig = Field(default_factory=HindsightConfig)
 
 

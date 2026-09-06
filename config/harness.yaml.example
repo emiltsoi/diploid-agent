@@ -219,6 +219,7 @@ harness:
     short_term_turns: 10           # max raw turns to load
     min_short_term_turns: 2        # always keep this many raw turns
     max_short_term_chars: 6144     # cap the short-term block; older turns summarized
+    new_session_tail_max_chars: 4096  # recent-turns tail carried into a fresh/rehydrated session prompt
     include_short_term: true
     short_term_summary_cache_days: 7  # stale .cache/*.md entries are removed after this many days
     precompute_short_term_summary: true  # only run the summarizer when the window is overflowing
