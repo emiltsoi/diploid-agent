@@ -22,6 +22,14 @@ from diploid_agent.acp_client.errors import (
 
 logger = logging.getLogger(__name__)
 
+# `devin acp` emits `session/update` notifications (e.g. tool_call_update
+# carrying raw tool output) whose JSON-RPC payload can far exceed the asyncio
+# default stream limit of 64 KiB.  When a single line crosses that limit,
+# ``StreamReader.readline()`` raises ``ValueError`` and the reader dies, which
+# leaves the pipe full and the child blocked on write -- a silent multi-hour
+# hang.  Allow generous headroom so legitimately large updates are processed.
+_STDIO_STREAM_LIMIT = 16 * 1024 * 1024  # 16 MiB
+
 
 class AcpTransport:
     """JSON-RPC stdio transport, background event loop, and process lifecycle.
@@ -60,6 +68,9 @@ class AcpTransport:
         # Transport health.
         self._initialized = False
         self._transport_healthy = False
+        # Buffer limit for the child's stdout/stderr pipes.  Instance attribute
+        # so tests can shrink it to exercise the oversized-line path.
+        self._stream_limit = _STDIO_STREAM_LIMIT
 
     # ------------------------------------------------------------------ public
 
@@ -291,10 +302,13 @@ class AcpTransport:
             stderr=asyncio.subprocess.PIPE,
             env=env,
             start_new_session=True,
+            limit=self._stream_limit,
         )
 
         self._reader_task = asyncio.create_task(self._reader())
+        self._reader_task.add_done_callback(self._on_reader_done)
         self._stderr_task = asyncio.create_task(self._stderr_drain())
+        self._stderr_task.add_done_callback(self._on_drain_done)
 
         self._client._watchdog.start()
 
@@ -327,38 +341,47 @@ class AcpTransport:
             try:
                 line = await self._proc.stdout.readline()
             except (OSError, ValueError, RuntimeError) as exc:
-                logger.debug("ACP reader closed: %s", exc)
+                logger.warning("ACP reader stopped: %s", exc)
                 break
             if not line:
                 break
-            logger.debug("ACP RECV: %s", line.decode().strip()[:200])
+            logger.debug("ACP RECV: %s", line.decode("utf-8", "replace").strip()[:200])
 
             with self._client._lock:
                 self._last_stdout_at = time.monotonic()
 
             try:
-                msg = json.loads(line.decode())
-            except json.JSONDecodeError:
+                # json.loads accepts bytes and performs its own UTF detection;
+                # a non-UTF-8 line raises UnicodeDecodeError.
+                msg = json.loads(line)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                logger.warning("ACP reader skipping malformed line (%d bytes)", len(line))
                 continue
 
-            # Agent-to-client request (e.g. permission prompt).
-            if "method" in msg and "id" in msg:
-                await self._handle_request(msg)
-                continue
+            try:
+                # Agent-to-client request (e.g. permission prompt).
+                if "method" in msg and "id" in msg:
+                    await self._handle_request(msg)
+                    continue
 
-            # Notification.
-            if "id" not in msg:
-                if msg.get("method") == "session/update":
-                    self._route_update(msg)
-                else:
-                    logger.debug("ACP notification: %s", msg.get("method"))
-                continue
+                # Notification.
+                if "id" not in msg:
+                    if msg.get("method") == "session/update":
+                        self._route_update(msg)
+                    else:
+                        logger.debug("ACP notification: %s", msg.get("method"))
+                    continue
 
-            # Response to one of our calls.
-            future = self._pending.pop(msg["id"], None)
-            if future is not None and not future.done():
-                future.set_result(msg)
-                self._last_progress_at = time.monotonic()
+                # Response to one of our calls.
+                future = self._pending.pop(msg["id"], None)
+                if future is not None and not future.done():
+                    future.set_result(msg)
+                    self._last_progress_at = time.monotonic()
+            except Exception:
+                # A single undeliverable message must not kill the reader;
+                # without it the child's stdout pipe backs up and wedges the
+                # whole transport.
+                logger.exception("ACP reader failed to dispatch message")
 
     async def _stderr_drain(self) -> None:
         """Discard stderr so the ACP process never blocks on a full pipe."""
@@ -371,6 +394,52 @@ class AcpTransport:
                 break
             if not data:
                 break
+
+    def _on_reader_done(self, task: asyncio.Task[None]) -> None:
+        """Fail the transport if the stdout reader died while the child lives.
+
+        Without a reader, stdout is never drained: the pipe fills, the child
+        blocks on write, and in-flight calls hang until their outer timeouts.
+        Mark the transport unhealthy and unblock callers so the next
+        ``_ensure_started`` restarts the child instead of hanging for hours.
+        """
+        if task.cancelled() or self._reader_task is not task:
+            return
+        if self._proc is None or self._proc.returncode is not None:
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("ACP reader task crashed: %s", exc)
+        else:
+            logger.error(
+                "ACP reader task ended while the ACP process is still running"
+            )
+        self._transport_healthy = False
+        self._unblock_inflight("ACP stdout reader stopped")
+
+    def _on_drain_done(self, task: asyncio.Task[None]) -> None:
+        """Fail the transport if the stderr drain died while the child lives.
+
+        A dead drain lets the stderr pipe fill and can wedge the child on
+        write, just like a dead stdout reader.
+        """
+        if task.cancelled() or self._stderr_task is not task:
+            return
+        if (
+            self._proc is None
+            or self._proc.stderr is None
+            or self._proc.returncode is not None
+        ):
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("ACP stderr drain crashed: %s", exc)
+        else:
+            logger.error(
+                "ACP stderr drain ended while the ACP process is still running"
+            )
+        self._transport_healthy = False
+        self._unblock_inflight("ACP stderr drain stopped")
 
     def _route_update(self, msg: dict[str, Any]) -> None:
         """Route a `session/update` notification to its in-flight prompt."""

@@ -57,23 +57,28 @@ class PromptWatchdog:
             if client._inflight_future is None or client._inflight_future.done():
                 return
 
-            # If the subprocess has already exited, the transport is dead and
-            # recovery should start immediately.
-            if client._proc is not None and client._proc.returncode is not None:
-                logger.warning(
-                    "ACP process %s exited with code %s; watchdog recovering",
-                    client._proc.pid,
-                    client._proc.returncode,
-                )
-                self._stall_recovery()
-                return
-
             now = time.monotonic()
             deadline = client._inflight_deadline
             last_request = client._last_request_at
             call_deadline = client._last_control_call_deadline
             has_prompt = bool(client._active_prompts)
             has_pending = bool(client._pending)
+            proc = client._proc
+            proc_dead = proc is not None and proc.returncode is not None
+
+        # All _stall_recovery calls must happen outside ``client._lock``:
+        # recovery acquires ``_lifecycle_lock`` and the required lock order is
+        # ``_lifecycle_lock`` -> ``_lock``.
+        if proc_dead:
+            # If the subprocess has already exited, the transport is dead and
+            # recovery should start immediately.
+            logger.warning(
+                "ACP process %s exited with code %s; watchdog recovering",
+                proc.pid,
+                proc.returncode,
+            )
+            self._stall_recovery()
+            return
 
         if now > deadline:
             logger.warning("ACP call exceeded its deadline; watchdog recovering")
@@ -104,6 +109,17 @@ class PromptWatchdog:
 
     def _stall_recovery(self) -> None:
         """Kill the ACP subprocess and unblock the in-flight caller (watchdog path)."""
+        # Serialize against _ensure_started/close/restart_transport so the
+        # watchdog never kills a child mid-startup or stops a loop another
+        # thread has just swapped in.  Fall back to ``_lock`` for test fakes
+        # that do not model the lifecycle lock.
+        lifecycle_lock = getattr(self._client, "_lifecycle_lock", None)
+        if lifecycle_lock is None:
+            lifecycle_lock = self._client._lock
+        with lifecycle_lock:
+            self._stall_recovery_inner()
+
+    def _stall_recovery_inner(self) -> None:
         client = self._client
         with client._lock:
             if client.metrics is not None:

@@ -129,6 +129,10 @@ class AcpClient:
 
         # Shared lock.
         self._lock = threading.RLock()
+        # Serializes transport lifecycle work (start/stop/restart).  Always
+        # acquired before ``self._lock`` so the order is
+        # ``_lifecycle_lock`` -> ``_lock``; never the reverse.
+        self._lifecycle_lock = threading.RLock()
 
         # Low-level transport state.
         self._transport = AcpTransport(self)
@@ -392,7 +396,7 @@ class AcpClient:
 
     def close(self) -> None:
         """Terminate the ACP subprocess and stop the background loop."""
-        with self._lock:
+        with self._lifecycle_lock, self._lock:
             if not self._initialized or self._loop is None:
                 return
             if self._lifecycle_log is not None:
@@ -508,6 +512,17 @@ class AcpClient:
         If the transport is already running with a different MCP server list,
         restart it so `devin acp` picks up the new `mcp_config.json`.
         """
+        # Serialize the whole close/start sequence: a second caller racing in
+        # swaps ``self._loop`` out from under the in-progress
+        # ``_start_transport`` task ("Future attached to a different loop")
+        # and leaks the subprocess it spawned.
+        with self._lifecycle_lock:
+            self._ensure_started_inner(mcp_servers)
+
+    def _ensure_started_inner(
+        self,
+        mcp_servers: list[dict[str, Any]] | None = None,
+    ) -> None:
         target = self._sandbox.normalize_mcp_servers(
             mcp_servers if mcp_servers is not None else self._mcp_servers
         )
@@ -600,9 +615,12 @@ class AcpClient:
         self._record_restart_attempt(reason)
         if self.metrics is not None:
             self.metrics.inc("acp_restarts_total")
-        self._unblock_inflight("ACP transport restarted")
-        self.close()
-        self._ensure_started()
+        # Serialize with concurrent _ensure_started/close callers so a racing
+        # restart cannot swap the loop mid-start or spawn a second child.
+        with self._lifecycle_lock:
+            self._unblock_inflight("ACP transport restarted")
+            self.close()
+            self._ensure_started()
 
     # ---------------------------------------------------------------- JSON-RPC
 
