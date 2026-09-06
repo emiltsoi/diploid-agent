@@ -444,14 +444,27 @@ class AgentRuntime(RuntimeAPI):
         return self._outbox.outbox_pop(chat_id, wait=wait, return_chat_id=return_chat_id)
 
     def _call_unlocked(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
-        """Release the RLock while running a long call, then reacquire."""
-        do_release = self._lock._is_owned()
-        if do_release:
-            self._lock.release()
+        """Release the RLock while running a long call, then reacquire.
+
+        Release *every* level, not just one: callers can hold the lock
+        multiple times (``@_locked`` methods invoking other ``@_locked``
+        methods stack acquisitions on the same RLock).  Leaving even one
+        level held during an engine call would block ``_on_chunk`` /
+        ``_on_update``, which the ACP transport dispatches from its reader
+        path -- a held runtime lock starves the stdout reader and wedges the
+        ACP child on a full pipe.
+        """
+        released = 0
+        while self._lock._is_owned():
+            try:
+                self._lock.release()
+                released += 1
+            except RuntimeError:
+                break
         try:
             return fn(*args, **kwargs)
         finally:
-            if do_release:
+            for _ in range(released):
                 self._lock.acquire()
 
     def call_engine_unlocked(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:

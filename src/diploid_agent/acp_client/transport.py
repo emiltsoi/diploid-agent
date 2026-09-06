@@ -7,6 +7,7 @@ import concurrent.futures
 import json
 import logging
 import os
+import queue
 import signal
 import threading
 import time
@@ -72,6 +73,15 @@ class AcpTransport:
         # so tests can shrink it to exercise the oversized-line path.
         self._stream_limit = _STDIO_STREAM_LIMIT
 
+        # Prompt callbacks (on_chunk/on_update) are harness code that can
+        # block on locks or I/O.  Running them on the ACP loop starves the
+        # stdout reader: the pipe backs up and the child wedges on write.
+        # Dispatch them on a dedicated worker thread instead.
+        self._cb_queue: queue.Queue[tuple[Callable[[Any], None], Any] | None] = (
+            queue.Queue()
+        )
+        self._cb_thread: threading.Thread | None = None
+
     # ------------------------------------------------------------------ public
 
     def healthy(self) -> bool:
@@ -120,6 +130,16 @@ class AcpTransport:
                     pass
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("ACP task %s ended with %s", task.get_name(), exc)
+
+        # Stop the prompt-callback worker after queued callbacks drain.  Only
+        # enqueue the sentinel when a worker actually ran -- a stale sentinel
+        # would make the next generation's worker exit immediately.
+        cb_thread = self._cb_thread
+        self._cb_thread = None
+        if cb_thread is not None:
+            self._cb_queue.put(None)
+            if cb_thread.is_alive():
+                await asyncio.to_thread(cb_thread.join, 2.0)
 
         # Any request futures that have not been resolved by the reader should
         # be aborted now, including in-flight _run() callers.
@@ -309,6 +329,10 @@ class AcpTransport:
         self._reader_task.add_done_callback(self._on_reader_done)
         self._stderr_task = asyncio.create_task(self._stderr_drain())
         self._stderr_task.add_done_callback(self._on_drain_done)
+        self._cb_thread = threading.Thread(
+            target=self._cb_worker, name="acp-prompt-cb", daemon=True
+        )
+        self._cb_thread.start()
 
         self._client._watchdog.start()
 
@@ -463,10 +487,7 @@ class AcpTransport:
 
         prompt.updates.append(update)
         if prompt.on_update:
-            try:
-                prompt.on_update(update)
-            except Exception:
-                logger.exception("ACP on_update failed")
+            self._dispatch_cb(prompt.on_update, update)
 
         def _text_from_content(content: Any) -> list[str]:
             """Return all text blocks from an ACP content payload."""
@@ -482,10 +503,41 @@ class AcpTransport:
                 if text:
                     prompt.chunks.append(text)
                     if prompt.on_chunk:
-                        try:
-                            prompt.on_chunk(text)
-                        except Exception:
-                            logger.exception("ACP on_chunk failed")
+                        self._dispatch_cb(prompt.on_chunk, text)
+
+    def _dispatch_cb(self, cb: Callable[[Any], None], arg: Any) -> None:
+        """Queue a prompt callback for the worker thread (never on the loop).
+
+        When no worker exists (transport never started, or already closed)
+        the callback runs inline -- in that state there is no live reader to
+        starve, so invocation is safe and preserves delivery for tests and
+        teardown edges.
+        """
+        if self._cb_thread is None:
+            try:
+                cb(arg)
+            except Exception:
+                logger.exception("ACP prompt callback failed")
+            return
+        self._cb_queue.put((cb, arg))
+
+    def _cb_worker(self) -> None:
+        """Run prompt callbacks sequentially on a dedicated thread.
+
+        ``on_chunk``/``on_update`` call into harness code that acquires
+        ``runtime._lock`` and can block on slow plugin or memory work.  Doing
+        that on the ACP loop would starve the stdout reader: the pipe fills,
+        the child blocks on write, and the turn hangs with no error.
+        """
+        while True:
+            item = self._cb_queue.get()
+            if item is None:
+                return
+            cb, arg = item
+            try:
+                cb(arg)
+            except Exception:
+                logger.exception("ACP prompt callback failed")
 
     async def _handle_request(self, msg: dict[str, Any]) -> None:
         method = msg["method"]

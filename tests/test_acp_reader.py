@@ -309,3 +309,64 @@ def test_send_message_smoke(fake_acp: Path) -> None:
         assert client.health()
     finally:
         client.close()
+
+
+def test_blocking_on_chunk_does_not_stall_reader(fake_acp: Path) -> None:
+    """A slow on_chunk must not starve the stdout reader.
+
+    Prompt callbacks run harness code that takes ``runtime._lock`` and can
+    block on plugin or memory work.  If they ran on the ACP loop, the reader
+    would stall, the stdout pipe would fill, and the child would wedge on
+    write -- the same hang signature as the oversized-line bug.
+    """
+    client = _make_client(fake_acp)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_chunk(_text: str) -> None:
+        entered.set()
+        release.wait(timeout=30)
+
+    try:
+        # The prompt must complete without waiting for the blocked callback:
+        # on the old code path (callback on the ACP loop) the response could
+        # never be routed and send_message would hang until timeout.
+        result = client.send_message("s-1", "hi", on_chunk=slow_chunk, timeout=30.0)
+        assert result.reply == "ok"
+        assert result.stop_reason == "end_turn"
+        assert client.health()
+        # The callback still runs, just on the worker thread.
+        assert entered.wait(timeout=10)
+    finally:
+        release.set()
+        client.close()
+
+
+def test_call_unlocked_releases_all_rlock_levels() -> None:
+    """_call_unlocked must drop every held level, not just one.
+
+    Nested @_locked paths (e.g. runtime.dispatch -> controller.dispatch ->
+    dispatch.dispatch) stack acquisitions on the same runtime RLock.  A
+    single release would leave the lock held for the whole engine call and
+    block the ACP prompt-callback worker for its duration.
+    """
+    from diploid_agent.runtime.agent_runtime import AgentRuntime
+
+    rt = AgentRuntime.__new__(AgentRuntime)
+    rt._lock = threading.RLock()
+    rt._lock.acquire()
+    rt._lock.acquire()
+
+    observed: dict[str, bool] = {}
+
+    def probe() -> None:
+        observed["owned"] = rt._lock._is_owned()
+
+    rt._call_unlocked(probe)
+
+    assert observed["owned"] is False
+    # Both levels were reacquired: releasing twice succeeds, a third raises.
+    rt._lock.release()
+    rt._lock.release()
+    with pytest.raises(RuntimeError):
+        rt._lock.release()
