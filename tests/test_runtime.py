@@ -24,7 +24,7 @@ from diploid_agent.dispatch import DispatchStatus
 from diploid_agent.engine.base import AgentEngine, TurnRequest, TurnResult
 from diploid_agent.engine.fake import FakeAgentEngine
 from diploid_agent.harness import ConversationHarness
-from diploid_agent.models import WakeEvent
+from diploid_agent.models import ActiveTurn, WakeEvent
 from diploid_agent.notifier import NoopNotifier
 from diploid_agent.plan.models import Task, TaskStatus, TaskType
 from diploid_agent.runtime import AgentRuntime, TurnController
@@ -380,9 +380,117 @@ def test_graceful_service_restart_schedules_systemd_run(tmp_path: Path, monkeypa
 
     result = runtime.graceful_service_restart("chat-1", "vesper.service", reason="test")
     assert "restarting" in result.reply.lower()
+    # The restart now goes through the drain thread first; poll for it.
+    deadline = time.time() + 5.0
+    while not popen_calls and time.time() < deadline:
+        time.sleep(0.02)
     assert len(popen_calls) == 1
     assert popen_calls[0][0] == "systemd-run"
     assert "vesper.service" in popen_calls[0]
+
+
+def test_graceful_restart_drains_active_turn_without_lock(tmp_path: Path, monkeypatch) -> None:
+    """An in-flight turn defers the systemd-run; the drain must not hold _lock."""
+    runtime = AgentRuntime(_make_config(tmp_path))
+    popen_calls: list[list[str]] = []
+
+    def fake_popen(cmd: list[str], **kwargs: Any) -> Any:
+        popen_calls.append(cmd)
+
+        class _Fake:
+            pass
+
+        return _Fake()
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+
+    active = ActiveTurn("chat-1", None, "hello", time.time())
+    with runtime._lock:
+        runtime._active_turns["chat-1"] = active
+
+    result = runtime.graceful_service_restart("chat-1", "test.service", reason="test")
+    assert "current turn" in result.reply
+    assert runtime._restart_draining.is_set()
+
+    # While the drain waits, the runtime lock must stay acquirable — the turn's
+    # finally needs it to pop _active_turns; holding it here would deadlock.
+    assert runtime._lock.acquire(timeout=2.0)
+    runtime._lock.release()
+
+    # No restart is scheduled while the turn is still in flight.
+    time.sleep(0.3)
+    assert not popen_calls
+
+    # Finish the turn the way the turn loop's finally does.
+    with runtime._lock:
+        runtime._active_turns.pop("chat-1", None)
+    with active._condition:
+        active._condition.notify_all()
+
+    deadline = time.time() + 5.0
+    while not popen_calls and time.time() < deadline:
+        time.sleep(0.02)
+    assert popen_calls and popen_calls[0][0] == "systemd-run"
+    assert "test.service" in popen_calls[0]
+
+
+def test_graceful_restart_cap_expires_with_active_turn(tmp_path: Path, monkeypatch) -> None:
+    """When the drain cap expires the restart fires anyway (breadcrumb keeps the draft)."""
+    runtime = AgentRuntime(_make_config(tmp_path))
+    popen_calls: list[list[str]] = []
+
+    def fake_popen(cmd: list[str], **kwargs: Any) -> Any:
+        popen_calls.append(cmd)
+
+        class _Fake:
+            pass
+
+        return _Fake()
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+
+    # A turn that never finishes.
+    with runtime._lock:
+        runtime._active_turns["chat-1"] = ActiveTurn("chat-1", None, "hello", time.time())
+
+    runtime._schedule_draining_restart(
+        "test.service", chat_id="chat-1", reason="test", drain_cap=0.2
+    )
+
+    deadline = time.time() + 5.0
+    while not popen_calls and time.time() < deadline:
+        time.sleep(0.02)
+    assert popen_calls and popen_calls[0][0] == "systemd-run"
+    # The stuck turn is still registered; the restart fired anyway.
+    assert "chat-1" in runtime._active_turns
+
+
+def test_restart_flush_runs_plugin_shutdown(tmp_path: Path, monkeypatch) -> None:
+    """Before the timer fires, on_shutdown reaches every chat's plugin instances."""
+    runtime = AgentRuntime(_make_config(tmp_path))
+    runtime._chat_state("chat-1")
+    runtime._chat_state("chat-2")
+
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        runtime._plugins,
+        "on_shutdown",
+        lambda chat_id, ctx: calls.append((chat_id, ctx.reason)),
+    )
+
+    runtime._flush_plugins_for_restart()
+
+    assert sorted(calls) == [("chat-1", "restart"), ("chat-2", "restart")]
+
+
+def test_process_rejects_new_turns_while_draining(tmp_path: Path) -> None:
+    """Once the drain starts, new turns are refused instead of extending the drain."""
+    runtime = AgentRuntime(_make_config(tmp_path))
+    runtime._restart_draining.set()
+
+    result = runtime.process("chat-1", "hello")
+    assert "restart" in result.reply.lower()
+    assert "chat-1" not in runtime._active_turns
 
 
 def test_auto_continue_suppression(tmp_path: Path) -> None:

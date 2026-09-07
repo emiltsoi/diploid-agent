@@ -115,6 +115,9 @@ class AgentRuntime(RuntimeAPI):
         self._store = self._chat_store._store
         self._active_turns: dict[str, ActiveTurn] = {}
         self._active_chat_skills: dict[str, set[str]] = {}
+        # Set once a graceful restart begins draining: no new turns may start so
+        # a stream of queued messages cannot keep the process alive until the cap.
+        self._restart_draining = threading.Event()
         self._runtime_metrics = RuntimeMetrics(self)
         self._memory_managers: dict[str, MemoryManager] = {}
         self._last_restart_memory_written: dict[str, float] = {}
@@ -316,9 +319,82 @@ class AgentRuntime(RuntimeAPI):
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Failed to record restart incident: %s", exc)
 
-        # Schedule the actual service restart with a short delay so the in-flight
-        # reply can be sent before the process goes down.
-        self._schedule_systemd_restart(service, delay=10.0, chat_id=None, reason=reason)
+        # Drain in-flight turns, flush plugin state, then schedule the restart.
+        self._schedule_draining_restart(service, chat_id=None, reason=reason)
+
+    def _schedule_draining_restart(
+        self,
+        service: str,
+        chat_id: str | None,
+        reason: str,
+        drain_cap: float = 120.0,
+    ) -> None:
+        """Begin the restart drain: block new turns, wait for in-flight turns,
+        flush plugin state, then schedule the real systemd restart.
+
+        Returns immediately; the drain runs on a background thread so callers
+        (the control-socket listener, HTTP/Telegram actions) never block.
+        """
+        self._restart_draining.set()
+
+        def _drain_then_restart() -> None:
+            try:
+                if not self._wait_for_active_turns(drain_cap):
+                    logger.warning(
+                        "Restart drain cap (%.0fs) expired with turn(s) still active; "
+                        "restarting anyway",
+                        drain_cap,
+                    )
+                self._flush_plugins_for_restart()
+            finally:
+                # Short residual delay so the final reply/outbox can deliver.
+                self._schedule_systemd_restart(
+                    service, delay=5.0, chat_id=chat_id, reason=reason
+                )
+
+        threading.Thread(
+            target=_drain_then_restart, daemon=True, name="restart-drain"
+        ).start()
+
+    def _wait_for_active_turns(self, timeout: float) -> bool:
+        """Block until every ActiveTurn finishes or ``timeout`` expires.
+
+        Never holds ``self._lock`` while waiting: the turn's ``finally`` needs
+        the same RLock to pop ``_active_turns`` and notify ``_condition``, so
+        waiting under the lock would deadlock the drain.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            with self._lock:
+                turns = list(self._active_turns.values())
+            if not turns:
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            with turns[0]._condition:
+                turns[0]._condition.wait(timeout=min(remaining, 0.5))
+
+    def _flush_plugins_for_restart(self) -> None:
+        """Run shutdown/sleeping hooks on every chat so plugin state persists."""
+        now = time.time()
+        for chat_id in list(self._store.keys()):
+            try:
+                with self._lock:
+                    record = self._active_record(chat_id)
+                self._plugins.on_shutdown(
+                    chat_id,
+                    ShutdownContext(
+                        chat_id=chat_id,
+                        record=record,
+                        reason="restart",
+                        now=now,
+                        instance_id=self.instance_id,
+                        instance_started_at=self.instance_started_at,
+                    ),
+                )
+            except Exception:
+                logger.exception("Failed to flush plugins for %s before restart", chat_id)
 
     def _schedule_systemd_restart(
         self,

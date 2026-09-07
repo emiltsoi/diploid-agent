@@ -239,6 +239,11 @@ class TurnDispatch:
             self.runtime._persist_subagent_result(dispatch, result)
 
             chat_id = dispatch.chat_id
+            if self.runtime._restart_draining.is_set():
+                return ChatResult(
+                    reply="The service is draining for a restart; continuation deferred.",
+                    notice=f"dispatch:{dispatch_id}",
+                )
             if chat_id in self.runtime._active_turns:
                 return ChatResult(
                     reply="A turn is already in progress; continuation queued.",

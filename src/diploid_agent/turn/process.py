@@ -257,6 +257,14 @@ class TurnProcess:
         """
         notifier_stream: _NotifyStream | None = None
         with self.runtime._lock:
+            if self.runtime._restart_draining.is_set():
+                return ChatResult(
+                    reply=(
+                        "The service is draining for a restart; "
+                        "please send your message again in a moment."
+                    ),
+                    notice="Restart in progress; your turn was not started.",
+                )
             if chat_id in self.runtime._active_turns:
                 return ChatResult(
                     reply="A turn is already in progress for this chat.",

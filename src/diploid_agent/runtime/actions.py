@@ -444,11 +444,14 @@ class RuntimeActions:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Failed to record restart incident for %s: %s", chat_id, exc)
 
-        self._runtime._schedule_systemd_restart(service, delay=5.0, chat_id=chat_id, reason=reason)
+        self._runtime._schedule_draining_restart(service, chat_id=chat_id, reason=reason)
 
         return ChatResult(
-            reply=f"Restarting {service}. I'll be back in a moment.",
-            notice="The service will restart in a few seconds.",
+            reply=(
+                f"Restarting {service} after the current turn finishes "
+                "(or in ≤2 min, whichever comes first). I'll be back in a moment."
+            ),
+            notice="The service drains in-flight work before restarting.",
         )
 
     @_actions_locked
