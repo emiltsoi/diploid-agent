@@ -55,6 +55,9 @@ class FakeRuntime:
     def promote(self, chat_id, fact):
         return ChatResult(reply="Promoted.")
 
+    def record_system_note(self, chat_id, text):
+        return None
+
     def suppress_auto_continue(self, chat_id, seconds=300.0):
         return None
 
