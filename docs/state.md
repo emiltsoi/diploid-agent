@@ -64,6 +64,7 @@ There are three kinds of hook:
 | `on_persona_memory_transition` | Consult | Persona memory crosses its character cap | `MemoryTransitionContext` |
 | `before_retain` | Consult | `retain()` is called | `RetainContext` |
 | `after_retain` | Notify | After memory is retained | `RetainContext` |
+| `memory_items` | Contribute | During `record_turn`; returns extra `MemoryItem`s retained alongside the turn pair (not buffered by turn bundling) | `since: float` |
 | `before_promote` | Consult | `promote()` is called | `PromoteContext` |
 | `after_promote` | Notify | After a fact is promoted to persona memory | `PromoteContext` |
 | `before_skill_enabled` | Consult | `/skill enable` | `SkillCommandContext` |

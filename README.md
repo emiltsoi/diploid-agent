@@ -11,20 +11,30 @@ retention to a Hindsight memory server.
 ## What it does
 
 - Runs an ACP agent session with a persona loaded from `personas/<persona>`.
-- Remembers each conversation in `sessions/<chat_id>/transcript.jsonl`.
+- Remembers each conversation in `sessions/<chat_id>/chat_transcript.jsonl`.
 - Preserves context across **model switches** by starting a new agent session and
   re-injecting the recent transcript + long-term memory.
 - Can switch models on the fly (`/model <name>`).
 - Can keep long-term memory either locally (`file`) or in a Hindsight server
   (`hindsight`).
+- Retains turns to Hindsight as bundled multi-turn documents containing only
+  the post-tool final segment of each reply, so fact extraction sees cross-turn
+  context instead of per-turn working narration
+  (`harness.memory.retain_final_segment` / `retain_bundle_turns`).
 - Supports session history: `/new`, `/sessions`, `/resume <n>`, `/branch <n>`.
 - Exposes both a FastAPI HTTP ingress and a Telegram long-polling bot.
 - Splits long or pausing Telegram replies into separate intermediate messages so
-  tool-call gaps do not mash into one confusing block.
+  tool-call gaps do not mash into one confusing block; each new message shows
+  only the text that has not already been sent.
 - Supports background dispatches that continue the conversation when they complete (`/dispatch`, `/continue`) and harness-native background subagents (`/subagent`, `harness_subagent` MCP tool) that survive the parent turn being stopped.
 - Supports live runtime configuration of task, waker, timer, notifications, and Telegram settings via HTTP and Telegram without restarting.
 - Supports state plugins with a rich lifecycle hook surface: plugins can intercept turns, sessions, dispatches, memory transitions, skill/MCP commands, retain/promote, and shutdown.
-- Hardens the ACP transport with typed error classification, restart backoff, and stale-session recovery that attempts ACP `session/resume` (falling back to `session/load`) before prompt rehydration.
+- Hardens the ACP transport with typed error classification, restart backoff, a
+  16 MiB stdout line limit, prompt callbacks on a dedicated worker thread, a
+  serialized lifecycle lock, bounded per-prompt update buffers, background
+  isolation for secondary ACP calls, and stale-session recovery that attempts
+  ACP `session/resume` (falling back to `session/load`) before prompt
+  rehydration.
 - Sandboxes the ACP subprocess so it cannot run raw `systemctl`, `reboot`, or `shutdown` against the host; restart requests from the agent are routed through the harness and scheduled gracefully with `systemd-run`.
 - Queues incoming user messages as high-priority wake events when a chat is busy instead of dropping them, and pushes the final result through an outbox consumed by the Telegram `DeliveryWorker` so background turns, mesh wake replies, and subagent completions can still reach the user.
 - Sends a `System: service was restarted.` notice to recently active chats on startup and drops stale `auto_continue` wakes so a crash-restart does not immediately re-run an old continuation.

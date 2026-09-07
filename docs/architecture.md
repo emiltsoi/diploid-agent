@@ -87,9 +87,18 @@ Synchronous wrapper around the configured ACP v1 JSON-RPC agent binary.
 - Spawns one long-lived ACP agent subprocess and multiplexes all chats
   through it.
 - `acp_client/transport.py` owns the JSON-RPC stdio transport, process
-  lifecycle, and backoff/recovery (`AcpTransport`).
+  lifecycle, and backoff/recovery (`AcpTransport`). The child is spawned with
+  a 16 MiB stdout line limit so oversized `session/update` payloads cannot
+  wedge the reader, `on_chunk`/`on_update` callbacks run on a dedicated worker
+  thread so harness lock contention cannot starve the reader, and the
+  per-prompt `session/update` buffer is bounded (only the newest updates are
+  kept as telemetry).
 - `acp_client/watchdog.py` monitors in-flight calls and kills stuck subprocesses
-  (`PromptWatchdog`).
+  (`PromptWatchdog`). Lifecycle operations (`_ensure_started`,
+  `restart_transport`, `close`, watchdog stall recovery) are serialized behind
+  `AcpClient._lifecycle_lock`.
+- Secondary ACP calls (memory summaries, subagents) can be marked `background`
+  so they are isolated from an in-flight chat prompt.
 - `acp_client/control.py` listens for graceful-restart requests from the ACP
   subprocess over a private Unix socket.
 - `acp_client/sandbox.py` sets up the isolated `HOME`, fake `systemctl`
@@ -235,8 +244,12 @@ for details on `/new`, `/resume`, `/branch`, `/sessions`, and auto-recovery.
      `partial=True`. The reply includes a notice prompting the user to send
      `Continue`. The same mechanism is used when the user sends `/stop`.
    - `MemoryManager.record_turn(message, reply, model, turn_number, session_number)` appends
-     the (possibly partial) assistant reply to the transcript and includes `session_number`
-     in the document ID and Hindsight tags.
+     the (possibly partial) assistant reply to the transcript and retains a
+     `User:`/`Assistant:` pair to the memory backend. When
+     `retain_final_segment` is enabled, only the reply text produced after the
+     last tool call is retained; `retain_bundle_turns` accumulates several
+     pairs into one retained document. See
+     [Memory loop and Hindsight](memory.md#retain).
    - Appends the updated record, including `last_stop_reason`, to `sessions.jsonl`.
 3. Reply and any system notice are returned to the caller. When
    `harness.notifications.outbox_delivery` is enabled, the `ChatResult` is
@@ -303,5 +316,6 @@ for details on `/new`, `/resume`, `/branch`, `/sessions`, and auto-recovery.
 || `sessions/<chat_id>/chat_transcript.jsonl` | Durable turn log | No (runtime) |
 || `sessions/<chat_id>/chat_MEMORY.md` | Durable file-backend summaries | No (runtime) |
 || `sessions/<chat_id>/hindsight-pending-retain.jsonl` | Durable Hindsight spool | No (runtime) |
+| `sessions/<chat_id>/turn-retain-buffer.jsonl` | Turn pairs awaiting bundled retain | No (runtime) |
 || `sessions/<chat_id>/.archive/<n>/` | Archived session `n` | No (runtime) |
 || `sessions.jsonl` | Session registry | No (runtime) |

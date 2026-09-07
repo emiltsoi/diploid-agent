@@ -91,6 +91,15 @@ session:
 If any of these checks fail, or if ACP resume raises an error, the harness falls
 back to `session/new` with a full `build_first` prompt.
 
+The resume/load attempt is bounded by `engine.acp_resume_timeout` (default
+`120.0` s) as a *total* budget including the mode/model config re-apply. Each
+method (`session/resume`, then `session/load`) is retried
+`engine.acp_resume_max_retries` times (default `1`) with exponential backoff
+between `acp_resume_retry_base_seconds` (0.5 s) and
+`acp_resume_retry_max_seconds` (5.0 s). Separately,
+`engine.acp_silence_warn_after` (default `600` s) emits a lifecycle warning when
+an in-flight prompt produces no stdout for that long.
+
 ## Auto-pruning
 
 The harness keeps the active session and any session whose `updated_at` is
@@ -128,6 +137,19 @@ Long-running ACP turns can be interrupted mid-flight:
 - **Manual stop** — the user can send `/stop` in Telegram or `POST /stop` at
   any time. The harness looks up the active turn, calls `AcpClient.cancel()`,
   and the running `process()` returns a partial reply with a notice.
+- **Hard timeout** — when `session/prompt` does not return even after the
+  cancel grace period, the result is `stop_reason="timeout"`. The transport is
+  then marked unhealthy so the next `session/new` starts on a fresh ACP child
+  instead of a wedged process. What happens to the interrupted user message is
+  controlled by `engine.acp_timeout_auto_resend`:
+  - `false` (default, ask-first): the next user message is answered with a
+    confirmation prompt — reply with a `continuation_trigger` (e.g.
+    `Continue`) to resend the interrupted message, or send any other message
+    to start fresh.
+  - `true`: the interrupted message is resent automatically when the next
+    user message arrives. The resent turn is marked in the transcript with a
+    "Resuming the previous turn after it was interrupted by a hard timeout."
+    system note.
 
 ## Auto-recovery
 
@@ -205,22 +227,10 @@ pairs are summarized into a cached `.cache/short-term-summary-*.md` file. The
 summary is pre-computed after each completed turn and after each `recall_context`
 call so it is ready when a `fresh` reset happens.
 
-## Deferred design notes
+## Resend after hard timeout
 
-### Resend after hard timeout
-
-When a prompt hits the hard deadline, the harness currently cancels the in-flight
-request and returns a partial reply with a "Continue" notice.  Resending the
-interrupted message on the user's behalf is intentionally deferred: it needs a
-careful design that avoids double sends, respects user consent, and integrates
-with the auto-continue / wake queue.  The open questions are:
-
-- Should the resend preserve the exact prompt or rebuild it with a
-  "you were interrupted" prefix?
-- How does the resend interact with the `InstanceManager` queue and the
-  `other_instance_running` check?
-- Should it be gated by `acp_resume_enabled` and the `mcp_change` restart cause?
-
-A future PR should add a dedicated `resend_interrupted_turn` action behind a
-feature flag and pair it with an integration test that simulates a hard timeout
-followed by a successful retry.
+Resending an interrupted message is implemented and gated by
+`engine.acp_timeout_auto_resend` (see **Hard timeout** above): the default
+`false` asks the user before resending, and `true` resends automatically.
+The resent turn is marked in the transcript so the model knows the previous
+attempt was cut off by the time limit.

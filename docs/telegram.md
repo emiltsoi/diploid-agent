@@ -102,8 +102,9 @@ watches the streamed text:
   uncommitted tail is at least `intermediate_min_chars` long, and it ends on a
   sentence or paragraph boundary (`.`, `!`, `?`, or a newline), the current
   placeholder is committed as a real message.
-- A new `...` placeholder is sent below it.
-- The rest of the reply streams into the new placeholder.
+- A new `...` placeholder is sent below it. Only the *uncommitted tail* of
+  the stream is shown there — text already committed to an earlier message is
+  never repeated (the liveness heartbeat works on the tail too).
 - At the end, the final reply is sliced to remove the already-committed prefix,
   so the user does not see the same text twice.
 
@@ -123,6 +124,15 @@ You can change the format live with:
 ```
 /config telegram message_format=markdown_v2
 ```
+
+## Streamed thoughts
+
+`/stream_thoughts on` enables a second `Thinking...` placeholder, sent before
+the reply placeholder, that streams `agent_thought` updates while the turn
+runs. When the turn finishes, the live placeholders are deleted and the full
+accumulated thought is re-sent as one or more `Thinking:` messages (split at
+the 4096-character limit) above the final reply, so long reasoning traces are
+not lost or interleaved with the answer.
 
 ## Asking the user to choose
 

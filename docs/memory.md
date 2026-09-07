@@ -179,6 +179,9 @@ harness:
     min_short_term_turns: 2
     max_short_term_chars: 6144
     include_short_term: true
+    # retain_final_segment: true   # retain only the post-last-tool reply segment
+    # retain_min_final_chars: 200  # fall back to the full reply when the segment is shorter
+    # retain_bundle_turns: 4       # turn pairs bundled per retained document (1 = per-turn retain)
     hindsight:
       base_url: http://localhost:8888
       bank: example
@@ -200,7 +203,27 @@ One bank per persona (`example`), with chat separation via the
 
 ### Retain
 
-Every turn is written to:
+Each completed turn produces a `User: … / Assistant: …` pair. Two controls
+shape what reaches Hindsight and how often:
+
+- **Final-segment retain** (`harness.memory.retain_final_segment`, default
+  `false`): when the turn used tools, only the assistant text produced after
+  the last `tool_call` update is retained. Working narration between tool
+  calls stays in the local transcript but is not sent to Hindsight. If the
+  final segment is shorter than `retain_min_final_chars` (default `200`) —
+  e.g. the turn ended on a tool call or was cut off — the full reply is
+  retained instead.
+- **Turn bundling** (`harness.memory.retain_bundle_turns`, default `1`):
+  pending pairs accumulate per chat and flush as a single
+  `turns-<chat>-<session>-<first>-<last>` document once the bundle size is
+  reached, when a session boundary is crossed (a bundle never spans two ACP
+  sessions), or on shutdown. Bundling gives the extractor cross-turn context,
+  so thin exchanges stop producing zero-unit documents and repeated working
+  narration is merged instead of re-emitted once per turn. Pending pairs
+  persist to `sessions/<chat_id>/turn-retain-buffer.jsonl`, so a restart or a
+  backend failure retries the bundle instead of dropping the turns.
+
+Each retained document is POSTed to:
 
 ```
 POST /v1/default/banks/<bank>/memories
@@ -208,7 +231,8 @@ POST /v1/default/banks/<bank>/memories
 
 with `tags: ["turn", "chat:<chat_id>", "session:<session_number>", "persona:<persona_name>"]`. Failed writes are spooled locally and
 retried. The server auto-consolidates facts and observations; the harness does
-not pre-summarize.
+not pre-summarize. Plugin `memory_items` and explicit `memory_retain` calls
+always retain immediately — only the automatic per-turn pair is buffered.
 
 ### Recall
 
@@ -258,6 +282,7 @@ tools when it sees a `## System notice`.
 | Failure | Behavior |
 |---|---|
 | Hindsight unreachable on retain | Turn is spooled locally; retry on next turn. |
+| Retain flush fails mid-bundle | Buffered pairs stay in `turn-retain-buffer.jsonl`; retried on the next turn or after a restart. |
 | Hindsight unreachable on recall | Fall back to local file keyword search if enabled. |
 | Memory file exceeds load cap | `## System notice` in prompt + Telegram system message; no auto-prune. |
 | Summarization fails | Warning logged; no `MEMORY.md` update. |

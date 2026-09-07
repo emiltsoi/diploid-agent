@@ -148,7 +148,8 @@ was rewritten in place. That is confusing and hides the real pause.
 The `intermediate_messages` feature watches the streamed text. When it pauses
 for a configurable idle time on a sentence or paragraph boundary, the worker
 commits the current placeholder as a real message and starts a fresh one below
-it. The final reply is then sliced to avoid duplicating the committed text.
+it that only ever shows the *uncommitted tail* of the stream. The final reply
+is then sliced to avoid duplicating the committed text.
 
 This keeps the chat transcript natural, makes tool-call gaps visible, and does
 not require the ACP engine to expose tool calls to the transport layer.
