@@ -682,9 +682,9 @@ class ContextBuilder:
         """Build a skill index for the prompt.
 
         In compact/fresh mode only the active/relevant skills are shown as a
-        tag list. Full skill content is no longer injected here; active skills
-        are copied into the chat workspace by ``SkillManager.sync_to_chat`` so
-        ``devin acp`` discovers and loads them at session start.
+        tag list. If a user message matches a skill's triggers, the full skill
+        content is also injected so the model can follow it without relying on
+        an external skill loader.
         """
         if self.skill_manager is None:
             return None
@@ -693,13 +693,26 @@ class ContextBuilder:
             skill_names = self.active_skill_names(chat_id)
 
         active = skill_names or set()
-        return self.skill_manager.skill_index_text(
+        index = self.skill_manager.skill_index_text(
             chat_id,
             active=active,
             compact=compact,
             relevant_only=compact,
             message=message,
         )
+
+        if not (message and index and active):
+            return index
+
+        matched = self.skill_manager.match_skills(message, chat_id, enabled=active)
+        if not matched:
+            return index
+
+        content = self.skill_manager.active_skills_text(matched, chat_id)
+        if not content:
+            return index
+
+        return f"{index}\n\n{content}"
 
     def build_system_notice(
         self,

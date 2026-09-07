@@ -472,7 +472,7 @@ def test_build_follow_up_fresh_includes_wake_narrative(tmp_path: Path) -> None:
 
 
 def test_skill_context_is_compact_index_no_full_content(tmp_path: Path) -> None:
-    """Only the skill index is injected; full SKILL.md content is not."""
+    """Only the skill index is injected when no trigger matches."""
     skills_root = tmp_path / "skills"
     skills_root.mkdir(parents=True)
     skill_dir = skills_root / "model-review"
@@ -497,6 +497,34 @@ def test_skill_context_is_compact_index_no_full_content(tmp_path: Path) -> None:
     assert "/model-review" in pctx.prompt
     assert "Say `/skills` for full descriptions." in pctx.prompt
     assert "Run model review." not in pctx.prompt
+
+
+def test_skill_context_injects_full_content_when_triggered(tmp_path: Path) -> None:
+    """If the user message matches a skill trigger, the full skill content is injected."""
+    skills_root = tmp_path / "skills"
+    skills_root.mkdir(parents=True)
+    skill_dir = skills_root / "model-review"
+    skill_dir.mkdir(parents=True)
+    skill_dir.joinpath("SKILL.md").write_text(
+        "---\nname: model-review\ntriggers:\n  - model review\n---\n\nRun model review.\n",
+        encoding="utf-8",
+    )
+
+    manager = SkillManager(
+        personas_root=tmp_path / "personas",
+        shared_root=tmp_path,
+        chat_cwd_root=tmp_path,
+    )
+
+    builder = _make_builder(tmp_path)
+    builder.skill_manager = manager
+    builder.active_skill_names = lambda chat_id: {"model-review"}
+
+    pctx = builder.build_first("chat-1", "Run a model review.", record=None)
+
+    assert "## Available skills" in pctx.prompt
+    assert "/model-review" in pctx.prompt
+    assert "Run model review." in pctx.prompt
 
 
 def test_build_first_includes_chat_memory_block(tmp_path: Path) -> None:
