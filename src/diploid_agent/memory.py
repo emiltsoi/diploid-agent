@@ -853,32 +853,47 @@ class MemoryManager:
         raw_text = self._format_recent_turns(recent)
         return len(raw_text) > self.memory_config.max_short_term_chars
 
+    @staticmethod
+    def _normalize_promoted_line(line: str) -> str:
+        """Normalize a promoted line for duplicate comparison."""
+        text = line.strip()
+        while text.startswith("-"):
+            text = text[1:].lstrip()
+        return " ".join(text.split())
+
     def _tidy_promoted_memory(self) -> None:
-        """Cap the promoted pocket to the most recent max_promoted_lines entries."""
+        """Cap the promoted pocket and drop duplicate entries."""
         max_lines = getattr(self.memory_config, "max_promoted_lines", 0)
-        if not max_lines:
-            return
         path = self.promoted_memory_path
         if not path.exists():
             return
 
         raw = path.read_text(encoding="utf-8")
         lines = [line for line in raw.splitlines() if line.strip()]
-        if len(lines) <= max_lines:
-            return
-
-        # Drop the oldest lines, then collapse adjacent duplicates.
-        kept = lines[-max_lines:]
+        seen: set[str] = set()
         deduped: list[str] = []
-        for line in kept:
-            if line != (deduped[-1] if deduped else None):
+        for line in lines:
+            key = self._normalize_promoted_line(line)
+            if key and key not in seen:
+                seen.add(key)
                 deduped.append(line)
-        path.write_text("\n".join(deduped) + "\n", encoding="utf-8")
+        if max_lines and len(deduped) > max_lines:
+            deduped = deduped[-max_lines:]
+        if deduped != lines:
+            path.write_text("\n".join(deduped) + "\n", encoding="utf-8")
 
     def _append_promoted_memory(self, content: str) -> None:
         """Append a user-promoted fact to the curated pocket file."""
         path = self.promoted_memory_path
         path.parent.mkdir(parents=True, exist_ok=True)
+        key = self._normalize_promoted_line(content)
+        if path.exists():
+            existing = {
+                self._normalize_promoted_line(line)
+                for line in path.read_text(encoding="utf-8").splitlines()
+            }
+            if key in existing:
+                return
         with path.open("a", encoding="utf-8") as f:
             f.write(f"- {content.strip()}\n")
         self._tidy_promoted_memory()

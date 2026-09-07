@@ -1261,6 +1261,13 @@ class AgentRuntime(RuntimeAPI):
         """Promote a fact to the persona's memory."""
         return self._actions.promote(chat_id, fact)
 
+    def record_system_note(self, chat_id: str, text: str) -> None:
+        """Append a system note to the chat's transcript."""
+        try:
+            self._memory_manager(chat_id).append_mesh_note(text)
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to record system note for %s", chat_id)
+
     def list_models(self) -> list[str]:
         """Return the list of models the ACP server accepts."""
         return self._actions.list_models()

@@ -171,6 +171,9 @@ class FakePluginRuntime:
     def promote(self, chat_id: str, fact: str) -> ChatResult:
         return ChatResult(reply="promoted")
 
+    def record_system_note(self, chat_id: str, text: str) -> None:
+        return None
+
     def suppress_auto_continue(self, chat_id: str, seconds: float = 300.0) -> None:
         return None
 

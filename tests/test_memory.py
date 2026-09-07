@@ -520,10 +520,39 @@ def test_promoted_memory_caps_and_dedupes(tmp_path: Path) -> None:
     assert lines[0] == "- fact 2"
     assert lines[-1] == "- fact 4"
 
-    # Duplicate the most recent line; the tidy pass should collapse it.
+    # Re-promoting an existing fact is a no-op, not an append-and-collapse.
     manager.promote("fact 4")
     lines = manager.promoted_memory_path.read_text().splitlines()
-    assert lines == ["- fact 3", "- fact 4"]
+    assert lines == ["- fact 2", "- fact 3", "- fact 4"]
+
+
+def test_promoted_memory_dedupes_non_adjacent_lines(tmp_path: Path) -> None:
+    from diploid_agent.config import MemoryConfig, PersonaConfig
+
+    class FakeClient:
+        pass
+
+    persona = PersonaConfig(name="test-persona", profile_root=tmp_path / "persona")
+    persona.profile_root.mkdir(parents=True, exist_ok=True)
+    config = MemoryConfig(backend="file")
+    manager = MemoryManager(
+        config=config,
+        persona=persona,
+        sessions_root=tmp_path,
+        chat_id="chat-1",
+        devin_client=FakeClient(),
+    )
+    path = manager.promoted_memory_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("- alpha\n- beta\n- alpha\n- gamma\n- beta\n", encoding="utf-8")
+
+    manager._tidy_promoted_memory()
+
+    assert path.read_text(encoding="utf-8").splitlines() == [
+        "- alpha",
+        "- beta",
+        "- gamma",
+    ]
 
 
 def test_record_turn_uses_notice_when_reply_empty(tmp_path: Path) -> None:
