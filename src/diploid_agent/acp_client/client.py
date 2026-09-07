@@ -19,7 +19,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from diploid_agent.acp_client.control import ControlListener
+from diploid_agent.acp_client.control import ControlListener, ControlSocketInUseError
 from diploid_agent.acp_client.errors import (
     AcpError,
     AcpMcpError,
@@ -582,15 +582,16 @@ class AcpClient:
         )
 
         while True:
+            transport_ready = False
             with self._lock:
                 if self._transport._is_transport_healthy():
                     if self._sandbox.mcp_servers_key(target) == self._sandbox.mcp_servers_key(
                         self._mcp_servers
                     ):
-                        self._watchdog.start()
-                        return
-                    # MCP list changed; restart outside the lock.
-                    needs_restart = True
+                        transport_ready = True
+                    else:
+                        # MCP list changed; restart outside the lock.
+                        needs_restart = True
                 else:
                     needs_restart = False
                     if self._initialized:
@@ -606,6 +607,22 @@ class AcpClient:
                     self._thread.start()
 
                     self._sandbox.prepare(target)
+
+            if transport_ready:
+                # The transport is fine but the control listener can die on its
+                # own (e.g. an accept() OSError); re-bind the stable path. A
+                # live foreign owner degrades the control channel but must not
+                # fail an otherwise working turn.
+                try:
+                    self._control.ensure_listening()
+                except ControlSocketInUseError:
+                    logger.warning(
+                        "ACP control socket %s is held by a foreign listener; "
+                        "control channel degraded until the next restart",
+                        self._control.socket_path,
+                    )
+                self._watchdog.start()
+                return
 
             if needs_restart:
                 if self._lifecycle_log is not None:
@@ -628,8 +645,17 @@ class AcpClient:
             attempts = 2
             for attempt in range(1, attempts + 1):
                 try:
+                    # Re-bind the stable control socket before every spawn so the
+                    # child's DIPLOID_CONTROL_SOCKET always points at a live
+                    # listener of this service.
+                    self._control.ensure_listening()
                     self._run(self._start_transport(), timeout=self._startup_timeout)
                     break
+                except ControlSocketInUseError:
+                    # A live foreign listener owns the stable path; handing the
+                    # child a socket owned by another process is worse than
+                    # failing the start cleanly.
+                    raise
                 except AcpTransportError as exc:
                     last_exc = exc
                     logger.warning(
