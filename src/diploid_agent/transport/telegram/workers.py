@@ -169,10 +169,12 @@ class TurnWorker(threading.Thread):
         last_thought_sent = ""
         text = ""
         display_text = ""
+        tail_text = ""
         visible = ""
         committed_text = ""
         committed_display = ""
         committed_message_id = None
+        committed_raw_ok = True
         last_growth_at = turn_start_at = time.monotonic()
         last_edit_at = turn_start_at
         config = self.poller._live_telegram_config
@@ -229,10 +231,18 @@ class TurnWorker(threading.Thread):
                 text = status.get("message_text", "")
                 display_text, _ = extract_ask_block(text or "")
                 display_text = display_text.strip()
-                visible = display_text[:4096]
+                # Only the not-yet-committed tail belongs in the live
+                # placeholder; earlier chunks already went out as their own
+                # committed messages. _uncommitted_tail falls back to the full
+                # text when the rolling window dropped the committed prefix.
+                tail_text = _uncommitted_tail(display_text)
+                # Drop the paragraph seam so the new message does not open with
+                # blank lines; committed_display still tracks the raw slice.
+                visible = tail_text[:4096].lstrip("\n")
             else:
                 text = ""
                 display_text = ""
+                tail_text = ""
                 visible = ""
             edited = False
 
@@ -246,24 +256,37 @@ class TurnWorker(threading.Thread):
 
             if message_id is not None and display_text:
                 # If the visible text changed, the model is still writing.
-                if visible != last_text_sent:
+                if visible and visible != last_text_sent:
                     self.poller._edit_message_text(self.chat_id, message_id, visible)
                     last_text_sent = visible
                     last_growth_at = now
                     edited = True
-                else:
+                elif visible:
                     # No new text: check whether the visible tail we already
                     # showed has been sitting idle long enough to be its own
                     # message. We use the displayed text (not the raw text with
                     # hidden ask blocks) so a trailing ask block does not cause
                     # a duplicate commit of the same visible content.
-                    tail = _uncommitted_tail(display_text)
-                    if _should_commit(tail, now - last_growth_at):
+                    if _should_commit(tail_text, now - last_growth_at):
                         # Freeze the current placeholder as a sent message and
                         # start a fresh one so the rest of the reply can stream
-                        # below it.
-                        committed_text = text
-                        committed_display = visible
+                        # below it. committed_display accumulates every shown
+                        # chunk so later tails stay suffixes of display_text.
+                        shown = tail_text[:4096]
+                        committed_display = (
+                            committed_display + shown
+                            if committed_display
+                            and display_text.startswith(committed_display)
+                            else shown
+                        )
+                        if committed_raw_ok and len(tail_text) <= 4096:
+                            committed_text = text
+                        else:
+                            # The displayed commit hit the 4096 cap (or a prior
+                            # commit did), so the raw prefix no longer maps to
+                            # what was shown; finalization strips by display.
+                            committed_text = ""
+                            committed_raw_ok = False
                         committed_message_id = message_id
                         last_text_sent = _REPLY_PLACEHOLDER
                         last_growth_at = now
@@ -290,7 +313,7 @@ class TurnWorker(threading.Thread):
                 # knows the harness is still alive.
                 elapsed = now - turn_start_at
                 if message_id is not None:
-                    base = display_text[:4096] if display_text else _REPLY_PLACEHOLDER
+                    base = tail_text[:4096].lstrip("\n") or _REPLY_PLACEHOLDER
                     heartbeat = _build_heartbeat_text(base, elapsed)
                     if heartbeat != last_text_sent:
                         self.poller._edit_message_text(self.chat_id, message_id, heartbeat)

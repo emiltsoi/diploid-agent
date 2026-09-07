@@ -1280,9 +1280,11 @@ def test_stream_turn_splits_intermediate_messages(tmp_path: Path, monkeypatch: A
     reply_kwargs = next(item[2] for item in sent_messages if item[3] == 101)
     assert reply_kwargs.get("reply_to_message_id") == chat_input.message_id
 
-    # The new placeholder was edited with the full text.
+    # The new placeholder was edited with only the uncommitted tail — the
+    # committed prefix is not duplicated into the second message.
     assert any(
-        mid == 101 and "I’ll check." in txt and "Done, thanks." in txt for mid, txt in edit_history
+        mid == 101 and "Done, thanks." in txt and "I’ll check." not in txt
+        for mid, txt in edit_history
     )
 
     # The final reply was sliced to avoid duplicating the committed text.
