@@ -75,6 +75,13 @@ class AcpTransport:
         # Monotonic generation counter, bumped on every _start_transport so
         # lifecycle events can be attributed to a specific child process.
         self.generation = 0
+        # Set once this generation can no longer deliver responses: killed
+        # child, dead stdout reader, or close in progress.  call()/_send()
+        # fail fast on a terminated transport -- a request registered after
+        # the unblock sweep would otherwise sit in ``_pending`` forever
+        # (observed in production: session/resume issued 2 ms after a
+        # watchdog kill hung for the full call timeout).
+        self._terminated = False
 
         # Prompt callbacks (on_chunk/on_update) are harness code that can
         # block on locks or I/O.  Running them on the ACP loop starves the
@@ -92,6 +99,8 @@ class AcpTransport:
 
     def healthy(self) -> bool:
         """Return True if the ACP transport is initialized and healthy."""
+        if self._terminated:
+            return False
         if not self._initialized or self._proc is None or self._proc.returncode is not None:
             return False
         if self._inflight_future is not None and not self._inflight_future.done():
@@ -119,6 +128,7 @@ class AcpTransport:
 
     async def close(self) -> None:
         """Terminate the ACP subprocess and cancel I/O tasks."""
+        self._terminated = True
         if self._proc is not None and self._proc.returncode is None:
             self._proc.terminate()
             try:
@@ -163,10 +173,30 @@ class AcpTransport:
         # be aborted now, including in-flight _run() callers.
         self._unblock_inflight("ACP transport closed")
 
+    def _check_accepting(self, op: str) -> None:
+        """Raise if this transport generation can never deliver a response.
+
+        A request registered on a terminated transport -- killed child, dead
+        reader, or teardown in progress -- would sit in ``_pending`` until its
+        timeout: the unblock sweep already ran and no reader will resolve it.
+        """
+        if self._terminated:
+            raise AcpTransportError(op, msg="ACP transport terminated")
+        proc = self._proc
+        if (
+            proc is None
+            or getattr(proc, "stdin", None) is None
+            or proc.returncode is not None
+        ):
+            raise AcpTransportError(op, msg="ACP process not running")
+        if self._reader_task is not None and self._reader_task.done():
+            raise AcpTransportError(op, msg="ACP stdout reader stopped")
+
     async def call(self, method: str, params: Any, timeout: float | None = None) -> Any:
         """Send a JSON-RPC request and return the result."""
         if self._loop is None:
             raise RuntimeError("ACP transport not started")
+        self._check_accepting("acp.call")
 
         self._client._next_id += 1
         msg_id = self._client._next_id
@@ -188,7 +218,7 @@ class AcpTransport:
                 # _send succeeded; reset the per-call deadline for the response wait.
                 self._last_control_call_deadline = time.monotonic() + call_timeout
             resp = await asyncio.wait_for(future, timeout=call_timeout)
-        except TimeoutError:
+        except BaseException:
             self._pending.pop(msg_id, None)
             raise
         finally:
@@ -280,6 +310,8 @@ class AcpTransport:
 
     def _is_transport_healthy(self) -> bool:
         """Check whether the running ACP subprocess and event loop are still usable."""
+        if self._terminated:
+            return False
         if not self._initialized:
             return False
         if not self._transport_healthy:
@@ -356,6 +388,16 @@ class AcpTransport:
             limit=self._stream_limit,
         )
 
+        lifecycle_log = getattr(self._client, "_lifecycle_log", None)
+        if lifecycle_log is not None:
+            # Logged at spawn time so every generation has a start marker;
+            # ``transport.start`` only fires after a successful initialize,
+            # which used to leave failed starts as untraceable "ghost" gens.
+            lifecycle_log.write(
+                "transport.spawn",
+                detail={"child_pid": self._proc.pid},
+            )
+
         self._reader_task = asyncio.create_task(self._reader())
         self._reader_task.add_done_callback(self._on_reader_done)
         self._stderr_task = asyncio.create_task(self._stderr_drain())
@@ -364,24 +406,49 @@ class AcpTransport:
             target=self._cb_worker, name="acp-prompt-cb", daemon=True
         )
         self._cb_thread.start()
+        # The new generation accepts calls now that proc and reader are live.
+        self._terminated = False
 
         self._client._watchdog.start()
 
-        init = await self.call(
-            "initialize",
-            {
-                "protocolVersion": 1,
-                "clientCapabilities": {
-                    "fs": {"readTextFile": False, "writeTextFile": False},
-                    "terminal": False,
+        init_start = time.perf_counter()
+        try:
+            init = await self.call(
+                "initialize",
+                {
+                    "protocolVersion": 1,
+                    "clientCapabilities": {
+                        "fs": {"readTextFile": False, "writeTextFile": False},
+                        "terminal": False,
+                    },
+                    "clientInfo": {
+                        "name": "diploid-agent",
+                        "version": "0.1.0",
+                    },
                 },
-                "clientInfo": {
-                    "name": "diploid-agent",
-                    "version": "0.1.0",
+                timeout=self._client._startup_timeout,
+            )
+        except Exception as exc:
+            if lifecycle_log is not None:
+                lifecycle_log.write(
+                    "transport.initialize.failure",
+                    detail={
+                        "error": str(exc),
+                        "duration_ms": round(
+                            (time.perf_counter() - init_start) * 1000, 2
+                        ),
+                    },
+                )
+            raise
+        if lifecycle_log is not None:
+            lifecycle_log.write(
+                "transport.initialize.success",
+                detail={
+                    "duration_ms": round(
+                        (time.perf_counter() - init_start) * 1000, 2
+                    ),
                 },
-            },
-            timeout=self._client._startup_timeout,
-        )
+            )
         logger.info(
             "ACP transport ready: %s v%s",
             init["agentInfo"].get("title", "Devin"),
@@ -469,6 +536,7 @@ class AcpTransport:
             logger.error(
                 "ACP reader task ended while the ACP process is still running"
             )
+        self._terminated = True
         self._transport_healthy = False
         self._unblock_inflight("ACP stdout reader stopped")
 
@@ -493,6 +561,7 @@ class AcpTransport:
             logger.error(
                 "ACP stderr drain ended while the ACP process is still running"
             )
+        self._terminated = True
         self._transport_healthy = False
         self._unblock_inflight("ACP stderr drain stopped")
 
@@ -611,8 +680,7 @@ class AcpTransport:
         )
 
     async def _send(self, msg: dict[str, Any], timeout: float | None = None) -> None:
-        if self._proc is None or self._proc.stdin is None:
-            raise AcpTransportError("acp.send", msg="ACP process not running")
+        self._check_accepting("acp.send")
         data = (json.dumps(msg, ensure_ascii=False) + "\n").encode()
         logger.debug("ACP SEND: %s", data.decode().strip()[:200])
         self._proc.stdin.write(data)
@@ -683,6 +751,9 @@ class AcpTransport:
 
     def _kill_process_group(self, proc: asyncio.subprocess.Process) -> None:
         """Kill the subprocess and any spawned descendants."""
+        # A killed child can never answer; latch it so calls issued before the
+        # OS reaps the process fail fast instead of hanging in ``_pending``.
+        self._terminated = True
         try:
             proc.kill()
             os.killpg(proc.pid, signal.SIGKILL)

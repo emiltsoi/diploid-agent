@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import os
 import threading
 import time
 from typing import Any
@@ -263,3 +264,58 @@ def test_start_transport_calls_initialize(monkeypatch: Any) -> None:
     assert called["params"]["protocolVersion"] == 1
     assert called["params"]["clientInfo"]["name"] == "diploid-agent"
     assert called["timeout"] == transport._client._startup_timeout
+
+
+def test_call_fails_fast_when_terminated() -> None:
+    """A call on a terminated transport must not sit in _pending forever."""
+    transport = _make_transport()
+    transport._loop = asyncio.new_event_loop()
+    transport._terminated = True
+    with pytest.raises(AcpTransportError, match="terminated"):
+        asyncio.run(transport.call("session/new", {}))
+    assert transport._pending == {}
+
+
+def test_call_fails_fast_when_process_dead() -> None:
+    transport = _make_transport()
+    transport._loop = asyncio.new_event_loop()
+    transport._proc = FakeProcess(returncode=1)
+    with pytest.raises(AcpTransportError, match="not running"):
+        asyncio.run(transport.call("session/new", {}))
+    assert transport._pending == {}
+
+
+def test_call_fails_fast_when_reader_dead() -> None:
+    """No reader means no response can ever arrive; fail instead of hanging."""
+    transport = _make_transport()
+    transport._loop = asyncio.new_event_loop()
+    proc = FakeProcess(returncode=None)
+    proc.stdin = object()  # type: ignore[attr-defined]
+    transport._proc = proc
+
+    class _DoneTask:
+        def done(self) -> bool:
+            return True
+
+    transport._reader_task = _DoneTask()  # type: ignore[assignment]
+    with pytest.raises(AcpTransportError, match="reader stopped"):
+        asyncio.run(transport.call("session/new", {}))
+    assert transport._pending == {}
+
+
+def test_kill_process_group_latches_terminated(monkeypatch: Any) -> None:
+    transport = _make_transport()
+    monkeypatch.setattr(os, "killpg", lambda *args: None)
+    transport._kill_process_group(FakeProcess())
+    assert transport._terminated is True
+
+
+def test_terminated_transport_reports_unhealthy() -> None:
+    """_ensure_started must restart a terminated transport, not trust it."""
+    transport = _make_transport()
+    transport._initialized = True
+    transport._transport_healthy = True
+    transport._proc = FakeProcess(returncode=None)
+    transport._terminated = True
+    assert transport.healthy() is False
+    assert transport._is_transport_healthy() is False

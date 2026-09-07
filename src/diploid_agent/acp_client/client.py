@@ -832,32 +832,46 @@ class AcpClient:
                 )
             return left
 
+        # Per-phase timing: when a resume eats its budget, the lifecycle log
+        # should say which phase consumed it (resume/load call vs the mode and
+        # model re-apply) rather than a single opaque duration.
+        phase = "resume"
+        resume_ms: float | None = None
+        config_ms: float | None = None
         try:
             call_timeout = self._control.call_timeout()
             try:
+                phase_start = time.perf_counter()
                 await self._call_with_resume_retry(
                     "session/resume",
                     resume_params,
                     call_timeout,
                     budget=_remaining,
                 )
+                resume_ms = round((time.perf_counter() - phase_start) * 1000, 2)
             except AcpError as exc:
                 if self._is_method_not_found(exc):
                     logger.debug(
                         "session/resume not supported; trying session/load for %s", session_id
                     )
                     resume_method = "load"
+                    phase = "load"
+                    phase_start = time.perf_counter()
                     await self._call_with_resume_retry(
                         "session/load",
                         load_params,
                         call_timeout,
                         budget=_remaining,
                     )
+                    resume_ms = round((time.perf_counter() - phase_start) * 1000, 2)
                 else:
                     raise
+            phase = "config"
+            phase_start = time.perf_counter()
             await self._apply_session_config(
                 session_id, use_model, timeout=min(call_timeout, _remaining())
             )
+            config_ms = round((time.perf_counter() - phase_start) * 1000, 2)
         except (AcpError, TimeoutError) as exc:
             duration_ms = round((time.perf_counter() - start) * 1000, 2)
             if self.metrics is not None:
@@ -871,7 +885,10 @@ class AcpClient:
                     detail={
                         "cwd": str(use_cwd),
                         "error": str(exc),
+                        "phase": phase,
                         "duration_ms": duration_ms,
+                        "resume_ms": resume_ms,
+                        "config_ms": config_ms,
                     },
                 )
             raise
@@ -889,6 +906,8 @@ class AcpClient:
                     "cwd": str(use_cwd),
                     "method": resume_method,
                     "duration_ms": duration_ms,
+                    "resume_ms": resume_ms,
+                    "config_ms": config_ms,
                 },
             )
         return session_id

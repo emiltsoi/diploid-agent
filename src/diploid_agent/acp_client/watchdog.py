@@ -68,6 +68,15 @@ class PromptWatchdog:
             proc = client._proc
             proc_dead = proc is not None and proc.returncode is not None
             silence_after = getattr(client, "_silence_warn_after", 600.0)
+            # Snapshot the transport identity being judged stalled.  Recovery
+            # waits on ``_lifecycle_lock``, and a concurrent _ensure_started can
+            # swap in a brand-new child while we wait -- without this token the
+            # kill would land on the replacement (observed in production: a
+            # watchdog_stall kill 1 ms after ``transport.start``).
+            transport = getattr(client, "_transport", None)
+            gen = getattr(
+                transport if transport is not None else client, "generation", None
+            )
 
         # All _stall_recovery calls must happen outside ``client._lock``:
         # recovery acquires ``_lifecycle_lock`` and the required lock order is
@@ -80,12 +89,12 @@ class PromptWatchdog:
                 proc.pid,
                 proc.returncode,
             )
-            self._stall_recovery()
+            self._stall_recovery("proc_dead", proc, gen)
             return
 
         if now > deadline:
             logger.warning("ACP call exceeded its deadline; watchdog recovering")
-            self._stall_recovery()
+            self._stall_recovery("inflight_deadline", proc, gen)
             return
 
         # The `_pending` map also holds the future for an in-flight prompt, so
@@ -100,14 +109,14 @@ class PromptWatchdog:
                     "ACP control call produced no response for %.1fs; watchdog recovering",
                     now - last_request,
                 )
-                self._stall_recovery()
+                self._stall_recovery("control_deadline", proc, gen)
                 return
             if not call_deadline and now - last_request > client._watchdog_timeout:
                 logger.warning(
                     "ACP control call produced no response for %ss; watchdog recovering",
                     client._watchdog_timeout,
                 )
-                self._stall_recovery()
+                self._stall_recovery("control_deadline", proc, gen)
                 return
 
         # An in-flight prompt with a live child and zero stdout traffic is the
@@ -140,7 +149,12 @@ class PromptWatchdog:
                 if client.metrics is not None:
                     client.metrics.inc("acp_prompt_silence_total")
 
-    def _stall_recovery(self) -> None:
+    def _stall_recovery(
+        self,
+        trigger: str = "unknown",
+        observed_proc: Any = None,
+        observed_gen: Any = None,
+    ) -> None:
         """Kill the ACP subprocess and unblock the in-flight caller (watchdog path)."""
         # Serialize against _ensure_started/close/restart_transport so the
         # watchdog never kills a child mid-startup or stops a loop another
@@ -150,11 +164,91 @@ class PromptWatchdog:
         if lifecycle_lock is None:
             lifecycle_lock = self._client._lock
         with lifecycle_lock:
-            self._stall_recovery_inner()
+            self._stall_recovery_inner(trigger, observed_proc, observed_gen)
 
-    def _stall_recovery_inner(self) -> None:
+    def _still_stalled(
+        self, client: Any, trigger: str, observed_proc: Any
+    ) -> bool:
+        """Re-verify the stall condition under ``client._lock``.
+
+        The in-flight call may have completed while recovery waited on
+        ``_lifecycle_lock``; restarting a healthy transport then is
+        gratuitous.  Returns True when in doubt so direct callers keep the
+        historical always-recover behaviour.
+        """
+        now = time.monotonic()
+        if trigger == "proc_dead":
+            return observed_proc is not None and observed_proc.returncode is not None
+        if trigger == "inflight_deadline":
+            inflight = client._inflight_future
+            return (
+                inflight is not None
+                and not inflight.done()
+                and now > client._inflight_deadline
+            )
+        if trigger == "control_deadline":
+            if not client._pending or client._active_prompts:
+                return False
+            call_deadline = client._last_control_call_deadline
+            if call_deadline:
+                return now > call_deadline
+            return now - client._last_request_at > client._watchdog_timeout
+        return True
+
+    def _stall_recovery_inner(
+        self,
+        trigger: str = "unknown",
+        observed_proc: Any = None,
+        observed_gen: Any = None,
+    ) -> None:
         client = self._client
         with client._lock:
+            transport = getattr(client, "_transport", None)
+            current_gen = getattr(
+                transport if transport is not None else client, "generation", None
+            )
+            current_proc = client._proc
+            if (observed_gen is not None or observed_proc is not None) and (
+                current_gen != observed_gen or current_proc is not observed_proc
+            ):
+                # The transport judged stalled was already replaced while we
+                # waited on ``_lifecycle_lock``.  Recovering now would kill a
+                # healthy new child and mark the fresh transport unhealthy.
+                logger.warning(
+                    "Watchdog stall observation is stale (gen %s pid %s -> "
+                    "gen %s pid %s); skipping recovery",
+                    observed_gen,
+                    getattr(observed_proc, "pid", None),
+                    current_gen,
+                    getattr(current_proc, "pid", None),
+                )
+                lifecycle_log = getattr(client, "_lifecycle_log", None)
+                if lifecycle_log is not None:
+                    lifecycle_log.write(
+                        "watchdog.recovery.skipped",
+                        reason="stale_generation",
+                        detail={
+                            "trigger": trigger,
+                            "observed_gen": observed_gen,
+                            "observed_pid": getattr(observed_proc, "pid", None),
+                            "current_gen": current_gen,
+                            "current_pid": getattr(current_proc, "pid", None),
+                        },
+                    )
+                return
+            if not self._still_stalled(client, trigger, observed_proc):
+                logger.info(
+                    "Watchdog stall cleared before recovery (trigger=%s); skipping",
+                    trigger,
+                )
+                lifecycle_log = getattr(client, "_lifecycle_log", None)
+                if lifecycle_log is not None:
+                    lifecycle_log.write(
+                        "watchdog.recovery.skipped",
+                        reason="cleared",
+                        detail={"trigger": trigger},
+                    )
+                return
             if client.metrics is not None:
                 client.metrics.inc("acp_watchdog_fired_total")
             lifecycle_log = getattr(client, "_lifecycle_log", None)
@@ -162,7 +256,12 @@ class PromptWatchdog:
                 lifecycle_log.write(
                     "transport.restart",
                     reason="watchdog_stall",
-                    detail={"killed": True},
+                    detail={
+                        "killed": True,
+                        "trigger": trigger,
+                        "stalled_gen": observed_gen,
+                        "stalled_pid": getattr(observed_proc, "pid", None),
+                    },
                 )
             record_restart = getattr(client, "_record_restart_attempt", None)
             if record_restart is not None:
