@@ -643,6 +643,45 @@ def test_chat_memory_block_returns_last_blocks(tmp_path: Path) -> None:
     assert "second summary" in block
 
 
+def test_chat_memory_block_points_to_archive(tmp_path: Path) -> None:
+    from diploid_agent.config import MemoryConfig, PersonaConfig
+    from diploid_agent.engine.fake import FakeAgentEngine
+
+    persona = PersonaConfig(name="test", profile_root=tmp_path / "persona")
+    persona.profile_root.mkdir(parents=True, exist_ok=True)
+    config = MemoryConfig(backend="file")
+    mgr = MemoryManager(
+        config=config,
+        persona=persona,
+        sessions_root=tmp_path,
+        chat_id="chat-1",
+        devin_client=FakeAgentEngine(),
+    )
+    fb = mgr._file_backend
+    assert fb is not None
+    fb.retain([MemoryItem(content="old section " + "x" * 400, tags=["memory"])])
+    fb.retain([MemoryItem(content="newest section", tags=["memory"])])
+
+    archive = fb._memory_path.with_name("chat_MEMORY_archive.md")
+    archive.write_text("# archived\n", encoding="utf-8")
+    block = mgr.chat_memory_block(max_chars=200)
+    assert block is not None
+    assert "newest section" in block
+    assert "chat_MEMORY_archive.md" in block
+
+    # Without an archive sibling, a trimmed block carries no pointer.
+    archive.unlink()
+    block = mgr.chat_memory_block(max_chars=200)
+    assert block is not None
+    assert "archive" not in block.lower()
+
+    # Under the cap, the block is untouched even if an archive exists.
+    archive.write_text("# archived\n", encoding="utf-8")
+    block = mgr.chat_memory_block(max_chars=100000)
+    assert block is not None
+    assert "archive" not in block.lower()
+
+
 def test_summarize_mirrors_to_file_backend(tmp_path: Path, monkeypatch) -> None:
     from diploid_agent.config import MemoryConfig, PersonaConfig
     from diploid_agent.engine.fake import FakeAgentEngine

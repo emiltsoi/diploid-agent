@@ -727,7 +727,13 @@ class MemoryManager:
         return {"path": path, "limit": limit, "total": total, "exceeded": total > limit}
 
     def chat_memory_block(self, max_chars: int | None = None) -> str | None:
-        """Return the most recent on-disk chat memory, capped to `max_chars`."""
+        """Return the most recent on-disk chat memory, capped to `max_chars`.
+
+        When the file is trimmed and a ``<name>_archive.md`` sibling exists,
+        append a pointer so the agent always knows the older content is
+        archived rather than lost — trimming keeps the tail, so a pointer
+        inside the file's head would itself be trimmed away.
+        """
         fb = self._file_backend
         if not fb:
             return None
@@ -737,7 +743,16 @@ class MemoryManager:
         cap = max_chars or self.memory_config.max_chat_memory_chars
         if len(text) <= cap:
             return text
-        return _trim_to_last_section(text, cap)
+        trimmed = _trim_to_last_section(text, cap)
+        archive = fb._memory_path.with_name(
+            f"{fb._memory_path.stem}_archive{fb._memory_path.suffix}"
+        )
+        if archive.exists():
+            trimmed += (
+                f"\n\n[Older sections are archived in {archive.name} — "
+                "read that file for the full history.]"
+            )
+        return trimmed
 
     @property
     def chat_memory_path(self) -> Path | None:

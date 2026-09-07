@@ -752,6 +752,16 @@ class ContextBuilder:
                 f"{loaded} of {total} characters "
                 f"(limit: {limit})."
             )
+            chat_path = chat_status.get("path")
+            if chat_path:
+                archive = Path(str(chat_path)).with_name(
+                    f"{Path(str(chat_path)).stem}_archive{Path(str(chat_path)).suffix}"
+                )
+                if archive.exists():
+                    lines.append(
+                        f"Older chat memory sections were moved to {archive.name}; "
+                        "read that file for the archived history."
+                    )
 
         if not lines:
             return None
