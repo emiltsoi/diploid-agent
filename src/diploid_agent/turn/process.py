@@ -202,6 +202,41 @@ class TurnProcess:
             return reply[active.thought_total :].lstrip("\n")
         return reply
 
+    @staticmethod
+    def _final_segment_reply(result: Any, reply: str) -> str | None:
+        """Return the reply text produced after the last tool-call update.
+
+        ``result.updates`` is a bounded tail of the turn's session/update
+        stream (oldest entries are dropped, newest kept), so the last
+        ``tool_call*`` update visible in it is still the last boundary and the
+        agent_message text after it is complete.  That suffix of the reply is
+        the "final segment" — the post-investigation answer without the working
+        narration between tool calls.  Returns None when no tool boundary is
+        visible or nothing was said after it; callers then retain the full
+        reply.
+        """
+        updates = list(getattr(result, "updates", None) or [])
+        last_tool = -1
+        for i, update in enumerate(updates):
+            if update.get("sessionUpdate") in ("tool_call", "tool_call_update"):
+                last_tool = i
+        if last_tool < 0:
+            return None
+        seg_chars = 0
+        for update in updates[last_tool + 1 :]:
+            if update.get("sessionUpdate") not in ("agent_message", "agent_message_chunk"):
+                continue
+            content = update.get("content", {})
+            if isinstance(content, list):
+                seg_chars += sum(
+                    len(b.get("text", "")) for b in content if b.get("type") == "text"
+                )
+            elif isinstance(content, dict) and content.get("type") == "text":
+                seg_chars += len(content.get("text", ""))
+        if seg_chars <= 0 or not reply:
+            return None
+        return reply[-seg_chars:] if seg_chars < len(reply) else reply
+
     def process(
         self,
         chat_id: str,
@@ -718,6 +753,7 @@ class TurnProcess:
                     extra_items=extra_items,
                     notice=assistant_notice,
                     system_note=resend_system_note,
+                    final_segment=self._final_segment_reply(result, reply),
                 )
 
                 turn = TurnInfo(

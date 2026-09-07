@@ -653,7 +653,9 @@ class MemoryManager:
                 max_chat_memory_chars=config.max_chat_memory_chars,
             )
 
+        self._turn_buffer: list[dict[str, Any]] = []
         self._maybe_migrate_legacy_files()
+        self._load_turn_buffer()
 
     def _maybe_migrate_legacy_files(self) -> None:
         """Rename legacy transcript/memory files and move short-term summary cache into .cache/."""
@@ -1247,6 +1249,134 @@ class MemoryManager:
         )
         self.backend.retain([item])
 
+    # ---------------------------------------------------------- turn retain buffer
+
+    @property
+    def _turn_buffer_path(self) -> Path:
+        return self._transcript_path.parent / "turn-retain-buffer.jsonl"
+
+    def _load_turn_buffer(self) -> None:
+        """Reload turn pairs buffered before a restart so they are not lost."""
+        path = self._turn_buffer_path
+        if not path.exists():
+            return
+        try:
+            for line in path.read_text().splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(entry, dict) and entry.get("content"):
+                    self._turn_buffer.append(entry)
+        except OSError:
+            logger.warning("Could not read retain buffer %s", path)
+
+    def _write_turn_buffer(self) -> None:
+        """Persist the pending buffer; remove the file when it is empty."""
+        path = self._turn_buffer_path
+        try:
+            if self._turn_buffer:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(
+                    "".join(json.dumps(e) + "\n" for e in self._turn_buffer)
+                )
+            elif path.exists():
+                path.unlink()
+        except OSError:
+            logger.warning("Could not persist retain buffer %s", path)
+
+    def _buffer_turn_pair(
+        self,
+        content: str,
+        *,
+        turn_number: int,
+        session_number: int,
+        model: str,
+    ) -> None:
+        """Buffer a turn pair and flush when the bundle size is reached.
+
+        Bundling several turns into one retained document gives the backend's
+        fact extraction cross-turn context and avoids emitting the same fact
+        once per turn.  A session boundary always flushes first so a bundle
+        never spans two ACP sessions.
+        """
+        if self._turn_buffer and self._turn_buffer[0]["session"] != session_number:
+            self._flush_turn_buffer()
+        self._turn_buffer.append(
+            {
+                "content": content,
+                "turn": turn_number,
+                "session": session_number,
+                "model": model,
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+        )
+        if len(self._turn_buffer) >= max(1, self.memory_config.retain_bundle_turns):
+            self._flush_turn_buffer()
+        else:
+            self._write_turn_buffer()
+
+    def _flush_turn_buffer(self) -> None:
+        """Retain buffered turn pairs, one document per same-session run.
+
+        Normally the buffer holds a single session's pairs; mixed runs can only
+        appear after a flush failure at a session boundary, and are split back
+        into per-session documents here.
+        """
+        while self._turn_buffer:
+            session = self._turn_buffer[0]["session"]
+            end = 0
+            while end < len(self._turn_buffer) and self._turn_buffer[end]["session"] == session:
+                end += 1
+            entries = self._turn_buffer[:end]
+            turns = [e["turn"] for e in entries]
+            bundled = len(entries) > 1
+            if bundled:
+                document_id = (
+                    f"turns-{self.chat_id}-{session:06d}-{turns[0]:06d}-{turns[-1]:06d}"
+                )
+                role = "pair_bundle"
+            else:
+                document_id = f"turn-{self.chat_id}-{session:06d}-{turns[0]:06d}"
+                role = "pair"
+            item = MemoryItem(
+                content="\n\n---\n\n".join(e["content"] for e in entries),
+                timestamp=entries[-1].get("timestamp") or datetime.now(UTC).isoformat(),
+                document_id=document_id,
+                session_number=session,
+                metadata={
+                    "role": role,
+                    "chat_id": self.chat_id,
+                    "persona": self.persona.name,
+                    "model": entries[-1].get("model"),
+                    "turn": turns[-1],
+                    "turns": turns,
+                    "session": session,
+                },
+                tags=[
+                    "turn",
+                    f"chat:{self.chat_id}",
+                    f"session:{session}",
+                    f"persona:{self.persona.name}",
+                ],
+            )
+            try:
+                self.backend.retain([item])
+            except Exception as exc:  # noqa: BLE001
+                # Keep the buffer and its backing file so the next record_turn
+                # or a restart retries instead of dropping the turns.
+                logger.warning(
+                    "Retain flush failed; keeping %d buffered turns: %s",
+                    len(self._turn_buffer),
+                    exc,
+                )
+                self._write_turn_buffer()
+                return
+            del self._turn_buffer[:end]
+        self._write_turn_buffer()
+
     def record_turn(
         self,
         user_message: str,
@@ -1257,33 +1387,27 @@ class MemoryManager:
         extra_items: list[MemoryItem] | None = None,
         notice: str | None = None,
         system_note: str | None = None,
+        final_segment: str | None = None,
     ) -> None:
         """Append to local transcript and retain to the active backend."""
         assistant_content = reply if reply else (notice or "")
         self._append_transcript(user_message, reply, notice=notice, system_note=system_note)
 
-        pair_content = f"User: {user_message}\n\nAssistant: {assistant_content}"
-        item = MemoryItem(
-            content=pair_content,
-            timestamp=datetime.now(UTC).isoformat(),
-            document_id=f"turn-{self.chat_id}-{session_number:06d}-{turn_number:06d}",
+        retain_content = assistant_content
+        if (
+            final_segment is not None
+            and self.memory_config.retain_final_segment
+            and len(final_segment.strip()) >= self.memory_config.retain_min_final_chars
+        ):
+            retain_content = final_segment.lstrip("\n")
+
+        pair_content = f"User: {user_message}\n\nAssistant: {retain_content}"
+        self._buffer_turn_pair(
+            pair_content,
+            turn_number=turn_number,
             session_number=session_number,
-            metadata={
-                "role": "pair",
-                "chat_id": self.chat_id,
-                "persona": self.persona.name,
-                "model": model,
-                "turn": turn_number,
-                "session": session_number,
-            },
-            tags=[
-                "turn",
-                f"chat:{self.chat_id}",
-                f"session:{session_number}",
-                f"persona:{self.persona.name}",
-            ],
+            model=model,
         )
-        self.backend.retain([item])
 
         if extra_items:
             self.backend.retain(extra_items)
@@ -1425,4 +1549,8 @@ class MemoryManager:
 
     def close(self) -> None:
         """Release any resources held by the backend."""
+        try:
+            self._flush_turn_buffer()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Retain buffer flush on close failed: %s", exc)
         self.backend.close()

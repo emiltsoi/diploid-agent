@@ -21,6 +21,7 @@ from diploid_agent.plugins.contexts import (
     TurnErrorContext,
     TurnStartContext,
 )
+from diploid_agent.turn.process import TurnProcess
 
 if TYPE_CHECKING:
     from diploid_agent.turn.controller import TurnController
@@ -603,6 +604,7 @@ class TurnDispatch:
                     turn_number=record.turn_number,
                     extra_items=extra_items,
                     notice=assistant_notice,
+                    final_segment=TurnProcess._final_segment_reply(turn_result, reply),
                 )
 
                 turn = TurnInfo(

@@ -651,3 +651,254 @@ def test_summarize_mirrors_to_file_backend(tmp_path: Path, monkeypatch) -> None:
     # The active Hindsight backend should also have received the summary.
     spool_lines = (tmp_path / "spool.jsonl").read_text().splitlines()
     assert any("We agreed on Postgres." in line for line in spool_lines)
+
+
+class _RecordingBackend:
+    """Minimal backend stub that records retained items."""
+
+    def __init__(self) -> None:
+        self.items: list[MemoryItem] = []
+        self.closed = False
+
+    def retain(self, items: list[MemoryItem]) -> None:
+        self.items.extend(items)
+
+    def health(self) -> bool:
+        return True
+
+    def recall(self, *args: Any, **kwargs: Any) -> str:
+        return ""
+
+    def stats(self) -> dict[str, Any]:
+        return {}
+
+    def append_system_note(self, text: str) -> None:
+        pass
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _recording_manager(tmp_path: Path, **mem_kwargs: Any):
+    from diploid_agent.config import MemoryConfig, PersonaConfig
+
+    class FakeClient:
+        pass
+
+    persona = PersonaConfig(name="test-persona", profile_root=tmp_path / "persona")
+    persona.profile_root.mkdir(parents=True, exist_ok=True)
+    config = MemoryConfig(
+        backend="file",
+        precompute_short_term_summary=False,
+        **mem_kwargs,
+    )
+    manager = MemoryManager(
+        config=config,
+        persona=persona,
+        sessions_root=tmp_path,
+        chat_id="chat-1",
+        devin_client=FakeClient(),
+    )
+    backend = _RecordingBackend()
+    manager.backend = backend
+    return manager, backend
+
+
+def test_record_turn_final_segment_replaces_narration(tmp_path: Path) -> None:
+    """With retain_final_segment, only the post-tool reply segment is retained;
+    the transcript still records the full reply."""
+    manager, backend = _recording_manager(
+        tmp_path, retain_final_segment=True, retain_min_final_chars=10
+    )
+    full = "Let me check the logs first.\n\nThe real answer is 42."
+    manager.record_turn(
+        "hi",
+        full,
+        model="m1",
+        turn_number=1,
+        session_number=1,
+        final_segment="The real answer is 42.",
+    )
+    assert len(backend.items) == 1
+    content = backend.items[0].content
+    assert content.endswith("Assistant: The real answer is 42.")
+    assert "Let me check" not in content
+    transcript = manager._load_transcript()
+    assert transcript[1]["content"] == full
+
+
+def test_record_turn_final_segment_short_falls_back(tmp_path: Path) -> None:
+    """A final segment below retain_min_final_chars retains the full reply."""
+    manager, backend = _recording_manager(
+        tmp_path, retain_final_segment=True, retain_min_final_chars=200
+    )
+    full = "working narration " * 30 + "Done."
+    manager.record_turn(
+        "hi",
+        full,
+        model="m1",
+        turn_number=1,
+        session_number=1,
+        final_segment="Done.",
+    )
+    assert backend.items[0].content.endswith(f"Assistant: {full}")
+
+
+def test_record_turn_final_segment_disabled_by_default(tmp_path: Path) -> None:
+    manager, backend = _recording_manager(tmp_path)
+    manager.record_turn(
+        "hi", "narration\n\nanswer", model="m1", turn_number=1, final_segment="answer"
+    )
+    assert "Assistant: narration\n\nanswer" in backend.items[0].content
+
+
+def test_record_turn_bundles_turns(tmp_path: Path) -> None:
+    """Pairs accumulate until retain_bundle_turns, then flush as one document."""
+    manager, backend = _recording_manager(tmp_path, retain_bundle_turns=3)
+    manager.record_turn("u1", "a1", model="m", turn_number=1, session_number=1)
+    manager.record_turn("u2", "a2", model="m", turn_number=2, session_number=1)
+    assert not backend.items
+    manager.record_turn("u3", "a3", model="m", turn_number=3, session_number=1)
+    assert len(backend.items) == 1
+    item = backend.items[0]
+    assert item.document_id == "turns-chat-1-000001-000001-000003"
+    assert item.metadata["role"] == "pair_bundle"
+    assert item.metadata["turns"] == [1, 2, 3]
+    assert "User: u1" in item.content
+    assert "Assistant: a3" in item.content
+    assert "---" in item.content
+    assert "session:1" in item.tags
+
+
+def test_record_turn_single_turn_keeps_turn_document_id(tmp_path: Path) -> None:
+    """With bundling disabled the per-turn document id is unchanged."""
+    manager, backend = _recording_manager(tmp_path)
+    manager.record_turn("u1", "a1", model="m", turn_number=7, session_number=2)
+    assert backend.items[0].document_id == "turn-chat-1-000002-000007"
+    assert backend.items[0].metadata["role"] == "pair"
+
+
+def test_record_turn_flushes_on_session_change(tmp_path: Path) -> None:
+    """A session boundary flushes the pending bundle before buffering the new
+    session's turn, and close() flushes the remainder."""
+    manager, backend = _recording_manager(tmp_path, retain_bundle_turns=4)
+    manager.record_turn("u1", "a1", model="m", turn_number=1, session_number=1)
+    manager.record_turn("u2", "a2", model="m", turn_number=2, session_number=1)
+    manager.record_turn("u3", "a3", model="m", turn_number=1, session_number=2)
+    assert len(backend.items) == 1
+    assert backend.items[0].metadata["session"] == 1
+    assert backend.items[0].metadata["turns"] == [1, 2]
+    assert len(manager._turn_buffer) == 1
+    manager.close()
+    assert len(backend.items) == 2
+    assert backend.items[1].metadata["session"] == 2
+    assert backend.items[1].metadata["role"] == "pair"
+
+
+def test_record_turn_buffer_survives_restart(tmp_path: Path) -> None:
+    """Buffered pairs persist to disk and are reloaded by a new manager."""
+    manager, backend = _recording_manager(tmp_path, retain_bundle_turns=4)
+    manager.record_turn("u1", "a1", model="m", turn_number=1, session_number=1)
+    manager.record_turn("u2", "a2", model="m", turn_number=2, session_number=1)
+    assert not backend.items
+    buffer_path = tmp_path / "chat-1" / "turn-retain-buffer.jsonl"
+    assert buffer_path.exists()
+
+    manager2, backend2 = _recording_manager(tmp_path, retain_bundle_turns=4)
+    assert len(manager2._turn_buffer) == 2
+    manager2.record_turn("u3", "a3", model="m", turn_number=3, session_number=1)
+    manager2.record_turn("u4", "a4", model="m", turn_number=4, session_number=1)
+    assert len(backend2.items) == 1
+    assert backend2.items[0].metadata["turns"] == [1, 2, 3, 4]
+    assert "User: u1" in backend2.items[0].content
+
+
+def test_record_turn_flush_failure_keeps_buffer(tmp_path: Path) -> None:
+    """A backend failure keeps the buffered pairs for the next flush attempt."""
+    manager, backend = _recording_manager(tmp_path, retain_bundle_turns=2)
+
+    class FailingBackend(_RecordingBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        def retain(self, items: list[MemoryItem]) -> None:
+            self.calls += 1
+            raise RuntimeError("backend down")
+
+    failing = FailingBackend()
+    manager.backend = failing
+    manager.record_turn("u1", "a1", model="m", turn_number=1, session_number=1)
+    manager.record_turn("u2", "a2", model="m", turn_number=2, session_number=1)
+    assert failing.calls == 1
+    assert len(manager._turn_buffer) == 2
+
+    manager.backend = backend
+    manager.record_turn("u3", "a3", model="m", turn_number=3, session_number=1)
+    assert len(backend.items) == 1
+    assert backend.items[0].metadata["turns"] == [1, 2, 3]
+
+
+def test_record_turn_extra_items_retain_immediately(tmp_path: Path) -> None:
+    """Plugin memory items are not delayed by the turn bundle buffer."""
+    manager, backend = _recording_manager(tmp_path, retain_bundle_turns=4)
+    extra = MemoryItem(content="body event", tags=["body"])
+    manager.record_turn(
+        "u", "a", model="m", turn_number=1, session_number=1, extra_items=[extra]
+    )
+    assert backend.items == [extra]
+    assert len(manager._turn_buffer) == 1
+
+
+def _fake_result(updates: list[dict[str, Any]] | None = None) -> Any:
+    class _Result:
+        pass
+
+    result = _Result()
+    result.updates = updates
+    return result
+
+
+def _msg(text: str) -> dict[str, Any]:
+    return {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {"type": "text", "text": text},
+    }
+
+
+def test_final_segment_reply_uses_last_tool_boundary() -> None:
+    from diploid_agent.turn.process import TurnProcess
+
+    result = _fake_result(
+        [
+            _msg("Working on it. "),
+            {"sessionUpdate": "tool_call", "content": {}},
+            {"sessionUpdate": "tool_call_update", "content": {}},
+            {"sessionUpdate": "agent_message_chunk",
+             "content": [{"type": "text", "text": "All done. "}]},
+            _msg("Here is the answer."),
+        ]
+    )
+    reply = "Working on it. All done. Here is the answer."
+    assert (
+        TurnProcess._final_segment_reply(result, reply)
+        == "All done. Here is the answer."
+    )
+
+
+def test_final_segment_reply_no_tool_returns_none() -> None:
+    from diploid_agent.turn.process import TurnProcess
+
+    assert TurnProcess._final_segment_reply(_fake_result([_msg("hi")]), "hi") is None
+    assert TurnProcess._final_segment_reply(_fake_result([]), "hi") is None
+    assert TurnProcess._final_segment_reply(_fake_result(None), "hi") is None
+    # Tool call last with no message after it -> no final segment.
+    result = _fake_result([_msg("only narration"), {"sessionUpdate": "tool_call"}])
+    assert TurnProcess._final_segment_reply(result, "only narration") is None
+
+
+def test_final_segment_reply_all_post_tool_returns_reply() -> None:
+    from diploid_agent.turn.process import TurnProcess
+
+    result = _fake_result([{"sessionUpdate": "tool_call"}, _msg("whole reply")])
+    assert TurnProcess._final_segment_reply(result, "whole reply") == "whole reply"
