@@ -7,6 +7,7 @@ import importlib.util
 import inspect
 import logging
 import re
+import sys
 import time
 import traceback
 from collections import defaultdict
@@ -425,14 +426,61 @@ class PluginManager:
         return result
 
     def reload_plugin(self, chat_id: str, name: str) -> str:
+        """Hot-swap a plugin: reload its module tree, then recycle instances.
+
+        ``chat_id`` is accepted for call-site compatibility; a module reload
+        changes the code for every chat, so instances are recycled for all
+        chats. The module tree is reloaded *before* any instance is dropped,
+        so a broken edit raises here and leaves the running instances
+        untouched.
+        """
         cfg = next((p for p in self._plugins if p.name == name), None)
         if cfg is None:
             return f"Unknown plugin: {name}"
-        self._instances[chat_id].pop(name, None)
         if cfg.module:
-            mod = importlib.import_module(cfg.module)
-            importlib.reload(mod)
+            self._deep_reload(cfg.module)
+        for cid, cache in list(self._instances.items()):
+            plugin = cache.pop(name, None)
+            if plugin is not None and not isinstance(plugin, FailedPlugin):
+                try:
+                    plugin.stop()
+                except BaseException:
+                    logger.exception("stop() failed for plugin %s during reload", name)
+                    self._record_incident(
+                        plugin=name,
+                        phase="lifecycle",
+                        error=traceback.format_exc(),
+                        action="failed_plugin",
+                        chat_id=cid,
+                    )
         return f"Plugin {name} reloaded"
+
+    @staticmethod
+    def _deep_reload(module_name: str) -> None:
+        """Reload ``module_name`` and its already-imported submodules, deepest first.
+
+        Plain ``importlib.reload`` on a package only re-executes ``__init__.py``;
+        a ``from .impl import Plugin`` there still binds the stale submodule
+        cached in ``sys.modules``. Reloading the subtree first makes the
+        package rebind the fresh code. Submodules that were never imported are
+        skipped and will import fresh on first use.
+        """
+        module = importlib.import_module(module_name)
+        prefix = module_name + "."
+        submodules = sorted(
+            (
+                (mod_name, mod)
+                for mod_name, mod in list(sys.modules.items())
+                if mod_name.startswith(prefix)
+                and mod is not None
+                and getattr(mod, "__file__", None) is not None
+            ),
+            key=lambda item: item[0].count("."),
+            reverse=True,
+        )
+        for _, mod in submodules:
+            importlib.reload(mod)
+        importlib.reload(module)
 
     def load_errors(self, chat_id: str) -> list[dict[str, str]]:
         errors: list[dict[str, str]] = []
