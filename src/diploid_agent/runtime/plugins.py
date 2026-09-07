@@ -247,7 +247,9 @@ class RuntimePlugins:
 
         init_path = plugin_dir / "__init__.py"
         init_path.write_text(
-            f'"""{target_module} plugin for diploid-agent."""\n\n'
+            f'"""{target_module} plugin for diploid-agent.\n\n'
+            f"Keep module-level code side-effect free: /plugin reload re-executes it.\n"
+            f'Do work in start(), release it in stop().\n"""\n\n'
             f"from __future__ import annotations\n\n"
             f"from typing import Any\n\n"
             f"from diploid_agent.config import PluginConfig\n"
