@@ -1196,6 +1196,64 @@ def test_stream_turn_heartbeat_wait_has_minimum_floor(tmp_path: Path, monkeypatc
     assert all(w >= 5.0 for w in waits), waits
 
 
+def test_stream_turn_floors_poll_rate_on_instant_replies(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A stopped turn makes the harness return /turn instantly forever; the
+    worker must pace itself instead of spinning into a hot poll loop, and
+    must exit on _should_stop instead of waiting for chat_future forever."""
+    from diploid_agent.transport.telegram import workers as workers_mod
+
+    monkeypatch.setattr(workers_mod, "_MIN_POLL_INTERVAL", 0.05)
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+        stream_chunk_interval=0.0,
+    )
+    chat_input = ChatInput(chat_id=12345, message_id=1, text="hello")
+    worker = TurnWorker(poller, chat_input)
+
+    calls = 0
+
+    def fake_turn_status(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        if calls >= 5:
+            worker._should_stop.set()
+        return {
+            "status": "running",
+            "stopped": True,
+            "message_text": "",
+            "thought_text": "",
+        }
+
+    class PendingFuture:
+        def done(self) -> bool:
+            return False
+
+        def result(self, timeout: float | None = None) -> dict[str, Any]:
+            raise TimeoutError()
+
+        def cancel(self) -> None:
+            pass
+
+    worker._harness_turn_status = fake_turn_status  # type: ignore[method-assign]
+    poller._edit_message_text = lambda *args, **kwargs: None
+    poller._delete_message = lambda *args, **kwargs: None
+    poller._send_text = lambda *args, **kwargs: []
+    poller._send_message = lambda *args, **kwargs: 100
+
+    start = time.monotonic()
+    result = worker._stream_turn(PendingFuture(), None, None)
+    elapsed = time.monotonic() - start
+
+    assert calls == 5
+    # Without the floor this would be hundreds of calls per second.
+    assert elapsed >= 4 * 0.05
+    assert result["notice"].startswith("Turn stopped")
+
+
 def test_stream_turn_splits_intermediate_messages(tmp_path: Path, monkeypatch: Any) -> None:
     """When the streamed reply pauses after a complete sentence, it is committed
     as its own message and the final reply is sent below it without duplicating

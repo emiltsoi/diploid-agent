@@ -135,15 +135,24 @@ class TurnController:
             )
 
         # ActiveTurn.session_id is only set after the ACP call returns, so it
-        # is None while a new-session prompt is in flight. Fall back to the
-        # active record and then to whatever session the engine is currently
-        # prompting, so /stop can cancel even during the long-lived call.
+        # is None while a new-session prompt is in flight — and it stays stale
+        # for the whole call when the engine swapped sessions mid-turn
+        # (force_new_session, rehydrate). The session the engine is *actually*
+        # prompting right now is the one that must be cancelled, so it comes
+        # first; every distinct candidate is cancelled so a stale recorded id
+        # can never mask the live one.
         record = self.runtime._active_record(chat_id)
-        session_id = (
-            active.session_id
-            or (record.session_id if record is not None else None)
-            or self.runtime.engine.active_session_id()
+        live_session_id = self.runtime.engine.active_session_id()
+        candidates = dict.fromkeys(
+            sid
+            for sid in (
+                live_session_id,
+                active.session_id,
+                record.session_id if record is not None else None,
+            )
+            if sid
         )
+        session_id = next(iter(candidates), None)
         if session_id is None:
             # Nothing to cancel, but still wake the active turn if it is waiting.
             with active._condition:
@@ -158,7 +167,8 @@ class TurnController:
         with active._condition:
             active.stopped = True
             active._condition.notify_all()
-        self.runtime.engine.cancel(session_id)
+        for candidate in candidates:
+            self.runtime.engine.cancel(candidate)
         if self.runtime.wake_queue is not None:
             count = self.runtime.wake_queue.cancel(chat_id=chat_id, reason="auto_continue")
             if count:

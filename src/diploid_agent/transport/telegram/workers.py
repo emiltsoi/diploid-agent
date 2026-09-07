@@ -29,6 +29,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("telegram_poll")
 
+# Minimum wall-clock interval between two /turn status polls. The `wait`
+# parameter only asks the harness to hold the request server-side; when the
+# response comes back immediately (idle, stopped, error), this floor is the
+# only thing preventing a hot poll loop.
+_MIN_POLL_INTERVAL = 0.5
+# How long a user-stopped worker waits for the in-flight /chat request to
+# unwind before reporting the partial reply it already streamed.
+_STOP_RESULT_WAIT = 15.0
+
 
 class TurnWorker(threading.Thread):
     """Run a single turn, stream partial output to Telegram, and support steering."""
@@ -199,7 +208,7 @@ class TurnWorker(threading.Thread):
                 return False
             return stripped[-1] in ".!?\n"
 
-        while not chat_future.done():
+        while not chat_future.done() and not self._should_stop.is_set():
             now = time.monotonic()
             remaining = _HEARTBEAT_INTERVAL - (now - last_edit_at)
             idle = now - last_growth_at
@@ -224,7 +233,15 @@ class TurnWorker(threading.Thread):
             # deadline. A 0.5 s floor prevents a tight busy loop when no
             # placeholder can be edited, while still letting us react quickly.
             wait = min(25.0, max(0.5, min(remaining, commit_wait)))
+            poll_started = time.monotonic()
             status = self._harness_turn_status(wait=wait)
+            # `wait` is only a server-side long-poll hint: when the harness
+            # returns instantly (idle turn, `stopped` already set, unreachable
+            # server), nothing paces this loop and it would spin at network
+            # speed. Enforce a real floor on the poll rate.
+            poll_elapsed = time.monotonic() - poll_started
+            if poll_elapsed < _MIN_POLL_INTERVAL:
+                time.sleep(_MIN_POLL_INTERVAL - poll_elapsed)
             now = time.monotonic()
             running = status.get("status") == "running"
             if running:
@@ -331,7 +348,17 @@ class TurnWorker(threading.Thread):
                 last_edit_at = now
 
         try:
-            result = chat_future.result()
+            if self._should_stop.is_set() and not chat_future.done():
+                # The user asked to stop; give the harness a short window to
+                # unwind the turn, then fall back to whatever we streamed.
+                result = chat_future.result(timeout=_STOP_RESULT_WAIT)
+            else:
+                result = chat_future.result()
+        except TimeoutError:
+            result = {
+                "reply": display_text or text,
+                "notice": "Turn stopped by user; the harness did not return a final reply.",
+            }
         except Exception:
             logger.exception("Turn failed")
             result = {
@@ -478,18 +505,21 @@ class TurnWorker(threading.Thread):
         self.poller._save_placeholder_state(self.chat_id, message_id, thought_id)
 
         result: dict[str, Any] = {}
+        pool = ThreadPoolExecutor(max_workers=1)
         try:
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                chat_future = pool.submit(self._harness_chat, chat_input)
-                try:
-                    with self.poller._typing_context(self.chat_id):
-                        result = self._stream_turn(chat_future, message_id, thought_id)
-                except Exception:
-                    logger.exception("Streaming failed")
-                    if not chat_future.done():
-                        chat_future.cancel()
-                    raise
+            chat_future = pool.submit(self._harness_chat, chat_input)
+            try:
+                with self.poller._typing_context(self.chat_id):
+                    result = self._stream_turn(chat_future, message_id, thought_id)
+            except Exception:
+                logger.exception("Streaming failed")
+                if not chat_future.done():
+                    chat_future.cancel()
+                raise
         finally:
+            # A user-stopped turn may leave the /chat HTTP request in flight;
+            # do not park the worker thread on pool shutdown waiting for it.
+            pool.shutdown(wait=not self._should_stop.is_set())
             if not result.get("continuation"):
                 self.poller._remove_placeholder_state(self.chat_id)
 
