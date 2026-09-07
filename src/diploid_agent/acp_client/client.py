@@ -417,25 +417,44 @@ class AcpClient:
 
     def close(self) -> None:
         """Terminate the ACP subprocess and stop the background loop."""
-        with self._lifecycle_lock, self._lock:
-            if not self._initialized and self._loop is None and self._proc is None:
-                return
-            gen = self._transport.generation
-            if (
-                self._lifecycle_log is not None
-                and gen > 0
-                and gen != self._logged_stop_gen
-            ):
-                self._lifecycle_log.write("transport.stop")
-                self._logged_stop_gen = gen
-            self._initialized = False
-            self._transport_healthy = False
+        with self._lifecycle_lock:
+            with self._lock:
+                if not self._initialized and self._loop is None and self._proc is None:
+                    return
+                gen = self._transport.generation
+                if (
+                    self._lifecycle_log is not None
+                    and gen > 0
+                    and gen != self._logged_stop_gen
+                ):
+                    self._lifecycle_log.write("transport.stop")
+                    self._logged_stop_gen = gen
+                self._initialized = False
+                self._transport_healthy = False
+                # Snapshot this generation's teardown handles once.  The
+                # _close_transport done-callback fires on whichever thread
+                # completes the future -- potentially after a follow-on
+                # _ensure_started installed the next generation's loop -- and
+                # the same applies to the slot clears in ``finally``.
+                # Dereferencing ``self._loop`` at fire time stopped the NEW
+                # loop out from under its _start_transport (the "ghost
+                # generation" behind the 86 s resume-stall gap).
+                loop = self._loop
+                thread = self._thread
+                proc = self._proc
+                reader_task = self._reader_task
+                stderr_task = self._stderr_task
+
+            # ``_lock`` is released for the blocking section: _close_transport
+            # needs it (via _unblock_inflight) to complete, and
+            # ``_lifecycle_lock`` alone already serializes us against
+            # _ensure_started/restart_transport/watchdog recovery.
             try:
                 if (
-                    self._thread is not None
-                    and self._thread.is_alive()
-                    and self._loop is not None
-                    and self._loop.is_running()
+                    thread is not None
+                    and thread.is_alive()
+                    and loop is not None
+                    and loop.is_running()
                 ):
                     # Schedule _close_transport on the background loop and stop
                     # the loop only after the coroutine has actually completed.
@@ -443,13 +462,13 @@ class AcpClient:
                     # scheduling the close task can leave the coroutine unawaited
                     # and generate a RuntimeWarning.
                     future: concurrent.futures.Future[Any] = asyncio.run_coroutine_threadsafe(
-                        self._close_transport(), self._loop
+                        self._close_transport(), loop
                     )
 
                     def _stop_loop_soon(_: Any) -> None:
-                        if self._loop is not None and self._loop.is_running():
+                        if loop.is_running():
                             try:
-                                self._loop.call_soon_threadsafe(self._loop.stop)
+                                loop.call_soon_threadsafe(loop.stop)
                             except RuntimeError:
                                 pass
 
@@ -458,34 +477,42 @@ class AcpClient:
                         future.result(timeout=10.0)
                     except (RuntimeError, TimeoutError) as exc:
                         logger.warning("ACP close transport failed: %s", exc)
-                        if self._proc is not None and self._proc.returncode is None:
+                        if proc is not None and proc.returncode is None:
                             try:
-                                self._proc.kill()
+                                proc.kill()
                             except Exception:
                                 logger.exception("Failed to kill ACP process during close")
-                        if self._loop is not None:
+                        if loop.is_running():
                             try:
-                                self._loop.call_soon_threadsafe(self._loop.stop)
+                                loop.call_soon_threadsafe(loop.stop)
                             except RuntimeError:
                                 pass
                 else:
                     # The background loop is not running; kill the process
                     # directly and do not schedule a coroutine that can never
                     # be awaited.
-                    if self._proc is not None and self._proc.returncode is None:
+                    if proc is not None and proc.returncode is None:
                         try:
-                            self._proc.kill()
+                            proc.kill()
                         except Exception:
                             logger.exception("Failed to kill ACP process during close")
             finally:
                 self._watchdog.stop()
-                if self._thread and self._thread.is_alive():
-                    self._thread.join(timeout=10.0)
-                self._loop = None
-                self._thread = None
-                self._proc = None
-                self._reader_task = None
-                self._stderr_task = None
+                if thread is not None and thread.is_alive():
+                    thread.join(timeout=10.0)
+                with self._lock:
+                    # Clear only slots still pointing at this generation's
+                    # handles; a racing restart may have installed replacements.
+                    if self._loop is loop:
+                        self._loop = None
+                    if self._thread is thread:
+                        self._thread = None
+                    if self._proc is proc:
+                        self._proc = None
+                    if self._reader_task is reader_task:
+                        self._reader_task = None
+                    if self._stderr_task is stderr_task:
+                        self._stderr_task = None
                 self._sandbox.cleanup()
                 self._control.close()
 
