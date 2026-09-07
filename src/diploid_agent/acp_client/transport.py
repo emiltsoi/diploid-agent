@@ -72,14 +72,20 @@ class AcpTransport:
         # Buffer limit for the child's stdout/stderr pipes.  Instance attribute
         # so tests can shrink it to exercise the oversized-line path.
         self._stream_limit = _STDIO_STREAM_LIMIT
+        # Monotonic generation counter, bumped on every _start_transport so
+        # lifecycle events can be attributed to a specific child process.
+        self.generation = 0
 
         # Prompt callbacks (on_chunk/on_update) are harness code that can
         # block on locks or I/O.  Running them on the ACP loop starves the
         # stdout reader: the pipe backs up and the child wedges on write.
-        # Dispatch them on a dedicated worker thread instead.
+        # Dispatch them on a dedicated worker thread instead.  The queue is
+        # bounded: a wedged callback must never backpressure the reader, so
+        # overflow drops work instead of blocking.
         self._cb_queue: queue.Queue[tuple[Callable[[Any], None], Any] | None] = (
-            queue.Queue()
+            queue.Queue(maxsize=2048)
         )
+        self._cb_dropped = 0
         self._cb_thread: threading.Thread | None = None
 
     # ------------------------------------------------------------------ public
@@ -133,11 +139,23 @@ class AcpTransport:
 
         # Stop the prompt-callback worker after queued callbacks drain.  Only
         # enqueue the sentinel when a worker actually ran -- a stale sentinel
-        # would make the next generation's worker exit immediately.
+        # would make the next generation's worker exit immediately.  The queue
+        # is bounded, so make room for the sentinel if it is full; the join
+        # timeout below bounds the wait even if the worker is wedged.
         cb_thread = self._cb_thread
         self._cb_thread = None
         if cb_thread is not None:
-            self._cb_queue.put(None)
+            try:
+                self._cb_queue.put_nowait(None)
+            except queue.Full:
+                try:
+                    self._cb_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    self._cb_queue.put_nowait(None)
+                except queue.Full:
+                    pass
             if cb_thread.is_alive():
                 await asyncio.to_thread(cb_thread.join, 2.0)
 
@@ -180,8 +198,17 @@ class AcpTransport:
             raise _acp_error_from_response(method, resp["error"])
         return resp.get("result")
 
-    def run(self, coro: Any, timeout: float | None = None) -> Any:
-        """Run a coroutine on the background loop and block for the result."""
+    def run(self, coro: Any, timeout: float | None = None, background: bool = False) -> Any:
+        """Run a coroutine on the background loop and block for the result.
+
+        ``background`` marks best-effort calls (memory summaries and other
+        non-user-facing work).  A background call that times out does not
+        poison the shared transport: its session may be wedged while the
+        transport itself is fine, and marking it unhealthy would force a
+        restart that destroys the foreground chat session.  Real transport
+        failures (dead reader, broken pipe) still mark it unhealthy via
+        their own paths.
+        """
         if self._loop is None:
             raise RuntimeError("ACP transport not started")
         if timeout is None:
@@ -199,7 +226,8 @@ class AcpTransport:
             self._transport_healthy = True
             return result
         except TimeoutError as exc:
-            self._transport_healthy = False
+            if not background:
+                self._transport_healthy = False
             if self._client.metrics is not None:
                 self._client.metrics.inc("acp_transport_errors_total", reason="timeout")
             raise AcpTransportError(
@@ -279,6 +307,8 @@ class AcpTransport:
         self._client._watchdog.stop()
 
     async def _start_transport(self) -> None:
+        self.generation += 1
+
         env = os.environ.copy()
         env["WINDSURF_API_KEY"] = self._client._api_key
         env["ACP_API_KEY"] = self._client._api_key
@@ -302,7 +332,8 @@ class AcpTransport:
                 "XDG_CACHE_HOME",
                 str(Path.home() / ".cache"),
             )
-            # Isolate the subprocess from the user's systemd/D-Bus session so it cannot
+
+        # Isolate the subprocess from the user's systemd/D-Bus session so it cannot
             # run raw `systemctl --user restart ...` directly. Restarts go through
             # the fake binaries in .local/bin and the harness control socket.
             env["XDG_RUNTIME_DIR"] = str(self._client._sandbox.devin_home / ".run")
@@ -519,7 +550,18 @@ class AcpTransport:
             except Exception:
                 logger.exception("ACP prompt callback failed")
             return
-        self._cb_queue.put((cb, arg))
+        try:
+            self._cb_queue.put_nowait((cb, arg))
+        except queue.Full:
+            # A wedged callback worker must never backpressure the reader.
+            # Dropped chunks only degrade streamed previews; the reply text
+            # is still collected in prompt.chunks.
+            self._cb_dropped += 1
+            if self._cb_dropped == 1 or self._cb_dropped % 100 == 0:
+                logger.warning(
+                    "ACP prompt callback queue full; dropped %d callbacks",
+                    self._cb_dropped,
+                )
 
     def _cb_worker(self) -> None:
         """Run prompt callbacks sequentially on a dedicated thread.

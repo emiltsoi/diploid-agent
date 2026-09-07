@@ -7,6 +7,7 @@ import logging
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,6 +29,8 @@ class AcpLifecycleEvent:
     model: str | None = None
     reason: str | None = None
     detail: dict[str, Any] | None = None
+    pid: int | None = None
+    transport_gen: int | None = None
 
 
 class AcpLifecycleLog:
@@ -37,11 +40,20 @@ class AcpLifecycleLog:
     they do not block the ACP control path.
     """
 
-    def __init__(self, path: Path, max_lines: int = 10000) -> None:
+    def __init__(
+        self,
+        path: Path,
+        max_lines: int = 10000,
+        context: Callable[[], dict[str, Any]] | None = None,
+    ) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._max_lines = max(1, max_lines)
+        # Optional provider called on every write to stamp process/transport
+        # identity (pid, transport_gen) so events can be attributed to a
+        # specific process and transport generation across restarts.
+        self.context = context
 
     def _read_tail(self, n: int) -> list[str]:
         """Return the last ``n`` non-empty lines without loading the whole file."""
@@ -74,8 +86,20 @@ class AcpLifecycleLog:
         model: str | None = None,
         reason: str | None = None,
         detail: dict[str, Any] | None = None,
+        pid: int | None = None,
+        transport_gen: int | None = None,
     ) -> None:
         """Append a lifecycle event to the log and trim if it grew too large."""
+        if self.context is not None:
+            try:
+                ctx = self.context() or {}
+            except Exception:
+                logger.debug("ACP lifecycle context provider failed", exc_info=True)
+                ctx = {}
+            if pid is None:
+                pid = ctx.get("pid")
+            if transport_gen is None:
+                transport_gen = ctx.get("transport_gen")
         entry = AcpLifecycleEvent(
             event=event,
             timestamp=datetime.now(UTC).isoformat(),
@@ -84,6 +108,8 @@ class AcpLifecycleLog:
             model=model,
             reason=reason,
             detail=detail,
+            pid=pid,
+            transport_gen=transport_gen,
         )
         line = json.dumps(asdict(entry), default=str, sort_keys=True) + "\n"
         with self._lock, self.path.open("a", encoding="utf-8") as f:

@@ -51,7 +51,12 @@ class EngineConfig(BaseModel):
     acp_resume_max_retries: int = 1  # retries per resume method (resume or load)
     acp_resume_retry_base_seconds: float = 0.5
     acp_resume_retry_max_seconds: float = 5.0
-    acp_resume_timeout: float = 300.0  # hard timeout for ACP session resume/load calls
+    acp_resume_timeout: float = (
+        120.0  # total budget for ACP session resume/load incl. config re-apply
+    )
+    acp_silence_warn_after: float = (
+        600.0  # seconds of in-flight-prompt stdout silence before a lifecycle warning
+    )
     acp_timeout_auto_resend: bool = (
         False  # if True, automatically resend a hard-timeout turn; if False, ask first
     )

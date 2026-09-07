@@ -17,6 +17,7 @@ class PromptWatchdog:
         self._client = client
         self._running = False
         self._thread: threading.Thread | None = None
+        self._last_silence_warn = 0.0
 
     def start(self) -> None:
         """Start the watchdog thread if it is not already running."""
@@ -60,11 +61,13 @@ class PromptWatchdog:
             now = time.monotonic()
             deadline = client._inflight_deadline
             last_request = client._last_request_at
+            last_stdout = getattr(client, "_last_stdout_at", 0.0)
             call_deadline = client._last_control_call_deadline
             has_prompt = bool(client._active_prompts)
             has_pending = bool(client._pending)
             proc = client._proc
             proc_dead = proc is not None and proc.returncode is not None
+            silence_after = getattr(client, "_silence_warn_after", 600.0)
 
         # All _stall_recovery calls must happen outside ``client._lock``:
         # recovery acquires ``_lifecycle_lock`` and the required lock order is
@@ -106,6 +109,36 @@ class PromptWatchdog:
                 )
                 self._stall_recovery()
                 return
+
+        # An in-flight prompt with a live child and zero stdout traffic is the
+        # one wedge mode the reader/drain fixes cannot see: the server itself
+        # may be stalled mid-turn.  Prompts are not killed on time (long tool
+        # runs are legitimately quiet), so surface the silence as telemetry --
+        # a log line, a lifecycle event, and a metric -- at most once per
+        # ``silence_after`` interval while it persists.
+        if has_prompt and silence_after > 0 and last_stdout > 0:
+            silence = now - last_stdout
+            if (
+                silence >= silence_after
+                and now - self._last_silence_warn >= silence_after
+            ):
+                self._last_silence_warn = now
+                session_id = next(iter(client._active_prompts), None)
+                logger.warning(
+                    "ACP prompt for session %s has produced no stdout for %.0fs "
+                    "(child alive; not auto-killing)",
+                    session_id,
+                    silence,
+                )
+                lifecycle_log = getattr(client, "_lifecycle_log", None)
+                if lifecycle_log is not None:
+                    lifecycle_log.write(
+                        "prompt.silence",
+                        session_id=session_id,
+                        detail={"silence_s": round(silence, 1)},
+                    )
+                if client.metrics is not None:
+                    client.metrics.inc("acp_prompt_silence_total")
 
     def _stall_recovery(self) -> None:
         """Kill the ACP subprocess and unblock the in-flight caller (watchdog path)."""

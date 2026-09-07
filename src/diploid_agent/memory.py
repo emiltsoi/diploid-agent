@@ -1121,6 +1121,7 @@ class MemoryManager:
                 model=model,
                 soft_timeout=self.memory_config.summary_soft_timeout,
                 timeout=self.memory_config.summary_timeout,
+                background=True,
             )
             result = self.devin_client.prompt(request)
             summary = result.reply.strip()
@@ -1466,6 +1467,7 @@ class MemoryManager:
                 model=model,
                 soft_timeout=self.memory_config.summary_soft_timeout,
                 timeout=self.memory_config.summary_timeout,
+                background=True,
             )
             result = self.devin_client.prompt(request)
             reply = result.reply

@@ -85,6 +85,7 @@ class AcpEngine(AgentEngine):
             control_timeout=config.acp_control_timeout,
             watchdog_interval=config.acp_watchdog_interval,
             watchdog_timeout=config.acp_watchdog_timeout,
+            silence_warn_after=config.acp_silence_warn_after,
             max_restarts=config.acp_max_restarts,
             max_mcp_restarts=config.acp_max_mcp_restarts,
             max_user_restarts=config.acp_max_user_restarts,
@@ -123,6 +124,7 @@ class AcpEngine(AgentEngine):
         soft_timeout: float | None = None,
         timeout: float | None = None,
         chat_id: str | None = None,
+        background: bool = False,
         on_chunk: Callable[[str], None] | None = None,
         on_update: Callable[[dict[str, Any]], None] | None = None,
     ) -> AcpPromptResult:
@@ -137,6 +139,7 @@ class AcpEngine(AgentEngine):
             soft_timeout=soft_timeout,
             timeout=timeout,
             chat_id=chat_id,
+            background=background,
             on_chunk=on_chunk,
             on_update=on_update,
         )
@@ -150,6 +153,7 @@ class AcpEngine(AgentEngine):
         model: str | None = None,
         soft_timeout: float | None = None,
         timeout: float | None = None,
+        background: bool = False,
         on_chunk: Callable[[str], None] | None = None,
         on_update: Callable[[dict[str, Any]], None] | None = None,
     ) -> AcpPromptResult:
@@ -163,6 +167,7 @@ class AcpEngine(AgentEngine):
             model=model,
             soft_timeout=soft_timeout,
             timeout=timeout,
+            background=background,
             on_chunk=on_chunk,
             on_update=on_update,
         )
@@ -189,6 +194,7 @@ class AcpEngine(AgentEngine):
                 soft_timeout=request.soft_timeout,
                 timeout=request.timeout,
                 chat_id=request.chat_id,
+                background=request.background,
                 on_chunk=on_chunk,
                 on_update=on_update,
             )
@@ -200,6 +206,7 @@ class AcpEngine(AgentEngine):
                 model=request.model,
                 soft_timeout=request.soft_timeout,
                 timeout=request.timeout,
+                background=request.background,
                 on_chunk=on_chunk,
                 on_update=on_update,
             )

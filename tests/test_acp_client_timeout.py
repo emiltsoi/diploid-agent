@@ -44,7 +44,7 @@ def test_create_session_marks_transport_unhealthy_on_timeout(client, monkeypatch
     """A hard timeout (stop_reason='timeout') makes the transport unhealthy."""
     monkeypatch.setattr(client, "_ensure_started", lambda *a, **k: None)
     monkeypatch.setattr(
-        client, "_run", lambda coro, timeout=None: _make_result("timeout", True)
+        client, "_run", lambda coro, timeout=None, **kw: _make_result("timeout", True)
     )
 
     client.create_session("test prompt")
@@ -57,7 +57,7 @@ def test_send_message_marks_transport_unhealthy_on_timeout(client, monkeypatch) 
     """Same for follow-up messages."""
     monkeypatch.setattr(client, "_ensure_started", lambda *a, **k: None)
     monkeypatch.setattr(
-        client, "_run", lambda coro, timeout=None: _make_result("timeout", True)
+        client, "_run", lambda coro, timeout=None, **kw: _make_result("timeout", True)
     )
 
     client.send_message("s1", "continue")
@@ -72,7 +72,7 @@ def test_create_session_keeps_transport_healthy_on_cancelled(client, monkeypatch
     # timed_out is True because _soft_timeout_canceller sets prompt.timed_out,
     # but the stop_reason is cancelled.
     monkeypatch.setattr(
-        client, "_run", lambda coro, timeout=None: _make_result("cancelled", True)
+        client, "_run", lambda coro, timeout=None, **kw: _make_result("cancelled", True)
     )
 
     client.create_session("test prompt")
@@ -85,7 +85,7 @@ def test_create_session_keeps_transport_healthy_on_completed(client, monkeypatch
     monkeypatch.setattr(client, "_ensure_started", lambda *a, **k: None)
     client._transport_healthy = True
     monkeypatch.setattr(
-        client, "_run", lambda coro, timeout=None: _make_result(None, False)
+        client, "_run", lambda coro, timeout=None, **kw: _make_result(None, False)
     )
 
     client.create_session("test prompt")
@@ -120,7 +120,7 @@ def test_create_session_restarts_transport_after_timeout(client, monkeypatch) ->
         ]
     )
 
-    def fake_run(coro, timeout=None):
+    def fake_run(coro, timeout=None, **kw):
         name = getattr(coro, "__name__", None)
         if name == "_start_transport":
             starts.append(1)

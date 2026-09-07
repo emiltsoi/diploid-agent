@@ -82,6 +82,7 @@ class AcpClient:
         control_timeout: float = 120.0,
         watchdog_interval: float = 10.0,
         watchdog_timeout: float = 120.0,
+        silence_warn_after: float = 600.0,
         max_restarts: int = 3,
         max_mcp_restarts: int = 5,
         max_user_restarts: int = 5,
@@ -142,6 +143,7 @@ class AcpClient:
         self._startup_timeout = startup_timeout
         self._watchdog_interval = watchdog_interval
         self._watchdog_timeout = watchdog_timeout
+        self._silence_warn_after = silence_warn_after
 
         # Restart backoff per cause.
         self._max_restarts_by_reason: dict[str, int] = {
@@ -156,6 +158,11 @@ class AcpClient:
         self._service_name = service_name
         self._on_service_restart = on_service_restart
         self._lifecycle_log = lifecycle_log
+        if lifecycle_log is not None:
+            lifecycle_log.context = self._lifecycle_context
+        # Generation of the transport for which we last logged transport.stop,
+        # so repeated close() calls do not emit duplicate stop events.
+        self._logged_stop_gen = -1
         restart_history_path = None
         if lifecycle_log is not None:
             restart_history_path = lifecycle_log.path.parent / "acp_restart_history.jsonl"
@@ -235,6 +242,7 @@ class AcpClient:
         soft_timeout: float | None = None,
         timeout: float | None = None,
         chat_id: str | None = None,
+        background: bool = False,
         on_chunk: Callable[[str], None] | None = None,
         on_update: Callable[[dict[str, Any]], None] | None = None,
     ) -> AcpPromptResult:
@@ -259,10 +267,13 @@ class AcpClient:
             timeout=effective_timeout + self._control_timeout + 30.0
             if effective_timeout is not None
             else None,
+            background=background,
         )
-        if result and result.stop_reason == "timeout":
+        if result and result.stop_reason == "timeout" and not background:
             # Force a transport restart so the next turn does not hang on
-            # session/new while the old child is still busy.
+            # session/new while the old child is still busy.  Background
+            # calls skip this: their timeout must not poison the shared
+            # transport under a live foreground session.
             with self._lock:
                 self._transport_healthy = False
         return result
@@ -276,6 +287,7 @@ class AcpClient:
         model: str | None = None,
         soft_timeout: float | None = None,
         timeout: float | None = None,
+        background: bool = False,
         on_chunk: Callable[[str], None] | None = None,
         on_update: Callable[[dict[str, Any]], None] | None = None,
     ) -> AcpPromptResult:
@@ -298,8 +310,9 @@ class AcpClient:
             timeout=effective_timeout + self._control_timeout + 30.0
             if effective_timeout is not None
             else None,
+            background=background,
         )
-        if result and result.stop_reason == "timeout":
+        if result and result.stop_reason == "timeout" and not background:
             with self._lock:
                 self._transport_healthy = False
         return result
@@ -335,6 +348,11 @@ class AcpClient:
         Tries ``session/resume`` first, then falls back to ``session/load`` if
         the agent does not advertise the unstable ``session/resume`` method.
         After a successful resume the session mode and model are re-applied.
+
+        ``timeout`` is a real end-to-end budget shared by the resume/load
+        attempts and the config re-apply, not per-call headroom: a stalled
+        resume is an opportunistic optimization and should give up quickly so
+        the caller can fall back to prompt rehydration.
         """
         self._ensure_started(mcp_servers)
         effective_timeout = timeout if timeout is not None else self.timeout
@@ -344,10 +362,9 @@ class AcpClient:
                 cwd=cwd,
                 model=model,
                 mcp_servers=mcp_servers,
+                timeout=effective_timeout,
             ),
-            timeout=effective_timeout + self._control_timeout + 30.0
-            if effective_timeout is not None
-            else None,
+            timeout=effective_timeout + 30.0 if effective_timeout is not None else None,
         )
 
     def cancel(self, session_id: str) -> None:
@@ -394,13 +411,23 @@ class AcpClient:
         """ACP does not expose a directory-scoped session list."""
         return []
 
+    def _lifecycle_context(self) -> dict[str, Any]:
+        """Process/transport identity stamped onto every lifecycle event."""
+        return {"pid": os.getpid(), "transport_gen": self._transport.generation}
+
     def close(self) -> None:
         """Terminate the ACP subprocess and stop the background loop."""
         with self._lifecycle_lock, self._lock:
-            if not self._initialized or self._loop is None:
+            if not self._initialized and self._loop is None and self._proc is None:
                 return
-            if self._lifecycle_log is not None:
+            gen = self._transport.generation
+            if (
+                self._lifecycle_log is not None
+                and gen > 0
+                and gen != self._logged_stop_gen
+            ):
                 self._lifecycle_log.write("transport.stop")
+                self._logged_stop_gen = gen
             self._initialized = False
             self._transport_healthy = False
             try:
@@ -491,9 +518,9 @@ class AcpClient:
         """Kill the subprocess and any spawned descendants."""
         self._transport._kill_process_group(proc)
 
-    def _run(self, coro: Any, timeout: float | None = None) -> Any:
+    def _run(self, coro: Any, timeout: float | None = None, background: bool = False) -> Any:
         """Run a coroutine on the background loop and block for the result."""
-        return self._transport.run(coro, timeout=timeout)
+        return self._transport.run(coro, timeout=timeout, background=background)
 
     async def _start_transport(self) -> None:
         """Start the ACP subprocess and run the initialize handshake."""
@@ -598,7 +625,11 @@ class AcpClient:
                 self._mcp_servers = target
                 self._transport_healthy = True
             if self._lifecycle_log is not None:
-                self._lifecycle_log.write("transport.start")
+                proc = self._proc
+                self._lifecycle_log.write(
+                    "transport.start",
+                    detail={"child_pid": proc.pid if proc is not None else None},
+                )
             return
 
     def restart_transport(self, reason: str | None = None, chat_id: str | None = None) -> None:
@@ -710,17 +741,23 @@ class AcpClient:
         method: str,
         params: dict[str, Any],
         call_timeout: float,
+        budget: Callable[[], float] | None = None,
     ) -> Any:
         """Call an ACP resume method, retrying transient errors with jitter.
 
         Does not retry a JSON-RPC "method not found" error; that is the
-        caller's signal to try a different method.
+        caller's signal to try a different method.  ``budget`` is an optional
+        callable returning the remaining seconds of the overall resume
+        budget; each attempt is capped by it.
         """
         last_exc: Exception | None = None
         max_attempts = self.acp_resume_max_retries + 1
         for attempt in range(max_attempts):
+            attempt_timeout = (
+                min(call_timeout, budget()) if budget is not None else call_timeout
+            )
             try:
-                return await self._call(method, params, timeout=call_timeout)
+                return await self._call(method, params, timeout=attempt_timeout)
             except AcpError as exc:
                 if self._is_method_not_found(exc):
                     raise
@@ -739,6 +776,7 @@ class AcpClient:
         cwd: Path | None = None,
         model: str | None = None,
         mcp_servers: list[dict[str, Any]] | None = None,
+        timeout: float | None = None,
     ) -> str:
         """Resume a persisted ACP session.
 
@@ -780,6 +818,20 @@ class AcpClient:
 
         resume_method = "resume"
         start = time.perf_counter()
+        deadline = (
+            time.monotonic() + timeout if timeout is not None and timeout > 0 else None
+        )
+
+        def _remaining() -> float:
+            if deadline is None:
+                return self._control.call_timeout()
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise TimeoutError(
+                    f"ACP resume budget of {timeout}s exhausted for {session_id}"
+                )
+            return left
+
         try:
             call_timeout = self._control.call_timeout()
             try:
@@ -787,6 +839,7 @@ class AcpClient:
                     "session/resume",
                     resume_params,
                     call_timeout,
+                    budget=_remaining,
                 )
             except AcpError as exc:
                 if self._is_method_not_found(exc):
@@ -798,10 +851,13 @@ class AcpClient:
                         "session/load",
                         load_params,
                         call_timeout,
+                        budget=_remaining,
                     )
                 else:
                     raise
-            await self._apply_session_config(session_id, use_model, timeout=call_timeout)
+            await self._apply_session_config(
+                session_id, use_model, timeout=min(call_timeout, _remaining())
+            )
         except (AcpError, TimeoutError) as exc:
             duration_ms = round((time.perf_counter() - start) * 1000, 2)
             if self.metrics is not None:
@@ -1177,7 +1233,7 @@ class AcpClient:
                     cancelled=prompt.cancelled,
                     partial=True,
                     timed_out=True,
-                    updates=prompt.updates,
+                    updates=list(prompt.updates),
                 )
 
             if "error" in raw:
@@ -1218,7 +1274,7 @@ class AcpClient:
                 cancelled=cancelled,
                 partial=partial,
                 timed_out=timed_out,
-                updates=prompt.updates,
+                updates=list(prompt.updates),
             )
         except asyncio.CancelledError:
             logger.warning("ACP prompt cancelled by watchdog/timeout")
@@ -1229,7 +1285,7 @@ class AcpClient:
                 cancelled=prompt.cancelled,
                 partial=True,
                 timed_out=True,
-                updates=prompt.updates,
+                updates=list(prompt.updates),
             )
         finally:
             if timeout_task is not None and not timeout_task.done():

@@ -5,8 +5,16 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import time
+from collections import deque
 from collections.abc import Callable
 from typing import Any
+
+# Bound the per-prompt update buffer.  `devin acp` session/update payloads can
+# carry raw tool output (observed 87-274 KB each) and a prompt may run for
+# hours, so an unbounded list accumulates real memory.  The retained tail is
+# telemetry -- the live on_update callback sees every update -- so dropping the
+# oldest entries is safe.
+_PROMPT_UPDATES_MAXLEN = 256
 
 
 @dataclasses.dataclass
@@ -35,7 +43,9 @@ class _Prompt:
     soft_timeout: float | None = None
     started_at: float = dataclasses.field(default_factory=time.monotonic)
     chunks: list[str] = dataclasses.field(default_factory=list)
-    updates: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+    updates: deque[dict[str, Any]] = dataclasses.field(
+        default_factory=lambda: deque(maxlen=_PROMPT_UPDATES_MAXLEN)
+    )
     on_chunk: Callable[[str], None] | None = None
     on_update: Callable[[dict[str, Any]], None] | None = None
     cancelled: bool = False

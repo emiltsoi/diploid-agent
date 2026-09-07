@@ -20,6 +20,8 @@ class TurnRequest:
     soft_timeout: float | None = None
     timeout: float | None = None
     chat_id: str | None = None
+    background: bool = False  # best-effort work (e.g. memory summaries); a
+    # background timeout must not poison the shared ACP transport
 
 
 @dataclass

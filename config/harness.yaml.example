@@ -9,7 +9,8 @@ engine:                 # `diploid:` is the YAML alias for this block
   acp_watchdog_interval: 10.0 # seconds between transport health checks
   acp_watchdog_timeout: 120.0 # seconds without a control-call response before transport reset
   acp_resume_enabled: true  # use ACP session/resume (or load) instead of prompt rehydration
-  acp_resume_timeout: 300.0 # hard deadline for ACP session resume/load calls
+  acp_resume_timeout: 120.0 # total budget for ACP session resume/load incl. config re-apply
+  acp_silence_warn_after: 600.0 # seconds of in-flight-prompt stdout silence before a lifecycle warning
   continuation_triggers:  # plain-text replies that resume a partial turn
     - continue
     - go on
