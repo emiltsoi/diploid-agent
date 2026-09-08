@@ -9,7 +9,14 @@ from typing import Any
 
 import pytest
 
-from diploid_agent.acp_client import AcpClient, AcpError, AcpLifecycleLog, AcpPromptResult
+from diploid_agent.acp_client import (
+    AcpClient,
+    AcpError,
+    AcpLifecycleLog,
+    AcpPromptResult,
+    AcpSessionStaleError,
+    AcpTransportError,
+)
 from diploid_agent.config import (
     Config,
     DiploidConfig,
@@ -417,3 +424,128 @@ def test_resume_session_jitter_is_bounded(client: AcpClient) -> None:
     assert 0 <= delay0 <= client.acp_resume_retry_max_seconds
     assert 0 <= delay1 <= client.acp_resume_retry_max_seconds
     assert 0 <= delay10 <= client.acp_resume_retry_max_seconds
+
+
+def test_acp_engine_resume_forwards_timeout(monkeypatch) -> None:
+    """AcpEngine.resume_session forwards an explicit timeout and applies the default."""
+    engine = AcpEngine(
+        config=EngineConfig(bin="/bin/echo"),
+        api_key="test",
+        metrics=None,  # type: ignore[arg-type]
+    )
+    captured: list[dict[str, Any]] = []
+
+    def fake_resume(*args: Any, **kwargs: Any) -> str:
+        captured.append(kwargs)
+        return "resumed-id"
+
+    monkeypatch.setattr(engine._client, "resume_session", fake_resume)
+    try:
+        engine.resume_session("s-9", timeout=7.5)
+        assert captured[-1]["timeout"] == 7.5
+
+        engine.resume_session("s-9")
+        assert captured[-1]["timeout"] == engine.config.acp_resume_timeout
+    finally:
+        engine.close()
+
+
+def test_rehydrate_after_restart_uses_short_resume_budget(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A restart-first rehydrate resumes with acp_resume_after_restart_timeout."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root, acp_resume_enabled=True)
+    harness = ConversationHarness(config)
+
+    def fake_create_session(prompt: str, *, cwd=None, model=None, **kwargs):
+        return AcpPromptResult(reply="Ready.", session_id="s-1")
+
+    send_calls = [0]
+
+    def fake_send_message(session_id: str, prompt: str, *, cwd=None, model=None, **kwargs):
+        send_calls[0] += 1
+        if send_calls[0] == 1:
+            raise AcpTransportError("session/prompt", msg="stuck")
+        return AcpPromptResult(reply="Resumed reply.", session_id=session_id)
+
+    resume_timeouts: list[float | None] = []
+
+    def fake_resume(session_id: str, *, timeout=None, **kwargs):
+        resume_timeouts.append(timeout)
+        return session_id
+
+    restarts: list[None] = []
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+    monkeypatch.setattr(harness.client, "send_message", fake_send_message)
+    monkeypatch.setattr(harness.client, "resume_session", fake_resume)
+    monkeypatch.setattr(
+        harness.client,
+        "restart_transport",
+        lambda reason=None, chat_id=None: restarts.append(None),
+    )
+
+    try:
+        result1 = harness.process("chat-restart", "hello")
+        assert result1.session_id == "s-1"
+
+        result2 = harness.process("chat-restart", "follow-up")
+        assert result2.reply == "Resumed reply."
+        assert result2.session_id == "s-1"
+        assert restarts  # the transport was restarted before the resume attempt
+        assert resume_timeouts == [config.engine.acp_resume_after_restart_timeout]
+    finally:
+        harness.client.close()
+
+
+def test_rehydrate_stale_session_uses_full_resume_budget(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A stale-session rehydrate (no restart) keeps the full acp_resume_timeout."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root, acp_resume_enabled=True)
+    harness = ConversationHarness(config)
+
+    def fake_create_session(prompt: str, *, cwd=None, model=None, **kwargs):
+        return AcpPromptResult(reply="Ready.", session_id="s-1")
+
+    send_calls = [0]
+
+    def fake_send_message(session_id: str, prompt: str, *, cwd=None, model=None, **kwargs):
+        send_calls[0] += 1
+        if send_calls[0] == 1:
+            raise AcpSessionStaleError(
+                "session/prompt",
+                {"code": -32002, "message": "Session not found"},
+            )
+        return AcpPromptResult(reply="Resumed reply.", session_id=session_id)
+
+    resume_timeouts: list[float | None] = []
+
+    def fake_resume(session_id: str, *, timeout=None, **kwargs):
+        resume_timeouts.append(timeout)
+        return session_id
+
+    restarts: list[None] = []
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+    monkeypatch.setattr(harness.client, "send_message", fake_send_message)
+    monkeypatch.setattr(harness.client, "resume_session", fake_resume)
+    monkeypatch.setattr(
+        harness.client,
+        "restart_transport",
+        lambda reason=None, chat_id=None: restarts.append(None),
+    )
+
+    try:
+        harness.process("chat-stale", "hello")
+
+        result2 = harness.process("chat-stale", "follow-up")
+        assert result2.reply == "Resumed reply."
+        assert result2.session_id == "s-1"
+        assert not restarts  # a stale session does not restart the transport first
+        # None = no override; AcpEngine resolves it to the full acp_resume_timeout.
+        assert resume_timeouts == [None]
+    finally:
+        harness.client.close()

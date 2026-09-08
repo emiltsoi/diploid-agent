@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from diploid_agent.engine import TurnRequest, TurnResult
-from diploid_agent.models import ChatResult, SessionRecord, WakeEvent
+from diploid_agent.models import ActiveTurn, ChatResult, PartialTurn, SessionRecord, WakeEvent
 from diploid_agent.plugins.contexts import PromptContext, RehydrationReason
 
 if TYPE_CHECKING:
@@ -58,6 +60,83 @@ class TurnRehydrate:
     def engine(self) -> Any:
         return self.runtime.engine
 
+    def _active_partial(self, chat_id: str) -> PartialTurn | None:
+        """Return a PartialTurn snapshot of the in-flight turn, if any."""
+        active: ActiveTurn | None = self.runtime._active_turns.get(chat_id)
+        if active is None:
+            return None
+        record = self.runtime._active_record(chat_id)
+        return PartialTurn(
+            chat_id=chat_id,
+            session_number=record.session_number if record else 0,
+            turn_number=(record.turn_number + 1) if record else 1,
+            user_message=active.user_message,
+            message_text=active.message_text,
+            thought_text=active.thought_text,
+            thought_prefix=active.thought_prefix,
+            thought_total=active.thought_total,
+            full_text_offset=active.full_text_offset,
+            updated_at=time.time(),
+            current_intent=active.current_intent,
+            last_side_effect=active.last_side_effect,
+            last_side_effect_at=active.last_side_effect_at,
+        )
+
+    def _persisted_partial(self, chat_id: str, user_message: str) -> PartialTurn | None:
+        """Load a persisted interrupted-turn snapshot for the same user message.
+
+        The continuity plugin writes ``chat_active_turn.json`` while a turn
+        streams and promotes a leftover to ``chat_interrupted_turn.json`` on the
+        next wake. When the harness process itself died mid-turn, the in-process
+        ``ActiveTurn`` is fresh, so the on-disk snapshot is the only record of
+        what the interrupted turn had already produced.
+        """
+        chat_dir = self.runtime._chat_dir(chat_id)
+        for name in ("chat_interrupted_turn.json", "chat_active_turn.json"):
+            try:
+                data = json.loads((chat_dir / name).read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            if (data.get("user_message") or "").strip() != (user_message or "").strip():
+                continue
+            try:
+                return PartialTurn(
+                    chat_id=chat_id,
+                    session_number=int(data.get("session_number") or 0),
+                    turn_number=int(data.get("turn_number") or 0),
+                    user_message=data.get("user_message") or "",
+                    message_text=data.get("message_text") or "",
+                    thought_text=data.get("thought_text") or "",
+                    updated_at=float(data.get("updated_at") or 0.0),
+                    current_intent=data.get("current_intent") or "",
+                    last_side_effect=data.get("last_side_effect") or "",
+                    last_side_effect_at=float(data.get("last_side_effect_at") or 0.0),
+                )
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def _interrupted_turn_anchor(
+        self,
+        chat_id: str,
+        reason: RehydrationReason | None,
+        user_message: str = "",
+    ) -> str | None:
+        """Build an interrupted-turn anchor for the in-flight or persisted turn."""
+        partial = self._active_partial(chat_id)
+        if partial is None or not (
+            partial.message_text or partial.thought_text or partial.last_side_effect
+        ):
+            # The live turn has produced nothing yet — a leftover on-disk
+            # snapshot from a previous attempt at the same message is the
+            # better record of what was lost.
+            persisted = self._persisted_partial(chat_id, user_message)
+            if persisted is not None:
+                partial = persisted
+        return self.context_builder.interrupted_turn_anchor(partial, reason)
+
     def _rehydrate(
         self,
         chat_id: str,
@@ -85,12 +164,19 @@ class TurnRehydrate:
                 rehydration_reason = RehydrationReason.STALE
             else:
                 rehydration_reason = RehydrationReason.STALE
+        interrupted_anchor = self._interrupted_turn_anchor(
+            chat_id, rehydration_reason, user_message
+        )
         if self.runtime.lifecycle_log is not None:
             self.runtime.lifecycle_log.write(
                 "rehydrate.start",
                 chat_id=chat_id,
                 reason=rehydration_reason.value,
-                detail={"log_prefix": log_prefix, "restart_first": restart_first},
+                detail={
+                    "log_prefix": log_prefix,
+                    "restart_first": restart_first,
+                    "interrupted_anchor": bool(interrupted_anchor),
+                },
             )
         if restart_first:
             logger.warning("%s; restarting ACP transport for %s", log_prefix, chat_id)
@@ -118,14 +204,28 @@ class TurnRehydrate:
         ):
             assert old_record is not None
             self.runtime._restore_plugin_states(chat_id)
+            # After a transport restart the old session is likely gone from the
+            # fresh child; give session/load a short budget instead of stalling
+            # for the full acp_resume_timeout.
+            resume_timeout = (
+                self.runtime.config.engine.acp_resume_after_restart_timeout
+                if restart_first
+                else None
+            )
             try:
-                logger.warning("%s; attempting ACP session resume for %s", log_prefix, chat_id)
+                logger.warning(
+                    "%s; attempting ACP session resume for %s (timeout=%s)",
+                    log_prefix,
+                    chat_id,
+                    resume_timeout if resume_timeout is not None else "default",
+                )
                 resumed_id = self.runtime.call_engine_unlocked(
                     self.runtime.engine.resume_session,
                     old_record.session_id,
                     cwd=self.runtime._chat_dir(chat_id),
                     model=use_model,
                     mcp_servers=self.runtime._active_mcp_servers(chat_id),
+                    timeout=resume_timeout,
                 )
                 logger.warning("Resumed ACP session %s for %s", resumed_id, chat_id)
                 if self.runtime.lifecycle_log is not None:
@@ -143,6 +243,7 @@ class TurnRehydrate:
                     reply_to_is_bot=reply_to_is_bot,
                     reply_to_message_id=reply_to_message_id,
                     continuation_anchor=continuation_anchor,
+                    interrupted_turn=interrupted_anchor,
                     rehydrated=True,
                     rehydration_reason=RehydrationReason.RESUMED,
                     wake_event=wake_event,
@@ -174,7 +275,7 @@ class TurnRehydrate:
                         chat_id=chat_id,
                         session_id=old_record.session_id,
                         reason=rehydration_reason.value,
-                        detail={"error": str(exc)},
+                        detail={"error": str(exc), "resume_timeout": resume_timeout},
                     )
 
         # If resume failed or was skipped, probe the old ACP session directly.
@@ -221,6 +322,7 @@ class TurnRehydrate:
                     reply_to_is_bot=reply_to_is_bot,
                     reply_to_message_id=reply_to_message_id,
                     continuation_anchor=continuation_anchor,
+                    interrupted_turn=interrupted_anchor,
                     rehydrated=True,
                     rehydration_reason=RehydrationReason.RESUMED,
                     wake_event=wake_event,
@@ -255,6 +357,7 @@ class TurnRehydrate:
             reply_to_is_bot=reply_to_is_bot,
             reply_to_message_id=reply_to_message_id,
             continuation_anchor=continuation_anchor,
+            interrupted_turn=interrupted_anchor,
             wake_event=wake_event,
             other_instance_running=other_instance_running,
             rehydrated=True,

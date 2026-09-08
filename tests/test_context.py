@@ -12,7 +12,7 @@ from diploid_agent.context import ContextBuilder
 from diploid_agent.dispatch import Dispatch, DispatchStatus, DispatchStore
 from diploid_agent.engine.fake import FakeAgentEngine
 from diploid_agent.memory import MemoryItem, MemoryManager, RecallResult
-from diploid_agent.models import SessionRecord
+from diploid_agent.models import PartialTurn, SessionRecord
 from diploid_agent.plugins import PluginManager
 from diploid_agent.plugins.contexts import RehydrationReason
 from diploid_agent.skills import SkillManager
@@ -1318,4 +1318,111 @@ def test_prompt_blocks_caps_slot(tmp_path: Path) -> None:
     # The memory slot is capped; the long tail is gone.
     assert "should be trimmed" not in pctx.prompt
     assert "We value kindness" in pctx.prompt
+
+
+def test_interrupted_turn_anchor_skips_empty_partial() -> None:
+    """An empty partial turn produces no interrupted-turn anchor."""
+    assert ContextBuilder.interrupted_turn_anchor(None, None) is None
+
+
+def test_interrupted_turn_anchor_format(tmp_path: Path) -> None:
+    """The interrupted-turn anchor carries intent, side effect, and partial text."""
+    builder = _make_builder(tmp_path)
+    partial = PartialTurn(
+        chat_id="chat-1",
+        session_number=1,
+        turn_number=5,
+        user_message="Sort the list by date",
+        message_text="Here is the sorted list:\n\n- 2024-01-01",
+        thought_text="I should sort by date",
+        current_intent="Sort the list by date",
+        last_side_effect="list_files (running)",
+        last_side_effect_at=time.time(),
+    )
+
+    anchor = builder.interrupted_turn_anchor(partial, RehydrationReason.STALE)
+    assert anchor is not None
+    assert "interrupted" in anchor.lower()
+    assert "(stale)" in anchor
+    assert "Current intent: Sort the list by date" in anchor
+    assert "Last activity: list_files (running)" in anchor
+    assert "Here is the sorted list:" in anchor
+    assert "I should sort by date" in anchor
+
+
+def test_interrupted_turn_anchor_caps_long_message(tmp_path: Path) -> None:
+    """A very long partial message is capped to the configured limit."""
+    builder = _make_builder(tmp_path)
+    builder.config.harness.interrupted_turn_message_cap = 20
+    partial = PartialTurn(
+        chat_id="chat-1",
+        session_number=1,
+        turn_number=5,
+        user_message="Write a long story",
+        message_text="word " * 100,
+        current_intent="Write a long story",
+    )
+
+    anchor = builder.interrupted_turn_anchor(partial, RehydrationReason.TIMEOUT)
+    assert anchor is not None
+    assert "word word word" in anchor
+    assert "[... truncated ...]" in anchor
+    assert len(anchor) < len(partial.message_text)
+
+
+def test_build_first_includes_interrupted_turn(tmp_path: Path) -> None:
+    """A rehydrated first prompt injects the interrupted-turn anchor."""
+    builder = _make_builder(tmp_path)
+    partial = PartialTurn(
+        chat_id="chat-1",
+        session_number=1,
+        turn_number=5,
+        user_message="Continue the plan",
+        message_text="We need to finish the design",
+        current_intent="Continue the plan",
+        last_side_effect="subagent dispatch (completed)",
+        last_side_effect_at=time.time(),
+    )
+    interrupted = builder.interrupted_turn_anchor(partial, RehydrationReason.STALE)
+    assert interrupted is not None
+
+    pctx = builder.build_first(
+        "chat-1",
+        "Continue.",
+        record=None,
+        rehydrated=True,
+        interrupted_turn=interrupted,
+    )
+
+    assert interrupted in pctx.prompt
+    assert pctx.slots.get("continuation")
+    assert any(interrupted in part for part in pctx.slots["continuation"])
+
+
+def test_build_first_appends_interrupted_turn_to_continuation_anchor(tmp_path: Path) -> None:
+    """Both the continuation anchor and the interrupted-turn anchor appear in order."""
+    builder = _make_builder(tmp_path)
+    partial = PartialTurn(
+        chat_id="chat-1",
+        session_number=1,
+        turn_number=5,
+        user_message="Implement the fix",
+        message_text="I have started the fix",
+        current_intent="Implement the fix",
+    )
+    interrupted = builder.interrupted_turn_anchor(partial, RehydrationReason.TRANSPORT_ERROR)
+    continuation = "The user said Continue."
+
+    pctx = builder.build_first(
+        "chat-1",
+        "Continue.",
+        record=None,
+        rehydrated=True,
+        continuation_anchor=continuation,
+        interrupted_turn=interrupted,
+    )
+
+    assert pctx.slots.get("continuation") == [continuation, interrupted]
+    assert continuation in pctx.prompt
+    assert interrupted in pctx.prompt
 

@@ -73,6 +73,7 @@ class PromptBuildContext:
     model: str | None
     is_first: bool
     continuation_anchor: str | None = None
+    interrupted_turn: str | None = None
     rehydrated: bool = False
     rehydration_reason: RehydrationReason = RehydrationReason.NONE
     compact: bool = False

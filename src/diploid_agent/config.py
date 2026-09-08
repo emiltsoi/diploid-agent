@@ -54,6 +54,9 @@ class EngineConfig(BaseModel):
     acp_resume_timeout: float = (
         120.0  # total budget for ACP session resume/load incl. config re-apply
     )
+    acp_resume_after_restart_timeout: float = (
+        15.0  # resume budget when the transport was just restarted (session/load from disk)
+    )
     acp_silence_warn_after: float = (
         600.0  # seconds of in-flight-prompt stdout silence before a lifecycle warning
     )
@@ -460,6 +463,8 @@ class HarnessConfig(BaseModel):
     proactive_calibration_enabled: bool = True  # live-calibrate chars/token from last-turn metrics
     proactive_calibration_min_prompt_chars: int = 100  # minimum prompt length to trust calibration
     compact_plugin_max_chars: int = 200  # cap for plugin prompt blocks in compact/fresh mode
+    interrupted_turn_message_cap: int = 2048  # cap for the partial message in an interrupted-turn anchor
+    interrupted_turn_thought_cap: int = 512  # cap for the partial thought in an interrupted-turn anchor
     session_prune_enabled: bool = True
     session_prune_days: int = 14
     plugin_paths: list[Path] = Field(default_factory=lambda: [Path("~/.devin/plugins")])

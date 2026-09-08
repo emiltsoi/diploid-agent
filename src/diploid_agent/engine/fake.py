@@ -71,8 +71,9 @@ class FakeAgentEngine(AgentEngine):
         cwd: Path | None = None,
         model: str | None = None,
         mcp_servers: list[dict[str, Any]] | None = None,
+        timeout: float | None = None,
     ) -> str:
-        self.call_log.append(("resume_session", session_id, cwd, model, mcp_servers))
+        self.call_log.append(("resume_session", session_id, cwd, model, mcp_servers, timeout))
         if self.resume_fail:
             raise RuntimeError(f"resume failed for {session_id}")
         self.resumed.append(session_id)

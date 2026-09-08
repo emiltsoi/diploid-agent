@@ -43,6 +43,7 @@ class FakeAgentEngine(AgentEngine):
         cwd: Path | None = None,
         model: str | None = None,
         mcp_servers: list[dict[str, Any]] | None = None,
+        timeout: float | None = None,
     ) -> str:
         return session_id
 

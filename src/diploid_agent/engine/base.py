@@ -79,6 +79,7 @@ class AgentEngine(abc.ABC):
         cwd: Path | None = None,
         model: str | None = None,
         mcp_servers: list[dict[str, Any]] | None = None,
+        timeout: float | None = None,
     ) -> str:
         """Resume a persisted agent session and return the active session id.
 

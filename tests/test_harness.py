@@ -1451,6 +1451,113 @@ def test_rehydrate_reuses_transport(monkeypatch, tmp_path: Path) -> None:
     assert restart_calls[0] == 0
 
 
+def test_rehydrate_anchors_to_persisted_interrupted_turn(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A leftover on-disk partial snapshot feeds the interrupted-turn anchor."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root)
+    harness = ConversationHarness(config)
+
+    prompts: list[str] = []
+
+    def fake_create_session(prompt, *, cwd=None, model=None, **kwargs):
+        prompts.append(prompt)
+        return AcpPromptResult(reply="Ready.", session_id=f"session-{len(prompts)}")
+
+    def fake_send_message(session_id, prompt, *, cwd=None, model=None, **kwargs):
+        raise AcpSessionStaleError(
+            "session/prompt",
+            {"code": -32002, "message": "Session not found"},
+        )
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+    monkeypatch.setattr(harness.client, "send_message", fake_send_message)
+    monkeypatch.setattr(harness.client, "session_alive", lambda session_id: False)
+
+    result1 = harness.process("chat-persist", "hello")
+    assert result1.session_id == "session-1"
+
+    # Simulate a harness restart mid-turn: the in-process ActiveTurn is gone,
+    # but the continuity plugin left an interrupted-turn snapshot behind.
+    chat_dir = tmp_path / "sessions" / "chat-persist"
+    chat_dir.mkdir(parents=True, exist_ok=True)
+    (chat_dir / "chat_interrupted_turn.json").write_text(
+        json.dumps(
+            {
+                "session_number": 1,
+                "turn_number": 2,
+                "user_message": "follow-up",
+                "message_text": "I was halfway through drafting the report",
+                "thought_text": "outline first, then details",
+                "updated_at": time.time(),
+                "current_intent": "follow-up",
+                "last_side_effect": "edit_file (completed)",
+                "last_side_effect_at": time.time(),
+            }
+        )
+    )
+
+    result2 = harness.process("chat-persist", "follow-up")
+    assert result2.session_id == "session-2"
+    assert len(prompts) == 2
+    rehydrated_prompt = prompts[1]
+    assert "interrupted" in rehydrated_prompt.lower()
+    assert "I was halfway through drafting the report" in rehydrated_prompt
+    assert "edit_file (completed)" in rehydrated_prompt
+
+
+def test_rehydrate_ignores_persisted_snapshot_for_other_message(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A persisted snapshot for a different user message is not anchored."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root)
+    harness = ConversationHarness(config)
+
+    prompts: list[str] = []
+
+    def fake_create_session(prompt, *, cwd=None, model=None, **kwargs):
+        prompts.append(prompt)
+        return AcpPromptResult(reply="Ready.", session_id=f"session-{len(prompts)}")
+
+    def fake_send_message(session_id, prompt, *, cwd=None, model=None, **kwargs):
+        raise AcpSessionStaleError(
+            "session/prompt",
+            {"code": -32002, "message": "Session not found"},
+        )
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+    monkeypatch.setattr(harness.client, "send_message", fake_send_message)
+    monkeypatch.setattr(harness.client, "session_alive", lambda session_id: False)
+
+    harness.process("chat-other", "hello")
+
+    chat_dir = tmp_path / "sessions" / "chat-other"
+    chat_dir.mkdir(parents=True, exist_ok=True)
+    (chat_dir / "chat_interrupted_turn.json").write_text(
+        json.dumps(
+            {
+                "session_number": 1,
+                "turn_number": 2,
+                "user_message": "a different earlier request",
+                "message_text": "I was halfway through drafting the report",
+                "updated_at": time.time(),
+                "current_intent": "a different earlier request",
+                "last_side_effect": "edit_file (completed)",
+                "last_side_effect_at": time.time(),
+            }
+        )
+    )
+
+    result2 = harness.process("chat-other", "follow-up")
+    assert result2.session_id == "session-2"
+    assert len(prompts) == 2
+    rehydrated_prompt = prompts[1]
+    assert "I was halfway through drafting the report" not in rehydrated_prompt
+    assert "edit_file (completed)" not in rehydrated_prompt
+
+
 def test_turn_controller_rehydration_survives_model_error(monkeypatch, tmp_path: Path) -> None:
     """A model error during rehydration returns a ChatResult and records the stop reason."""
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"

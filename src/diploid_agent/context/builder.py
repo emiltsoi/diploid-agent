@@ -20,7 +20,7 @@ from diploid_agent.acp_client.lifecycle import AcpLifecycleLog
 from diploid_agent.config import Config
 from diploid_agent.dispatch import Dispatch, DispatchStatus
 from diploid_agent.memory import MemoryManager, RecallResult
-from diploid_agent.models import SessionRecord, WakeEvent
+from diploid_agent.models import PartialTurn, SessionRecord, WakeEvent
 from diploid_agent.persona_composer import (
     PersonaPrompt,
     _trim_to_section,
@@ -490,6 +490,68 @@ class ContextBuilder:
             ),
         }
         return notices[reason]
+
+    def interrupted_turn_anchor(
+        self,
+        partial: PartialTurn | None,
+        reason: RehydrationReason | None = None,
+    ) -> str | None:
+        """Return a compact anchor describing a turn that was interrupted mid-stream.
+
+        The new ACP session can use this to pick up where the previous session left
+        off without re-doing work that was already in progress.
+        """
+        if partial is None:
+            return None
+
+        current_intent = (partial.current_intent or "").strip()
+        if not current_intent and partial.user_message:
+            current_intent = (partial.user_message or "").strip().splitlines()[0][:120]
+
+        if (
+            not current_intent
+            and not partial.last_side_effect
+            and not partial.message_text
+            and not partial.thought_text
+        ):
+            return None
+
+        header = "The current assistant turn was interrupted"
+        if reason is not None and reason != RehydrationReason.NONE:
+            header += f" ({reason.value})"
+        header += "."
+
+        parts: list[str] = [header]
+        if current_intent:
+            parts.append(f"Current intent: {current_intent}")
+
+        last_side_effect = (partial.last_side_effect or "").strip()
+        if last_side_effect:
+            age = ""
+            if partial.last_side_effect_at:
+                age = self._format_silent_duration(time.time() - partial.last_side_effect_at)
+            if age:
+                parts.append(f"Last activity: {last_side_effect} ({age} ago)")
+            else:
+                parts.append(f"Last activity: {last_side_effect}")
+
+        message_text = (partial.message_text or "").strip()
+        if message_text:
+            cap = self.config.harness.interrupted_turn_message_cap
+            trimmed = _trim_to_section(message_text, cap)
+            if len(trimmed) < len(message_text):
+                trimmed += "\n\n[... truncated ...]"
+            parts.append(f"Partial reply produced so far:\n\n{trimmed}")
+
+        thought_text = (partial.thought_text or "").strip()
+        if thought_text:
+            cap = self.config.harness.interrupted_turn_thought_cap
+            trimmed = _trim_to_section(thought_text, cap)
+            if len(trimmed) < len(thought_text):
+                trimmed += "\n\n[... truncated ...]"
+            parts.append(f"Partial thought so far:\n\n{trimmed}")
+
+        return "\n\n".join(parts)
 
     def generate_label(self, chat_id: str, user_message: str) -> str:
         """Auto-generate a short label from the first user message."""
@@ -1023,6 +1085,7 @@ class ContextBuilder:
         reply_to_is_bot: bool | None = None,
         reply_to_message_id: int | None = None,
         continuation_anchor: str | None = None,
+        interrupted_turn: str | None = None,
         skill_names: set[str] | None = None,
         mcp_names: list[str] | None = None,
         wake_event: WakeEvent | None = None,
@@ -1060,6 +1123,7 @@ class ContextBuilder:
             model=model or self.config.engine.model,
             is_first=True,
             continuation_anchor=continuation_anchor,
+            interrupted_turn=interrupted_turn,
             rehydrated=rehydrated,
             rehydration_reason=resolved_reason,
             compact=is_compact,
@@ -1216,6 +1280,8 @@ class ContextBuilder:
 
         if build_ctx.continuation_anchor:
             slots["continuation"].append(build_ctx.continuation_anchor)
+        if build_ctx.interrupted_turn:
+            slots["continuation"].append(build_ctx.interrupted_turn)
 
         skill_context = self._skill_context(
             chat_id, skill_names, compact=True, message=formatted
@@ -1287,6 +1353,7 @@ class ContextBuilder:
         reply_to_is_bot: bool | None = None,
         reply_to_message_id: int | None = None,
         continuation_anchor: str | None = None,
+        interrupted_turn: str | None = None,
         skill_names: set[str] | None = None,
         rehydrated: bool = False,
         rehydration_reason: RehydrationReason | None = None,
@@ -1333,6 +1400,7 @@ class ContextBuilder:
             model=record.model if record else None,
             is_first=False,
             continuation_anchor=continuation_anchor,
+            interrupted_turn=interrupted_turn,
             rehydrated=rehydrated,
             rehydration_reason=resolved_reason,
             compact=is_compact,
@@ -1545,6 +1613,8 @@ class ContextBuilder:
 
         if build_ctx.continuation_anchor:
             slots["continuation"].append(build_ctx.continuation_anchor)
+        if build_ctx.interrupted_turn:
+            slots["continuation"].append(build_ctx.interrupted_turn)
 
         skill_context = self._skill_context(
             chat_id, skill_names, compact=True, message=formatted

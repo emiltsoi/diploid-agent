@@ -231,6 +231,7 @@ class AcpEngine(AgentEngine):
         cwd: Path | None = None,
         model: str | None = None,
         mcp_servers: list[dict[str, Any]] | None = None,
+        timeout: float | None = None,
     ) -> str:
         if cwd is not None:
             cwd = Path(cwd)
@@ -239,7 +240,7 @@ class AcpEngine(AgentEngine):
             cwd=cwd,
             model=model,
             mcp_servers=mcp_servers,
-            timeout=self.config.acp_resume_timeout,
+            timeout=timeout if timeout is not None else self.config.acp_resume_timeout,
         )
 
     def active_session_id(self) -> str | None:
