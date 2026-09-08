@@ -408,6 +408,16 @@ class TurnProcess:
                 session_number = record.session_number
                 old_record = record
 
+            # Reserve a turn number up front and persist it. If the turn is
+            # killed, the record on disk will carry the reserved number so the
+            # next wake does not reuse it.
+            turn_number = 1
+            previous_updated_at = 0.0
+            if record is not None:
+                previous_updated_at = record.updated_at if record.turn_number > 0 else 0.0
+                turn_number = record.reserve_turn_number()
+                self.runtime._append_record(record)
+
         rehydrate_notice: str | None = None
 
         telegram_config = self.runtime.config.harness.telegram
@@ -431,7 +441,7 @@ class TurnProcess:
             if a is None:
                 return
             record = self.runtime._active_record(chat_id)
-            turn_number = record.turn_number + 1 if record else 1
+            turn_number = record.next_turn_number() if record else 1
             self.runtime._plugins.on_partial(
                 chat_id,
                 PartialTurn(
@@ -679,7 +689,7 @@ class TurnProcess:
             latency = time.perf_counter() - turn_start
             turn_metrics = self.runtime._record_turn_metrics(
                 chat_id,
-                record.turn_number + 1 if record else 1,
+                turn_number,
                 use_model,
                 result.usage,
                 latency,
@@ -707,6 +717,7 @@ class TurnProcess:
                         memory_flags,
                         label=self.runtime.context_builder.generate_label(chat_id, user_message),
                     )
+                    record.pending_turn_number = turn_number
                     record.enabled_mcp_servers = mcp_names
                     record.enabled_skills = sorted(skill_names)
                     self.runtime._chat_state(chat_id).sessions[record.session_number] = record
@@ -716,11 +727,8 @@ class TurnProcess:
                     record.enabled_skills = sorted(skill_names)
                     record.session_id = session_id
                     record.model = use_model
-                    record.updated_at = time.time()
 
-                previous_turn_number = record.turn_number
-                record.turn_number += 1
-                previous_updated_at = record.updated_at if previous_turn_number > 0 else 0.0
+                record.consume_turn_number()
                 record.updated_at = time.time()
                 record.cumulative_metrics = self.runtime._per_chat_metrics[chat_id].get(
                     "cumulative", {}

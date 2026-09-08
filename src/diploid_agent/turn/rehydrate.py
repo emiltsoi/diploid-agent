@@ -69,7 +69,7 @@ class TurnRehydrate:
         return PartialTurn(
             chat_id=chat_id,
             session_number=record.session_number if record else 0,
-            turn_number=(record.turn_number + 1) if record else 1,
+            turn_number=record.next_turn_number() if record else 1,
             user_message=active.user_message,
             message_text=active.message_text,
             thought_text=active.thought_text,

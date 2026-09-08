@@ -22,6 +22,9 @@ class SessionRecord:
     created_at: float
     updated_at: float
     turn_number: int = 0
+    # Turn number reserved for the in-progress turn. Persisted so a killed
+    # turn's number is not reused by the next wake.
+    pending_turn_number: int | None = None
     label: str | None = None
     parent: int | None = None
     last_stop_reason: str | None = None
@@ -50,6 +53,7 @@ class SessionRecord:
             created_at=data["created_at"],
             updated_at=data["updated_at"],
             turn_number=data.get("turn_number", 0),
+            pending_turn_number=data.get("pending_turn_number"),
             label=data.get("label"),
             parent=data.get("parent"),
             last_stop_reason=data.get("last_stop_reason"),
@@ -63,6 +67,34 @@ class SessionRecord:
             disabled_skills=data.get("disabled_skills"),
             plugin_overrides=data.get("plugin_overrides"),
         )
+
+    def next_turn_number(self) -> int:
+        """Return the turn number for an in-progress turn.
+
+        If a pending number is already reserved (because a turn is underway or
+        was killed), that number is the current turn. Otherwise it is one past
+        the last completed turn.
+        """
+        if self.pending_turn_number is not None:
+            return self.pending_turn_number
+        return self.turn_number + 1
+
+    def reserve_turn_number(self) -> int:
+        """Reserve the next turn number, skipping any pending killed turn."""
+        if self.pending_turn_number is not None:
+            self.pending_turn_number += 1
+        else:
+            self.pending_turn_number = self.turn_number + 1
+        return self.pending_turn_number
+
+    def consume_turn_number(self) -> int:
+        """Promote the pending turn number to completed and return it."""
+        if self.pending_turn_number is not None:
+            self.turn_number = self.pending_turn_number
+            self.pending_turn_number = None
+        else:
+            self.turn_number += 1
+        return self.turn_number
 
 
 @dataclass

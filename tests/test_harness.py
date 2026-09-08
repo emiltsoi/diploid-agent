@@ -1507,6 +1507,57 @@ def test_rehydrate_anchors_to_persisted_interrupted_turn(
     assert "edit_file (completed)" in rehydrated_prompt
 
 
+def test_interrupted_turn_number_is_not_reused(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A killed turn's number is persisted and skipped by the next turn."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root)
+    harness = ConversationHarness(config)
+
+    def fake_create_session(prompt, *, cwd=None, model=None, **kwargs):
+        return AcpPromptResult(reply="Ready.", session_id="session-1")
+
+    def fake_send_message(session_id, prompt, *, cwd=None, model=None, **kwargs):
+        return AcpPromptResult(reply="Follow-up.", session_id=session_id)
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+    monkeypatch.setattr(harness.client, "send_message", fake_send_message)
+
+    harness.process("chat-turns", "hello", notify=False)
+
+    # Simulate a harness kill mid-turn: the record was reserved but not completed.
+    record = harness.runtime._active_record("chat-turns")
+    record.reserve_turn_number()
+    harness.runtime._append_record(record)
+    chat_dir = tmp_path / "sessions" / "chat-turns"
+    chat_dir.mkdir(parents=True, exist_ok=True)
+    (chat_dir / "chat_active_turn.json").write_text(
+        json.dumps(
+            {
+                "session_number": 1,
+                "turn_number": record.pending_turn_number,
+                "user_message": "follow-up",
+                "message_text": "partial draft",
+                "updated_at": time.time(),
+            }
+        )
+    )
+
+    # A new process starts from the persisted state.
+    new_harness = ConversationHarness(config)
+    monkeypatch.setattr(new_harness.client, "create_session", fake_create_session)
+    monkeypatch.setattr(new_harness.client, "send_message", fake_send_message)
+    new_record = new_harness.runtime._active_record("chat-turns")
+    assert new_record.turn_number == 1
+    assert new_record.pending_turn_number == 2
+
+    result = new_harness.process("chat-turns", "follow-up", notify=False)
+    assert result.turn_number == 3
+    assert new_harness.runtime._active_record("chat-turns").turn_number == 3
+    assert new_harness.runtime._active_record("chat-turns").pending_turn_number is None
+
+
 def test_rehydrate_ignores_persisted_snapshot_for_other_message(
     monkeypatch, tmp_path: Path
 ) -> None:

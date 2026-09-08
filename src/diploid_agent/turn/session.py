@@ -102,7 +102,8 @@ class TurnSession:
         notice: str | None = None,
     ) -> ChatResult:
         """Record the turn, append the record, notify plugins, and return the result."""
-        record.turn_number += 1
+        record.consume_turn_number()
+        record.updated_at = time.time()
         self.runtime._memory_manager(chat_id).record_turn(
             user_message=f"[system: {system_message}]",
             reply=reply,
@@ -388,6 +389,10 @@ class TurnSession:
                 prompt = pctx.prompt
                 memory_flags = pctx.memory_flags
                 use_model = pctx.model or use_model
+
+                source.reserve_turn_number()
+                self.runtime._append_record(source)
+
                 result, session_id = self.runtime._call_unlocked(
                     self.runtime._start_new_session,
                     chat_id,
@@ -437,6 +442,10 @@ class TurnSession:
             prompt = pctx.prompt
             memory_flags = pctx.memory_flags
             use_model = pctx.model or use_model
+
+            source.reserve_turn_number()
+            self.runtime._append_record(source)
+
             request = TurnRequest(
                 prompt=prompt,
                 cwd=self.runtime._chat_dir(chat_id),
