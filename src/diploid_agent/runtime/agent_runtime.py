@@ -322,19 +322,49 @@ class AgentRuntime(RuntimeAPI):
         # Drain in-flight turns, flush plugin state, then schedule the restart.
         self._schedule_draining_restart(service, chat_id=None, reason=reason)
 
+    def _unit_exists(self, service: str) -> bool:
+        """Best-effort check that a user unit exists before draining for it.
+
+        Returns True when the check cannot be made (no systemctl, no user bus)
+        so non-systemd environments are not blocked; only a definitive
+        "no such unit" answer refuses the restart.
+        """
+        try:
+            proc = subprocess.run(
+                ["systemctl", "--user", "cat", service],
+                capture_output=True,
+                text=True,
+                timeout=10.0,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return True
+        if proc.returncode == 0:
+            return True
+        output = f"{proc.stdout}\n{proc.stderr}"
+        return "No files found" not in output and "not found" not in output.lower()
+
     def _schedule_draining_restart(
         self,
         service: str,
         chat_id: str | None,
         reason: str,
         drain_cap: float = 120.0,
-    ) -> None:
+    ) -> bool:
         """Begin the restart drain: block new turns, wait for in-flight turns,
         flush plugin state, then schedule the real systemd restart.
 
-        Returns immediately; the drain runs on a background thread so callers
-        (the control-socket listener, HTTP/Telegram actions) never block.
+        Returns False (without setting the drain flag) when the named unit
+        definitively does not exist. Otherwise returns immediately; the drain
+        runs on a background thread so callers (the control-socket listener,
+        HTTP/Telegram actions) never block.
         """
+        if not self._unit_exists(service):
+            logger.error(
+                "Refusing graceful restart: systemd user unit %s is not installed",
+                service,
+            )
+            return False
         self._restart_draining.set()
 
         def _drain_then_restart() -> None:
@@ -351,9 +381,50 @@ class AgentRuntime(RuntimeAPI):
                 self._schedule_systemd_restart(
                     service, delay=5.0, chat_id=chat_id, reason=reason
                 )
+                self._arm_restart_watchdog(service, due_in=5.0, chat_id=chat_id)
 
         threading.Thread(
             target=_drain_then_restart, daemon=True, name="restart-drain"
+        ).start()
+        return True
+
+    def _arm_restart_watchdog(
+        self,
+        service: str,
+        due_in: float,
+        chat_id: str | None,
+        margin: float = 60.0,
+    ) -> None:
+        """Self-heal when a scheduled restart never fires (missing unit,
+        systemd-run failure): clear the drain flag so the service does not
+        wedge refusing new turns forever.
+        """
+
+        def _reaper() -> None:
+            time.sleep(due_in + margin)
+            if not self._started or not self._restart_draining.is_set():
+                # A real restart/shutdown is already underway.
+                return
+            self._restart_draining.clear()
+            self._last_service_restart_at = 0.0
+            logger.error(
+                "Scheduled restart of %s never fired; cleared drain state so turns resume",
+                service,
+            )
+            if self._incidents is not None:
+                try:
+                    self._incidents.record(
+                        plugin="self_management",
+                        phase="graceful_restart",
+                        error=f"Scheduled restart of {service} did not fire",
+                        action="drain_cleared",
+                        chat_id=chat_id,
+                    )
+                except Exception:
+                    logger.exception("Failed to record failed-restart incident")
+
+        threading.Thread(
+            target=_reaper, daemon=True, name="restart-watchdog"
         ).start()
 
     def _wait_for_active_turns(self, timeout: float) -> bool:

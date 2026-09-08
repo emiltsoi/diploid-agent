@@ -377,6 +377,7 @@ def test_graceful_service_restart_schedules_systemd_run(tmp_path: Path, monkeypa
         return _Fake()
 
     monkeypatch.setattr("subprocess.Popen", fake_popen)
+    monkeypatch.setattr(runtime, "_unit_exists", lambda service: True)
 
     result = runtime.graceful_service_restart("chat-1", "vesper.service", reason="test")
     assert "restarting" in result.reply.lower()
@@ -403,6 +404,8 @@ def test_graceful_restart_drains_active_turn_without_lock(tmp_path: Path, monkey
         return _Fake()
 
     monkeypatch.setattr("subprocess.Popen", fake_popen)
+
+    monkeypatch.setattr(runtime, "_unit_exists", lambda service: True)
 
     active = ActiveTurn("chat-1", None, "hello", time.time())
     with runtime._lock:
@@ -449,6 +452,8 @@ def test_graceful_restart_cap_expires_with_active_turn(tmp_path: Path, monkeypat
 
     monkeypatch.setattr("subprocess.Popen", fake_popen)
 
+    monkeypatch.setattr(runtime, "_unit_exists", lambda service: True)
+
     # A turn that never finishes.
     with runtime._lock:
         runtime._active_turns["chat-1"] = ActiveTurn("chat-1", None, "hello", time.time())
@@ -481,6 +486,54 @@ def test_restart_flush_runs_plugin_shutdown(tmp_path: Path, monkeypatch) -> None
     runtime._flush_plugins_for_restart()
 
     assert sorted(calls) == [("chat-1", "restart"), ("chat-2", "restart")]
+
+
+def test_graceful_restart_refuses_missing_unit(tmp_path: Path, monkeypatch) -> None:
+    """A bogus unit name must not wedge the service in a drain that never ends."""
+    runtime = AgentRuntime(_make_config(tmp_path))
+    monkeypatch.setattr(runtime, "_unit_exists", lambda service: False)
+    popen_calls: list[list[str]] = []
+    monkeypatch.setattr(
+        "subprocess.Popen", lambda cmd, **kwargs: popen_calls.append(cmd)
+    )
+
+    result = runtime.graceful_service_restart("chat-1", "nope.service", reason="test")
+
+    assert "no such" in result.reply.lower()
+    assert not runtime._restart_draining.is_set()
+    assert not popen_calls
+    # Cooldown cleared so a corrected retry is not blocked.
+    assert runtime._last_service_restart_at == 0.0
+
+
+def test_restart_watchdog_clears_drain_when_restart_never_fires(
+    tmp_path: Path,
+) -> None:
+    """If the transient unit dies before restarting us, the drain self-heals."""
+    runtime = AgentRuntime(_make_config(tmp_path))
+    runtime._started = True
+    runtime._restart_draining.set()
+    runtime._last_service_restart_at = time.time()
+
+    runtime._arm_restart_watchdog("gone.service", due_in=0.0, chat_id=None, margin=0.05)
+
+    deadline = time.time() + 5.0
+    while runtime._restart_draining.is_set() and time.time() < deadline:
+        time.sleep(0.02)
+    assert not runtime._restart_draining.is_set()
+    assert runtime._last_service_restart_at == 0.0
+
+
+def test_restart_watchdog_leaves_real_shutdown_alone(tmp_path: Path) -> None:
+    """The watchdog must not clear the drain while shutdown() is underway."""
+    runtime = AgentRuntime(_make_config(tmp_path))
+    runtime._started = False
+    runtime._restart_draining.set()
+
+    runtime._arm_restart_watchdog("x.service", due_in=0.0, chat_id=None, margin=0.05)
+    time.sleep(0.2)
+
+    assert runtime._restart_draining.is_set()
 
 
 def test_process_rejects_new_turns_while_draining(tmp_path: Path) -> None:

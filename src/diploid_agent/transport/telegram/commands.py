@@ -501,7 +501,7 @@ class TelegramCommandMixin:
     def _harness_graceful_restart(
         self,
         chat_id: int,
-        service: str,
+        service: str | None,
     ) -> dict[str, Any]:
         raw = self.command_handler.call(
             method="graceful_service_restart",

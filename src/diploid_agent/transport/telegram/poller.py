@@ -515,7 +515,10 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
             elif self.runtime is not None:
                 service = f"{self.runtime.config.persona.name}.service"
             else:
-                service = "diploid-agent.service"
+                # The poller runs in its own process without a runtime; let the
+                # harness resolve its own persona unit instead of guessing a
+                # name that may not exist.
+                service = None
             result = self._harness_graceful_restart(chat_id, service)
             self._send_result(chat_id, result, reply_to_message_id=chat_input.message_id)
         elif command == "/sessions":

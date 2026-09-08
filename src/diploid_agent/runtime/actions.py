@@ -444,7 +444,14 @@ class RuntimeActions:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Failed to record restart incident for %s: %s", chat_id, exc)
 
-        self._runtime._schedule_draining_restart(service, chat_id=chat_id, reason=reason)
+        if not self._runtime._schedule_draining_restart(
+            service, chat_id=chat_id, reason=reason
+        ):
+            self._runtime._last_service_restart_at = 0.0
+            return ChatResult(
+                reply=f"Could not restart {service}: no such systemd user unit.",
+                notice="Check the service name and try again.",
+            )
 
         return ChatResult(
             reply=(
