@@ -48,6 +48,10 @@ consistency checks starts a fresh `session/new` with a full first prompt.
 | `/resume 1` | `POST /resume` | Make session `1` the active session again. |
 | `/branch 1` | `POST /branch` | Copy session `1` to the active slot and start a new ACP session from it. |
 
+## External restart and drain
+
+`systemctl restart aurelia.service` (or the configured persona unit) now drains the running harness instead of killing the ACP child mid-turn. `systemd/harness-run.sh` forwards `SIGTERM` to the poller and ingress children, and `AgentRuntime.shutdown(drain_timeout=120)` waits for `_active_turns` to empty before stopping background workers and letting the process exit. The unit file uses `KillMode=mixed` + `TimeoutStopSec=150`, so systemd only escalates to `SIGKILL` for stragglers after the drain window. After restart, the next message resumes the previous ACP session and `continuity` rebuilds the wake state from the lifecycle log.
+
 ## Resume and rehydration
 
 `/resume 1` works in two steps:

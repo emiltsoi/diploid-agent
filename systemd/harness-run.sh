@@ -68,9 +68,11 @@ POLLER_PID=$!
   --config "$CONFIG" &
 INGRESS_PID=$!
 
-# If the script is stopped, stop both subprocesses.
+# If the script is stopped, forward TERM to both subprocesses and wait for them.
+# Under KillMode=mixed systemd signals only this wrapper first; the ingress then
+# gets a chance to drain active turns before the cgroup is SIGKILLed.
 cleanup() {
-  kill "$POLLER_PID" "$INGRESS_PID" 2>/dev/null || true
+  kill -TERM "$POLLER_PID" "$INGRESS_PID" 2>/dev/null || true
   for pid in "$POLLER_PID" "$INGRESS_PID"; do
     wait "$pid" 2>/dev/null || true
   done

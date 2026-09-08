@@ -902,9 +902,18 @@ class AgentRuntime(RuntimeAPI):
         """Create a notifier that bypasses the outbox if possible."""
         return self._outbox._create_direct_notifier()
 
-    def shutdown(self) -> None:
-        """Notify all plugins and stop background workers."""
+    def shutdown(self, drain_timeout: float = 120.0) -> None:
+        """Drain active turns, notify plugins, and stop background workers."""
         self._started = False
+        self._restart_draining.set()
+        try:
+            if not self._wait_for_active_turns(drain_timeout):
+                logger.warning(
+                    "Shutdown drain cap (%.0fs) expired with turn(s) still active",
+                    drain_timeout,
+                )
+        except Exception:
+            logger.exception("Failed to drain active turns during shutdown")
         if hasattr(self, "timer_service"):
             self.timer_service.stop()
         with self._typing_lock:

@@ -14,6 +14,7 @@ from diploid_agent.engine.fake import FakeAgentEngine
 from diploid_agent.memory import MemoryManager
 from diploid_agent.models import WakeEvent
 from diploid_agent.plugins.base import StatePlugin, WakeContext
+from diploid_agent.plugins.contexts import RehydrationReason
 from diploid_agent.plugins.manager import PluginManager
 
 
@@ -135,3 +136,52 @@ def test_wake_context_receives_event_and_other_instance_flag_in_follow_up(
     assert spy.context is not None
     assert spy.context.wake_event is event
     assert spy.context.other_instance_running is True
+
+
+def _builder_with_spy(tmp_path: Path) -> tuple[ContextBuilder, WakeSpyPlugin]:
+    cfg = _make_config(tmp_path)
+    spy = WakeSpyPlugin()
+    mgr = PluginManager(
+        plugins=[PluginConfig(name="spy", enabled=True, module=None)],
+        sessions_root=tmp_path,
+        instance_id="i-1",
+        instance_started_at=0.0,
+    )
+    mgr._instances["chat-1"] = {"spy": spy}
+    engine = FakeAgentEngine()
+
+    def memory_factory(chat_id: str) -> MemoryManager:
+        return MemoryManager(
+            config=cfg.harness.memory,
+            persona=cfg.persona,
+            sessions_root=tmp_path / "sessions",
+            chat_id=chat_id,
+            devin_client=engine,
+        )
+
+    return ContextBuilder(cfg, mgr, memory_factory), spy
+
+
+def test_rehydrated_follow_up_calls_on_waking(tmp_path: Path) -> None:
+    builder, spy = _builder_with_spy(tmp_path)
+
+    builder.build_follow_up(
+        "chat-1",
+        "hi",
+        None,
+        rehydrated=True,
+        rehydration_reason=RehydrationReason.RESUMED,
+    )
+
+    assert spy.context is not None
+    assert spy.context.rehydration_reason == "resumed"
+
+
+def test_plain_follow_up_without_wake_event_does_not_call_on_waking(
+    tmp_path: Path,
+) -> None:
+    builder, spy = _builder_with_spy(tmp_path)
+
+    builder.build_follow_up("chat-1", "hi", None)
+
+    assert spy.context is None

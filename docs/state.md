@@ -120,9 +120,11 @@ The built-in state plugins now live in the [`diploid-plugins`](https://github.co
 
 ### `continuity`
 
-Tracks wake state: time since last turn, last stop reason, and any pending background dispatches.
+Tracks wake state: time since last turn, last stop reason, instance identity, and any pending background dispatches.
 By default it is placed in the `wake` slot and shown at session boundaries: the first prompt of a session and any rehydrated prompt (for example after ACP resume or stale-session rehydration).
 State is stored in `sessions/<chat_id>/chat_wake_state.json`.
+
+It also throttles a live snapshot of the active turn to `sessions/<chat_id>/chat_active_turn.json` while the turn is streaming. If the process is killed before `record_turn` runs, the snapshot is preserved as `chat_interrupted_turn.json` and the wake prompt surfaces it, including the `current_intent` (the first line of the user message) and `last_side_effect` (the most recent tool call update).
 
 ### `curriculum`
 

@@ -1037,14 +1037,6 @@ class ContextBuilder:
         continuation anchor. This is not an incremental re-injection; it is a
         known cost of rehydration.
         """
-        self.plugin_manager.on_waking(
-            chat_id,
-            record,
-            time.time(),
-            wake_event=wake_event,
-            other_instance_running=other_instance_running,
-        )
-
         # A new ACP session starts here; reset the follow-up change cache.
         self._reset_cache(chat_id)
 
@@ -1052,6 +1044,14 @@ class ContextBuilder:
             rehydration_reason
             if rehydration_reason is not None
             else (RehydrationReason.STALE if rehydrated else RehydrationReason.NONE)
+        )
+        self.plugin_manager.on_waking(
+            chat_id,
+            record,
+            time.time(),
+            wake_event=wake_event,
+            other_instance_running=other_instance_running,
+            rehydration_reason=resolved_reason.value,
         )
         is_compact = resolved_reason in self.COMPACT_REASONS
         build_ctx = PromptBuildContext(
@@ -1310,15 +1310,6 @@ class ContextBuilder:
             chat_id,
         )
         soul_mode, force_new_session = self._soul_mode(chat_id, record, rehydrated, formatted)
-        if wake_event is not None:
-            self.plugin_manager.on_waking(
-                chat_id,
-                record,
-                time.time(),
-                wake_event=wake_event,
-                other_instance_running=other_instance_running,
-            )
-
         resolved_reason = (
             rehydration_reason
             if rehydration_reason is not None
@@ -1326,6 +1317,15 @@ class ContextBuilder:
         )
         if soul_mode == "fresh":
             resolved_reason = RehydrationReason.FRESH
+        if wake_event is not None or rehydrated:
+            self.plugin_manager.on_waking(
+                chat_id,
+                record,
+                time.time(),
+                wake_event=wake_event,
+                other_instance_running=other_instance_running,
+                rehydration_reason=resolved_reason.value,
+            )
         is_compact = soul_mode == "fresh"
         build_ctx = PromptBuildContext(
             chat_id=chat_id,

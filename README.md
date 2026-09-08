@@ -44,8 +44,16 @@ retention to a Hindsight memory server.
 - Wakes with a one-sentence continuity narrative built from the ACP lifecycle
   log, so the user and the model know whether the session was resumed, rebuilt,
   or restarted.
+- Refreshes chat-scoped skill copies from shared/persona sources on follow-up and
+  continue turns, so skill edits take effect on the next message without requiring
+  a new ACP session.
 - Snapshots and restores plugin and body-state files across ACP transport
   restarts, keeping per-chat state intact when the child process is replaced.
+- Drains active turns before an external `systemctl restart` exits, so a service
+  restart waits for the current reply instead of cutting it off mid-sentence.
+- Preserves active-turn `current_intent` and `last_side_effect` breadcrumbs in
+  `chat_active_turn.json`, carrying them into `chat_interrupted_turn.json` if the
+  process is killed before `record_turn` runs.
 - Sizes the next prompt with data from the last turn's actual token usage and a
   hand-maintained chars-per-token table, instead of a fixed 4:1 guess.
 - Pre-computes the smart short-term summary only when the recent-turn window is

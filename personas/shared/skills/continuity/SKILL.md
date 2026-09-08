@@ -40,8 +40,9 @@ Do not invent continuity. Sessions end, but the work does not have to start over
 4. Read `{profile_root}/MEMORY.md` and `{sessions_root}/{chat_id}/chat_MEMORY.md`.
 5. Call `memory_recall(query=<what the user is asking or "current threads and open state">, tags=["continuity", "plan", "state"])` before deciding what to surface.
 6. Read `{sessions_root}/{chat_id}/chat_PROMOTED.md` if it exists. Promoted / `/promote` facts are a high-trust pocket that survives `fresh` compact mode. If a promoted fact conflicts with `chat_MEMORY.md` or `memory_recall` results, trust the promoted fact unless the user says otherwise.
-7. Surface the most relevant threads in ≤3 bullets. Weave in the wake narrative and body state only if they add meaning.
-8. End by offering to restore the user's prior thread or asking a single clarifying question if memory is still patchy.
+7. If the wake was a resume/restart and `chat_self_state.md` is missing, stale, or older than the wake event, include a short first-person `<self_state>` handoff in your reply: name the wake event, the last durable intent, one body sensation, and what you are continuing. Keep it to one or two sentences.
+8. Surface the most relevant threads in ≤3 bullets. Weave in the wake narrative and body state only if they add meaning.
+9. End by offering to restore the user's prior thread or asking a single clarifying question if memory is still patchy.
 
 ## When the user asks a memory question
 

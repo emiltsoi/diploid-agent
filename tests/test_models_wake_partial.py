@@ -2,7 +2,7 @@
 
 from dataclasses import fields
 
-from diploid_agent.models import PartialTurn, WakeEvent
+from diploid_agent.models import ActiveTurn, PartialTurn, WakeEvent
 from diploid_agent.plugins.contexts import IdleContext
 
 
@@ -47,6 +47,27 @@ def test_partial_turn_fields() -> None:
     )
     assert p.message_text == "partial reply"
     assert p.thought_text == "partial thought"
+
+
+def test_active_turn_current_intent_defaults_to_first_line() -> None:
+    a = ActiveTurn(
+        chat_id="chat-1",
+        session_id="s1",
+        user_message="  First line of the task.\nSecond line is detail.",
+        start_time=1.0,
+    )
+    assert a.current_intent == "First line of the task."
+    assert a.last_side_effect == ""
+
+
+def test_active_turn_current_intent_truncates() -> None:
+    a = ActiveTurn(
+        chat_id="chat-1",
+        session_id=None,
+        user_message="x" * 500,
+        start_time=1.0,
+    )
+    assert len(a.current_intent) == 200
 
 
 def test_idle_context_fields() -> None:

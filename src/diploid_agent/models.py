@@ -109,7 +109,15 @@ class ActiveTurn:
     thought_total: int = 0
     full_text_offset: int = 0
     stopped: bool = False
+    current_intent: str = ""
+    last_side_effect: str = ""
+    last_side_effect_at: float = 0.0
     _condition: threading.Condition = field(default_factory=threading.Condition, repr=False)
+
+    def __post_init__(self) -> None:
+        if not self.current_intent:
+            first_line = (self.user_message or "").strip().splitlines()[0] if self.user_message else ""
+            self.current_intent = first_line[:200]
 
 
 @dataclass
@@ -152,6 +160,9 @@ class PartialTurn:
     thought_total: int = 0
     full_text_offset: int = 0
     updated_at: float = 0.0
+    current_intent: str = ""
+    last_side_effect: str = ""
+    last_side_effect_at: float = 0.0
 
 
 class RuntimeStatus(BaseModel):

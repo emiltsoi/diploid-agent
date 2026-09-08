@@ -133,6 +133,7 @@ Discovers and syncs `SKILL.md` files into the chat working directory.
 - Searches `personas/<persona>/skills/`, `personas/shared/skills/`, and `sessions/<chat_id>/.devin/skills/`.
 - Loads YAML frontmatter (`name`, `description`, `allowed-tools`, `triggers`, `permissions`) and the prompt body.
 - Copies enabled skills into `sessions/<chat_id>/.devin/skills/` before `session/new` so the ACP process discovers them.
+- Refreshes the chat-scoped copies from the shared/persona source on follow-up and continue turns, so edits to a shared `SKILL.md` take effect on the next message without a new session. Chat-only skills with no source counterpart are left alone.
 - Supports chat-scoped skill creation via `/skill create <name> <markdown>`.
 
 ### `persona_composer`

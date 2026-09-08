@@ -279,6 +279,11 @@ class TurnDispatch:
             memory_flags: dict[str, bool] = {}
             turn_start = time.perf_counter()
 
+            self.runtime.skills.refresh_to_chat(
+                chat_id,
+                self.runtime._chat_dir(chat_id),
+                set(record.enabled_skills or []),
+            )
             pctx = self.runtime.context_builder.build_follow_up(
                 chat_id,
                 user_message,
@@ -318,6 +323,9 @@ class TurnDispatch:
                     thought_total=a.thought_total,
                     full_text_offset=a.full_text_offset,
                     updated_at=time.time(),
+                    current_intent=a.current_intent,
+                    last_side_effect=a.last_side_effect,
+                    last_side_effect_at=a.last_side_effect_at,
                 ),
             )
 
@@ -333,7 +341,24 @@ class TurnDispatch:
             _maybe_emit_partial()
 
         def _on_update(update: dict[str, Any]) -> None:
-            if update.get("sessionUpdate") not in ("agent_thought", "agent_thought_chunk"):
+            session_update = update.get("sessionUpdate")
+            if session_update in ("tool_call", "tool_call_update"):
+                with self._lock:
+                    a = self.runtime._active_turns.get(chat_id)
+                    if a:
+                        content = update.get("content") or {}
+                        title = (
+                            content.get("title")
+                            or content.get("kind")
+                            or content.get("toolCallId")
+                            or "tool"
+                        )
+                        status = content.get("status") or "running"
+                        a.last_side_effect = f"{title} ({status})"[:160]
+                        a.last_side_effect_at = time.time()
+                _maybe_emit_partial()
+                return
+            if session_update not in ("agent_thought", "agent_thought_chunk"):
                 return
             content = update.get("content", {})
             if isinstance(content, list):

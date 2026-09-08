@@ -321,3 +321,83 @@ def test_skill_manager_expands_templates(tmp_path: Path) -> None:
     synced = (cwd / ".devin" / "skills" / "continuity" / "SKILL.md").read_text()
     assert "aurelia/MEMORY.md" in synced
     assert "chat-1/chat_MEMORY.md" in synced
+
+
+def test_refresh_to_chat_updates_stale_synced_copy(tmp_path: Path) -> None:
+    """A stale chat-scoped copy is refreshed from the shared source."""
+    shared = tmp_path / "personas" / "shared"
+    shared.mkdir(parents=True)
+    skill_md = _write_skill(
+        shared / "skills",
+        "continuity",
+        "---\nname: continuity\n---\n\nVersion one.\n",
+    )
+    sessions = tmp_path / "sessions"
+    manager = SkillManager(
+        personas_root=tmp_path / "personas",
+        shared_root=shared,
+        chat_cwd_root=sessions,
+    )
+    cwd = sessions / "chat-1"
+    cwd.mkdir(parents=True)
+    manager.sync_to_chat("chat-1", cwd, enabled={"continuity"})
+
+    # Source changes after the chat copy was synced.
+    skill_md.joinpath("SKILL.md").write_text(
+        "---\nname: continuity\n---\n\nVersion two.\n", encoding="utf-8"
+    )
+
+    manager.refresh_to_chat("chat-1", cwd, {"continuity"})
+    synced = (cwd / ".devin" / "skills" / "continuity" / "SKILL.md").read_text()
+    assert "Version two." in synced
+
+
+def test_refresh_to_chat_leaves_chat_only_skills(tmp_path: Path) -> None:
+    """Chat-created skills without a source counterpart are not touched."""
+    shared = tmp_path / "personas" / "shared"
+    shared.mkdir(parents=True)
+    _write_skill(
+        shared / "skills",
+        "continuity",
+        "---\nname: continuity\n---\n\nShared.\n",
+    )
+    sessions = tmp_path / "sessions"
+    manager = SkillManager(
+        personas_root=tmp_path / "personas",
+        shared_root=shared,
+        chat_cwd_root=sessions,
+    )
+    manager.create_chat_skill("chat-1", "memo", "---\nname: memo\n---\n\nChat only.\n")
+    cwd = sessions / "chat-1"
+
+    manager.refresh_to_chat("chat-1", cwd, {"continuity", "memo"})
+
+    memo = (cwd / ".devin" / "skills" / "memo" / "SKILL.md").read_text()
+    assert "Chat only." in memo
+
+
+def test_sync_to_chat_prefers_source_over_stale_chat_copy(tmp_path: Path) -> None:
+    """sync_to_chat copies the shared source, not a stale synced copy."""
+    shared = tmp_path / "personas" / "shared"
+    shared.mkdir(parents=True)
+    _write_skill(
+        shared / "skills",
+        "continuity",
+        "---\nname: continuity\n---\n\nFresh source.\n",
+    )
+    sessions = tmp_path / "sessions"
+    manager = SkillManager(
+        personas_root=tmp_path / "personas",
+        shared_root=shared,
+        chat_cwd_root=sessions,
+    )
+    cwd = sessions / "chat-1"
+    stale = cwd / ".devin" / "skills" / "continuity"
+    stale.mkdir(parents=True)
+    stale.joinpath("SKILL.md").write_text(
+        "---\nname: continuity\n---\n\nStale copy.\n", encoding="utf-8"
+    )
+
+    manager.sync_to_chat("chat-1", cwd, enabled={"continuity"})
+    synced = (cwd / ".devin" / "skills" / "continuity" / "SKILL.md").read_text()
+    assert "Fresh source." in synced

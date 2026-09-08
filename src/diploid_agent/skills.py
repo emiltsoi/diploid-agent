@@ -172,6 +172,46 @@ class SkillManager:
                 return skill
         return None
 
+    def _source_skill(self, name: str, chat_id: str | None = None) -> Skill | None:
+        """Return the skill from shared/persona roots, ignoring the chat copy."""
+        chat_root = self._chat_skill_root(chat_id) if chat_id else None
+        for root in self._skill_dirs(chat_id):
+            if chat_root is not None and root == chat_root:
+                continue
+            skill = self._load_skill(root / name, "source", chat_id)
+            if skill:
+                return skill
+        return None
+
+    def refresh_to_chat(self, chat_id: str, cwd: Path, enabled: set[str] | None = None) -> None:
+        """Rewrite synced skill copies in chat cwd/.devin/skills when the
+        shared/persona source changed.
+
+        Unlike ``sync_to_chat`` this does not wipe the directory: it only
+        overwrites skills that exist in a source root, so chat-created skills
+        are left alone. This keeps the prompt's skill text (which prefers the
+        chat copy) from going stale across resumes.
+        """
+        if enabled is None:
+            enabled = {s.name for s in self.list_skills(chat_id)}
+        target = cwd / ".devin" / "skills"
+        for name in enabled:
+            skill = self._source_skill(name, chat_id)
+            if not skill:
+                continue
+            text = skill.to_file()
+            path = target / name / "SKILL.md"
+            try:
+                if path.exists() and path.read_text(encoding="utf-8") == text:
+                    continue
+            except OSError:
+                continue
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text, encoding="utf-8")
+            except OSError:
+                continue
+
     def sync_to_chat(self, chat_id: str, cwd: Path, enabled: set[str] | None = None) -> None:
         """Copy enabled skills into chat cwd/.devin/skills so devin acp discovers them."""
         if enabled is None:
@@ -182,7 +222,9 @@ class SkillManager:
         target.mkdir(parents=True, exist_ok=True)
 
         for name in enabled:
-            skill = self.skill(name, chat_id)
+            # Prefer the shared/persona source so edits propagate; fall back to
+            # the chat copy for chat-only skills with no source counterpart.
+            skill = self._source_skill(name, chat_id) or self.skill(name, chat_id)
             if not skill:
                 continue
             skill_target = target / name

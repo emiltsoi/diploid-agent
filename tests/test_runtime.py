@@ -493,6 +493,38 @@ def test_process_rejects_new_turns_while_draining(tmp_path: Path) -> None:
     assert "chat-1" not in runtime._active_turns
 
 
+def test_shutdown_drains_active_turn_without_lock(tmp_path: Path) -> None:
+    """External SIGTERM shutdown should wait for in-flight turns like a restart."""
+    runtime = AgentRuntime(_make_config(tmp_path))
+    active = ActiveTurn("chat-1", None, "hello", time.time())
+    with runtime._lock:
+        runtime._active_turns["chat-1"] = active
+
+    done = threading.Event()
+
+    def _shutdown() -> None:
+        runtime.shutdown(drain_timeout=2.0)
+        done.set()
+
+    thread = threading.Thread(target=_shutdown, daemon=True)
+    thread.start()
+
+    time.sleep(0.2)
+    assert not done.is_set()
+    assert runtime._restart_draining.is_set()
+    # The drain must not hold runtime._lock while waiting for the turn's finally.
+    assert runtime._lock.acquire(timeout=2.0)
+    runtime._lock.release()
+
+    with runtime._lock:
+        runtime._active_turns.pop("chat-1", None)
+    with active._condition:
+        active._condition.notify_all()
+
+    assert done.wait(5.0)
+    thread.join(5.0)
+
+
 def test_auto_continue_suppression(tmp_path: Path) -> None:
     runtime = AgentRuntime(_make_config(tmp_path))
     assert runtime.is_auto_continue_suppressed("chat-1") is False

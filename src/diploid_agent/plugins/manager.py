@@ -506,6 +506,7 @@ class PluginManager:
         *,
         wake_event: WakeEvent | None = None,
         other_instance_running: bool = False,
+        rehydration_reason: str | None = None,
     ) -> None:
         previous_turn_at = record.updated_at if record is not None else None
         context = WakeContext(
@@ -518,6 +519,7 @@ class PluginManager:
             pending_dispatches=self._pending_dispatches(chat_id),
             wake_event=wake_event,
             other_instance_running=other_instance_running,
+            rehydration_reason=rehydration_reason,
         )
         for plugin in self._plugins_for(chat_id):
             try:

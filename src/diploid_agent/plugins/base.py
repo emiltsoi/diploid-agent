@@ -55,7 +55,7 @@ class TurnInfo:
 
 @dataclass
 class WakeContext:
-    """Context passed to plugins when the harness is building a first prompt."""
+    """Context passed to plugins on first prompts and resume/rehydrate wakes."""
 
     chat_id: str
     record: SessionRecord | None
@@ -66,6 +66,7 @@ class WakeContext:
     pending_dispatches: list[dict[str, Any]]
     wake_event: WakeEvent | None = None
     other_instance_running: bool = False
+    rehydration_reason: str | None = None
 
 
 @dataclass
