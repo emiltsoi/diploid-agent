@@ -224,6 +224,16 @@ class TurnSession:
         )
         new_record.enabled_mcp_servers = self.runtime._active_mcp_server_names(chat_id)
         new_record.enabled_skills = sorted(self.runtime._active_skill_names(chat_id))
+        # The synthetic activation prompt is the first sample of this ACP
+        # session's context; stash it so _chars_per_token can calibrate from a
+        # prompt that session history has not yet diluted. Not routed through
+        # _record_turn_metrics — the synthetic turn does not count as usage.
+        if result.usage:
+            new_record.first_turn_metrics = {
+                "input_tokens": result.usage.get("inputTokens")
+                or result.usage.get("input_tokens", 0),
+                "prompt_chars": len(prompt),
+            }
         if plugin_overrides is not None:
             new_record.plugin_overrides = plugin_overrides
         elif record is not None:

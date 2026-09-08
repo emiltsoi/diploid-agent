@@ -1558,6 +1558,55 @@ def test_rehydrate_ignores_persisted_snapshot_for_other_message(
     assert "edit_file (completed)" not in rehydrated_prompt
 
 
+def test_first_turn_metrics_captured_per_session(monkeypatch, tmp_path: Path) -> None:
+    """first_turn_metrics records the first prompt's calibration sample once."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root)
+    harness = ConversationHarness(config)
+
+    def fake_create_session(prompt, *, cwd=None, model=None, **kwargs):
+        return AcpPromptResult(
+            reply="Ready.",
+            session_id="s-1",
+            usage={"inputTokens": 1000, "outputTokens": 100},
+        )
+
+    def fake_send_message(session_id, prompt, *, cwd=None, model=None, **kwargs):
+        return AcpPromptResult(
+            reply="Follow-up.",
+            session_id=session_id,
+            usage={"inputTokens": 5000, "outputTokens": 100},
+        )
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+    monkeypatch.setattr(harness.client, "send_message", fake_send_message)
+
+    harness.process("chat-ftm", "hello")
+    record = harness._active_record("chat-ftm")
+    assert record.first_turn_metrics is not None
+    assert record.first_turn_metrics["input_tokens"] == 1000
+    assert record.first_turn_metrics["prompt_chars"] > 0
+
+    # A follow-up on the same session does not overwrite the first-turn sample.
+    harness.process("chat-ftm", "follow-up")
+    record = harness._active_record("chat-ftm")
+    assert record.first_turn_metrics["input_tokens"] == 1000
+    assert record.last_turn_metrics["input_tokens"] == 5000
+
+    # A user-driven /new captures the synthetic activation turn's sample.
+    def fake_create_session2(prompt, *, cwd=None, model=None, **kwargs):
+        return AcpPromptResult(
+            reply="New session ready.",
+            session_id="s-2",
+            usage={"inputTokens": 2000, "outputTokens": 50},
+        )
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session2)
+    harness.new_session("chat-ftm")
+    record = harness._active_record("chat-ftm")
+    assert record.first_turn_metrics["input_tokens"] == 2000
+
+
 def test_turn_controller_rehydration_survives_model_error(monkeypatch, tmp_path: Path) -> None:
     """A model error during rehydration returns a ChatResult and records the stop reason."""
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"

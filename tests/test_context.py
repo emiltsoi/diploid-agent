@@ -1204,6 +1204,32 @@ def test_chars_per_token_prefers_live_calibration(tmp_path: Path) -> None:
     assert builder._chars_per_token("swe-1-7", record) == 3.5
 
 
+def test_chars_per_token_prefers_first_turn_metrics(tmp_path: Path) -> None:
+    """_chars_per_token prefers the session's first-turn calibration sample."""
+    builder = _make_builder(tmp_path)
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="session-1",
+        model="swe-1-7",
+        persona="test-pilot",
+        cwd=str(tmp_path),
+        created_at=time.time(),
+        updated_at=time.time(),
+        turn_number=3,
+        first_turn_metrics={"input_tokens": 1000, "prompt_chars": 5000},
+        # A later turn on an established session: input_tokens has accumulated
+        # history, so the ratio collapses below the trusted range.
+        last_turn_metrics={"input_tokens": 40000, "prompt_chars": 4000},
+    )
+    assert builder._chars_per_token("swe-1-7", record) == 5.0
+
+    # When the first-turn sample is unusable, a valid last-turn sample wins.
+    record.first_turn_metrics = {"input_tokens": 1000, "prompt_chars": 50}
+    record.last_turn_metrics = {"input_tokens": 1000, "prompt_chars": 2000}
+    assert builder._chars_per_token("swe-1-7", record) == 2.0
+
+
 def test_proactive_sizing_uses_calibrated_chars_per_token(tmp_path: Path) -> None:
     """_estimate_next_prompt_tokens uses the live-calibrated ratio."""
     builder = _make_builder(tmp_path)

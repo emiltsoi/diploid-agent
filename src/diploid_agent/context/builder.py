@@ -184,24 +184,22 @@ class ContextBuilder:
         if not model:
             return 4.0
 
-        if (
-            self.config.harness.proactive_calibration_enabled
-            and record is not None
-            and record.last_turn_metrics
-        ):
-            last_turn = record.last_turn_metrics
-            prompt_chars = last_turn.get("prompt_chars") or 0
-            input_tokens = last_turn.get("input_tokens") or 0
-            if (
-                prompt_chars >= self.config.harness.proactive_calibration_min_prompt_chars
-                and input_tokens > 0
-            ):
+        if self.config.harness.proactive_calibration_enabled and record is not None:
+            min_chars = self.config.harness.proactive_calibration_min_prompt_chars
+            # The first turn of a session is the cleanest sample: the prompt we
+            # sent dominates input_tokens before session history accumulates.
+            # Later turns are only trusted when the ratio still lands in range —
+            # on established sessions `input_tokens` includes the accumulated
+            # session history, so prompt_chars / input_tokens collapses toward
+            # zero and the next-prompt estimate explodes.
+            for metrics in (record.first_turn_metrics, record.last_turn_metrics):
+                if not metrics:
+                    continue
+                prompt_chars = metrics.get("prompt_chars") or 0
+                input_tokens = metrics.get("input_tokens") or 0
+                if prompt_chars < min_chars or input_tokens <= 0:
+                    continue
                 ratio = prompt_chars / input_tokens
-                # Only trust the live calibration when the measured prompt is
-                # dominated by the text we sent. On established sessions
-                # `input_tokens` includes the accumulated session history, so
-                # prompt_chars / input_tokens collapses toward zero and the
-                # next-prompt estimate explodes.
                 if 1.0 <= ratio <= 10.0:
                     return ratio
 

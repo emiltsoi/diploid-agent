@@ -29,6 +29,7 @@ class SessionRecord:
     chat_memory_exceeded: bool = False
     cumulative_metrics: dict[str, Any] | None = None
     last_turn_metrics: dict[str, Any] | None = None
+    first_turn_metrics: dict[str, Any] | None = None
     enabled_mcp_servers: list[str] | None = None
     enabled_skills: list[str] | None = None
     disabled_skills: list[str] | None = None
@@ -56,6 +57,7 @@ class SessionRecord:
             chat_memory_exceeded=data.get("chat_memory_exceeded", False),
             cumulative_metrics=data.get("cumulative_metrics"),
             last_turn_metrics=data.get("last_turn_metrics"),
+            first_turn_metrics=data.get("first_turn_metrics"),
             enabled_mcp_servers=data.get("enabled_mcp_servers"),
             enabled_skills=data.get("enabled_skills"),
             disabled_skills=data.get("disabled_skills"),
