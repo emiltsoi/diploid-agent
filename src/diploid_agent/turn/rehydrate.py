@@ -99,19 +99,33 @@ class TurnRehydrate:
                 continue
             if not isinstance(data, dict):
                 continue
-            if (data.get("user_message") or "").strip() != (user_message or "").strip():
+            persisted_message = data.get("user_message")
+            if not isinstance(persisted_message, str):
+                continue
+            if persisted_message.strip() != (user_message or "").strip():
+                continue
+            text_fields = {
+                key: data.get(key)
+                for key in (
+                    "message_text",
+                    "thought_text",
+                    "current_intent",
+                    "last_side_effect",
+                )
+            }
+            if any(v is not None and not isinstance(v, str) for v in text_fields.values()):
                 continue
             try:
                 return PartialTurn(
                     chat_id=chat_id,
                     session_number=int(data.get("session_number") or 0),
                     turn_number=int(data.get("turn_number") or 0),
-                    user_message=data.get("user_message") or "",
-                    message_text=data.get("message_text") or "",
-                    thought_text=data.get("thought_text") or "",
+                    user_message=persisted_message,
+                    message_text=text_fields["message_text"] or "",
+                    thought_text=text_fields["thought_text"] or "",
                     updated_at=float(data.get("updated_at") or 0.0),
-                    current_intent=data.get("current_intent") or "",
-                    last_side_effect=data.get("last_side_effect") or "",
+                    current_intent=text_fields["current_intent"] or "",
+                    last_side_effect=text_fields["last_side_effect"] or "",
                     last_side_effect_at=float(data.get("last_side_effect_at") or 0.0),
                 )
             except (TypeError, ValueError):

@@ -755,8 +755,8 @@ class TurnProcess:
                 # The first turn on a new ACP session is the cleanest
                 # prompt_chars/input_tokens sample — later turns accumulate
                 # history in input_tokens and the ratio collapses.
-                if record_is_new and record.first_turn_metrics is None:
-                    record.first_turn_metrics = record.last_turn_metrics
+                if record_is_new and record.first_turn_metrics is None and record.last_turn_metrics:
+                    record.first_turn_metrics = dict(record.last_turn_metrics)
                 record.persona_memory_exceeded = (record_ctx.memory_flags or {}).get(
                     "persona_memory_exceeded", False
                 )

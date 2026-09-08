@@ -1558,6 +1558,54 @@ def test_rehydrate_ignores_persisted_snapshot_for_other_message(
     assert "edit_file (completed)" not in rehydrated_prompt
 
 
+def test_rehydrate_survives_malformed_persisted_turn(monkeypatch, tmp_path: Path) -> None:
+    """A corrupt-but-valid-JSON turn snapshot must not abort rehydration."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root)
+    harness = ConversationHarness(config)
+
+    prompts: list[str] = []
+
+    def fake_create_session(prompt, *, cwd=None, model=None, **kwargs):
+        prompts.append(prompt)
+        return AcpPromptResult(reply="Ready.", session_id=f"session-{len(prompts)}")
+
+    def fake_send_message(session_id, prompt, *, cwd=None, model=None, **kwargs):
+        raise AcpSessionStaleError(
+            "session/prompt",
+            {"code": -32002, "message": "Session not found"},
+        )
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+    monkeypatch.setattr(harness.client, "send_message", fake_send_message)
+    monkeypatch.setattr(harness.client, "session_alive", lambda session_id: False)
+
+    harness.process("chat-bad", "hello")
+
+    chat_dir = tmp_path / "sessions" / "chat-bad"
+    chat_dir.mkdir(parents=True, exist_ok=True)
+    # Non-string user_message: the match gate must skip, not crash.
+    (chat_dir / "chat_interrupted_turn.json").write_text(
+        json.dumps({"user_message": 123, "message_text": "marker-interrupted-leak"})
+    )
+    # Matching user_message but a non-string text field: skipped, not sliced.
+    (chat_dir / "chat_active_turn.json").write_text(
+        json.dumps(
+            {
+                "user_message": "follow-up",
+                "message_text": 123,
+                "thought_text": "marker-active-leak",
+            }
+        )
+    )
+
+    result2 = harness.process("chat-bad", "follow-up")
+    assert result2.session_id == "session-2"
+    assert len(prompts) == 2
+    assert "marker-interrupted-leak" not in prompts[1]
+    assert "marker-active-leak" not in prompts[1]
+
+
 def test_first_turn_metrics_captured_per_session(monkeypatch, tmp_path: Path) -> None:
     """first_turn_metrics records the first prompt's calibration sample once."""
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
