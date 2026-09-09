@@ -146,6 +146,7 @@ class ActiveTurn:
     current_intent: str = ""
     last_side_effect: str = ""
     last_side_effect_at: float = 0.0
+    side_effects: list[dict[str, Any]] = field(default_factory=list)
     _condition: threading.Condition = field(default_factory=threading.Condition, repr=False)
 
     def __post_init__(self) -> None:
@@ -199,6 +200,7 @@ class PartialTurn:
     current_intent: str = ""
     last_side_effect: str = ""
     last_side_effect_at: float = 0.0
+    side_effects: list[dict[str, Any]] = field(default_factory=list)
 
 
 class RuntimeStatus(BaseModel):

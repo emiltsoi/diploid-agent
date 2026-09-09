@@ -80,6 +80,7 @@ class TurnRehydrate:
             current_intent=active.current_intent,
             last_side_effect=active.last_side_effect,
             last_side_effect_at=active.last_side_effect_at,
+            side_effects=active.side_effects,
         )
 
     def _persisted_partial(self, chat_id: str, user_message: str) -> PartialTurn | None:
@@ -115,6 +116,9 @@ class TurnRehydrate:
             }
             if any(v is not None and not isinstance(v, str) for v in text_fields.values()):
                 continue
+            side_effects = data.get("side_effects") or []
+            if not isinstance(side_effects, list):
+                side_effects = []
             try:
                 return PartialTurn(
                     chat_id=chat_id,
@@ -127,6 +131,7 @@ class TurnRehydrate:
                     current_intent=text_fields["current_intent"] or "",
                     last_side_effect=text_fields["last_side_effect"] or "",
                     last_side_effect_at=float(data.get("last_side_effect_at") or 0.0),
+                    side_effects=side_effects,
                 )
             except (TypeError, ValueError):
                 continue
@@ -141,7 +146,10 @@ class TurnRehydrate:
         """Build an interrupted-turn anchor for the in-flight or persisted turn."""
         partial = self._active_partial(chat_id)
         if partial is None or not (
-            partial.message_text or partial.thought_text or partial.last_side_effect
+            partial.message_text
+            or partial.thought_text
+            or partial.last_side_effect
+            or partial.side_effects
         ):
             # The live turn has produced nothing yet — a leftover on-disk
             # snapshot from a previous attempt at the same message is the

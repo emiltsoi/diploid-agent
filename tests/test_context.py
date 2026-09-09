@@ -1378,6 +1378,29 @@ def test_interrupted_turn_anchor_format(tmp_path: Path) -> None:
     assert "I should sort by date" in anchor
 
 
+def test_interrupted_turn_anchor_shows_tool_trace(tmp_path: Path) -> None:
+    """The anchor renders the side-effect trace without arguments or outputs."""
+    builder = _make_builder(tmp_path)
+    partial = PartialTurn(
+        chat_id="chat-1",
+        session_number=1,
+        turn_number=5,
+        user_message="Sort the list by date",
+        message_text="Here is the sorted list:",
+        current_intent="Sort the list by date",
+        side_effects=[
+            {"title": "list_files", "status": "completed", "at": time.time() - 10},
+            {"title": "sort_items", "status": "running", "at": time.time() - 2},
+        ],
+    )
+
+    anchor = builder.interrupted_turn_anchor(partial, RehydrationReason.STALE)
+    assert anchor is not None
+    assert "Tool trace before interruption:" in anchor
+    assert "list_files (completed)" in anchor
+    assert "sort_items (running)" in anchor
+
+
 def test_interrupted_turn_anchor_caps_long_message(tmp_path: Path) -> None:
     """A very long partial message is capped to the configured limit."""
     builder = _make_builder(tmp_path)

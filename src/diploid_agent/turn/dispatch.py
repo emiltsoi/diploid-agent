@@ -331,6 +331,7 @@ class TurnDispatch:
                     current_intent=a.current_intent,
                     last_side_effect=a.last_side_effect,
                     last_side_effect_at=a.last_side_effect_at,
+                    side_effects=a.side_effects,
                 ),
             )
 
@@ -359,8 +360,12 @@ class TurnDispatch:
                             or "tool"
                         )
                         status = content.get("status") or "running"
+                        now = time.time()
                         a.last_side_effect = f"{title} ({status})"[:160]
-                        a.last_side_effect_at = time.time()
+                        a.last_side_effect_at = now
+                        a.side_effects.append(
+                            {"title": title, "status": status, "at": now}
+                        )
                 _maybe_emit_partial()
                 return
             if session_update not in ("agent_thought", "agent_thought_chunk"):

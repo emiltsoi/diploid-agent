@@ -511,6 +511,7 @@ class ContextBuilder:
             and not partial.last_side_effect
             and not partial.message_text
             and not partial.thought_text
+            and not partial.side_effects
         ):
             return None
 
@@ -532,6 +533,18 @@ class ContextBuilder:
                 parts.append(f"Last activity: {last_side_effect} ({age} ago)")
             else:
                 parts.append(f"Last activity: {last_side_effect}")
+
+        if partial.side_effects:
+            lines: list[str] = []
+            for eff in partial.side_effects[-8:]:
+                title = str(eff.get("title") or "tool")
+                status = str(eff.get("status") or "running")
+                at = eff.get("at") or 0.0
+                age = ""
+                if at:
+                    age = self._format_silent_duration(time.time() - at)
+                lines.append(f"- {title} ({status})" + (f" ({age} ago)" if age else ""))
+            parts.append("Tool trace before interruption:\n" + "\n".join(lines))
 
         message_text = (partial.message_text or "").strip()
         if message_text:
