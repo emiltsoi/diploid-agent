@@ -538,17 +538,22 @@ def test_close_logs_transport_stop_once_per_generation(tmp_path: Path) -> None:
     assert stops[0]["pid"] == os.getpid()
 
 
-def test_watchdog_emits_prompt_silence_telemetry(tmp_path: Path) -> None:
+def test_watchdog_emits_prompt_silence_telemetry(tmp_path: Path, monkeypatch) -> None:
     """An in-flight prompt with a live child and no stdout gets flagged."""
     from diploid_agent.acp_client.lifecycle import AcpLifecycleLog
     from diploid_agent.acp_client.watchdog import PromptWatchdog
 
     log = AcpLifecycleLog(tmp_path / "acp-lifecycle.jsonl")
+    # Freeze monotonic so last_stdout stays positive even on a freshly booted
+    # host (time.monotonic() < 700 would otherwise push it <= 0 and the
+    # silence branch requires last_stdout > 0 -- observed on CI 2026-09-09).
+    fake_now = 10_000.0
+    monkeypatch.setattr(time, "monotonic", lambda: fake_now)
     client = _FakeClient()
     client._inflight_future = concurrent.futures.Future()
-    client._inflight_deadline = time.monotonic() + 3600.0
-    client._last_request_at = time.monotonic()
-    client._last_stdout_at = time.monotonic() - 700.0
+    client._inflight_deadline = fake_now + 3600.0
+    client._last_request_at = fake_now
+    client._last_stdout_at = fake_now - 700.0
     client._last_control_call_deadline = 0.0
     client._active_prompts = {"s-1": object()}
     client._pending = {1: object()}
