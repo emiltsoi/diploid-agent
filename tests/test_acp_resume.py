@@ -450,9 +450,7 @@ def test_acp_engine_resume_forwards_timeout(monkeypatch) -> None:
         engine.close()
 
 
-def test_rehydrate_after_restart_uses_short_resume_budget(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_rehydrate_after_restart_uses_short_resume_budget(monkeypatch, tmp_path: Path) -> None:
     """A restart-first rehydrate resumes with acp_resume_after_restart_timeout."""
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
     config = _make_config(tmp_path, fixture_root, acp_resume_enabled=True)
@@ -499,9 +497,7 @@ def test_rehydrate_after_restart_uses_short_resume_budget(
         harness.client.close()
 
 
-def test_rehydrate_stale_session_uses_full_resume_budget(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_rehydrate_stale_session_uses_full_resume_budget(monkeypatch, tmp_path: Path) -> None:
     """A stale-session rehydrate (no restart) keeps the full acp_resume_timeout."""
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
     config = _make_config(tmp_path, fixture_root, acp_resume_enabled=True)

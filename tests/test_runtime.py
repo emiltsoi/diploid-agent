@@ -493,9 +493,7 @@ def test_graceful_restart_refuses_missing_unit(tmp_path: Path, monkeypatch) -> N
     runtime = AgentRuntime(_make_config(tmp_path))
     monkeypatch.setattr(runtime, "_unit_exists", lambda service: False)
     popen_calls: list[list[str]] = []
-    monkeypatch.setattr(
-        "subprocess.Popen", lambda cmd, **kwargs: popen_calls.append(cmd)
-    )
+    monkeypatch.setattr("subprocess.Popen", lambda cmd, **kwargs: popen_calls.append(cmd))
 
     result = runtime.graceful_service_restart("chat-1", "nope.service", reason="test")
 

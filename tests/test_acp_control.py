@@ -42,9 +42,9 @@ def _send_restart(path: Path, service: str, reason: str = "test") -> dict:
         s.settimeout(5.0)
         s.connect(str(path))
         s.sendall(
-            json.dumps(
-                {"action": "restart_service", "service": service, "reason": reason}
-            ).encode("utf-8")
+            json.dumps({"action": "restart_service", "service": service, "reason": reason}).encode(
+                "utf-8"
+            )
         )
         return json.loads(s.recv(1024).decode("utf-8"))
 

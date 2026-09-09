@@ -1196,9 +1196,7 @@ def test_stream_turn_heartbeat_wait_has_minimum_floor(tmp_path: Path, monkeypatc
     assert all(w >= 5.0 for w in waits), waits
 
 
-def test_stream_turn_floors_poll_rate_on_instant_replies(
-    tmp_path: Path, monkeypatch: Any
-) -> None:
+def test_stream_turn_floors_poll_rate_on_instant_replies(tmp_path: Path, monkeypatch: Any) -> None:
     """A stopped turn makes the harness return /turn instantly forever; the
     worker must pace itself instead of spinning into a hot poll loop, and
     must exit on _should_stop instead of waiting for chat_future forever."""

@@ -911,9 +911,7 @@ def test_record_turn_extra_items_retain_immediately(tmp_path: Path) -> None:
     """Plugin memory items are not delayed by the turn bundle buffer."""
     manager, backend = _recording_manager(tmp_path, retain_bundle_turns=4)
     extra = MemoryItem(content="body event", tags=["body"])
-    manager.record_turn(
-        "u", "a", model="m", turn_number=1, session_number=1, extra_items=[extra]
-    )
+    manager.record_turn("u", "a", model="m", turn_number=1, session_number=1, extra_items=[extra])
     assert backend.items == [extra]
     assert len(manager._turn_buffer) == 1
 
@@ -942,16 +940,15 @@ def test_final_segment_reply_uses_last_tool_boundary() -> None:
             _msg("Working on it. "),
             {"sessionUpdate": "tool_call", "content": {}},
             {"sessionUpdate": "tool_call_update", "content": {}},
-            {"sessionUpdate": "agent_message_chunk",
-             "content": [{"type": "text", "text": "All done. "}]},
+            {
+                "sessionUpdate": "agent_message_chunk",
+                "content": [{"type": "text", "text": "All done. "}],
+            },
             _msg("Here is the answer."),
         ]
     )
     reply = "Working on it. All done. Here is the answer."
-    assert (
-        TurnProcess._final_segment_reply(result, reply)
-        == "All done. Here is the answer."
-    )
+    assert TurnProcess._final_segment_reply(result, reply) == "All done. Here is the answer."
 
 
 def test_final_segment_reply_no_tool_returns_none() -> None:

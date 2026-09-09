@@ -1076,7 +1076,9 @@ def test_build_follow_up_fresh_recalls_on_memory_triggers(tmp_path: Path, monkey
     assert calls[0][1].get("max_chars") == builder.config.harness.memory.fresh_recall_max_chars
 
 
-def test_build_follow_up_fresh_runs_tiny_recall_without_trigger(tmp_path: Path, monkeypatch) -> None:
+def test_build_follow_up_fresh_runs_tiny_recall_without_trigger(
+    tmp_path: Path, monkeypatch
+) -> None:
     """Fresh compact mode runs a tiny capped recall for ordinary follow-ups."""
     profile_root = tmp_path / "profile"
     profile_root.mkdir()
@@ -1451,4 +1453,3 @@ def test_build_first_appends_interrupted_turn_to_continuation_anchor(tmp_path: P
     assert pctx.slots.get("continuation") == [continuation, interrupted]
     assert continuation in pctx.prompt
     assert interrupted in pctx.prompt
-

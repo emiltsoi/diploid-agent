@@ -422,11 +422,7 @@ class AcpClient:
                 if not self._initialized and self._loop is None and self._proc is None:
                     return
                 gen = self._transport.generation
-                if (
-                    self._lifecycle_log is not None
-                    and gen > 0
-                    and gen != self._logged_stop_gen
-                ):
+                if self._lifecycle_log is not None and gen > 0 and gen != self._logged_stop_gen:
                     self._lifecycle_log.write("transport.stop")
                     self._logged_stop_gen = gen
                 self._initialized = False
@@ -806,9 +802,7 @@ class AcpClient:
         last_exc: Exception | None = None
         max_attempts = self.acp_resume_max_retries + 1
         for attempt in range(max_attempts):
-            attempt_timeout = (
-                min(call_timeout, budget()) if budget is not None else call_timeout
-            )
+            attempt_timeout = min(call_timeout, budget()) if budget is not None else call_timeout
             try:
                 return await self._call(method, params, timeout=attempt_timeout)
             except AcpError as exc:
@@ -871,18 +865,14 @@ class AcpClient:
 
         resume_method = "resume"
         start = time.perf_counter()
-        deadline = (
-            time.monotonic() + timeout if timeout is not None and timeout > 0 else None
-        )
+        deadline = time.monotonic() + timeout if timeout is not None and timeout > 0 else None
 
         def _remaining() -> float:
             if deadline is None:
                 return self._control.call_timeout()
             left = deadline - time.monotonic()
             if left <= 0:
-                raise TimeoutError(
-                    f"ACP resume budget of {timeout}s exhausted for {session_id}"
-                )
+                raise TimeoutError(f"ACP resume budget of {timeout}s exhausted for {session_id}")
             return left
 
         # Per-phase timing: when a resume eats its budget, the lifecycle log

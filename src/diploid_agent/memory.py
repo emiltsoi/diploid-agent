@@ -1310,9 +1310,7 @@ class MemoryManager:
         try:
             if self._turn_buffer:
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(
-                    "".join(json.dumps(e) + "\n" for e in self._turn_buffer)
-                )
+                path.write_text("".join(json.dumps(e) + "\n" for e in self._turn_buffer))
             elif path.exists():
                 path.unlink()
         except OSError:
@@ -1365,9 +1363,7 @@ class MemoryManager:
             turns = [e["turn"] for e in entries]
             bundled = len(entries) > 1
             if bundled:
-                document_id = (
-                    f"turns-{self.chat_id}-{session:06d}-{turns[0]:06d}-{turns[-1]:06d}"
-                )
+                document_id = f"turns-{self.chat_id}-{session:06d}-{turns[0]:06d}-{turns[-1]:06d}"
                 role = "pair_bundle"
             else:
                 document_id = f"turn-{self.chat_id}-{session:06d}-{turns[0]:06d}"

@@ -213,9 +213,7 @@ class RuntimeActions:
         }
 
         # Last wake-relevant event for the chat.
-        continuity["last_wake_event"] = (
-            self._runtime.lifecycle_log.last_wake_event_for(chat_id)
-        )
+        continuity["last_wake_event"] = self._runtime.lifecycle_log.last_wake_event_for(chat_id)
 
         return continuity
 
@@ -444,9 +442,7 @@ class RuntimeActions:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Failed to record restart incident for %s: %s", chat_id, exc)
 
-        if not self._runtime._schedule_draining_restart(
-            service, chat_id=chat_id, reason=reason
-        ):
+        if not self._runtime._schedule_draining_restart(service, chat_id=chat_id, reason=reason):
             self._runtime._last_service_restart_at = 0.0
             return ChatResult(
                 reply=f"Could not restart {service}: no such systemd user unit.",

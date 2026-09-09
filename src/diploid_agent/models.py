@@ -150,7 +150,9 @@ class ActiveTurn:
 
     def __post_init__(self) -> None:
         if not self.current_intent:
-            first_line = (self.user_message or "").strip().splitlines()[0] if self.user_message else ""
+            first_line = (
+                (self.user_message or "").strip().splitlines()[0] if self.user_message else ""
+            )
             self.current_intent = first_line[:200]
 
 

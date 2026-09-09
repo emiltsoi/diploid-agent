@@ -229,7 +229,7 @@ class ContextBuilder:
         """Remove the backend's default recall prefix so headings stay clean."""
         prefix = "Memory from previous turns:\n\n"
         if text.startswith(prefix):
-            return text[len(prefix):]
+            return text[len(prefix) :]
         return text
 
     def _wake_narrative(
@@ -654,8 +654,7 @@ class ContextBuilder:
         path = chat_status.get("path")
         name = path.name if path else "chat memory"
         return (
-            f"{total} bytes in {name}. "
-            "Say `/memory` or a memory phrase to recall the full history."
+            f"{total} bytes in {name}. Say `/memory` or a memory phrase to recall the full history."
         )
 
     def _combined_chat_memory_block(
@@ -1251,9 +1250,7 @@ class ContextBuilder:
                 )
             )
 
-        recall_block, chat_block = self._combined_chat_memory_block(
-            recall, short_term, chat_mem
-        )
+        recall_block, chat_block = self._combined_chat_memory_block(recall, short_term, chat_mem)
         if recall_block:
             slots["recall"].append(recall_block)
         if chat_block:
@@ -1281,9 +1278,7 @@ class ContextBuilder:
         if build_ctx.interrupted_turn:
             slots["continuation"].append(build_ctx.interrupted_turn)
 
-        skill_context = self._skill_context(
-            chat_id, skill_names, compact=True, message=formatted
-        )
+        skill_context = self._skill_context(chat_id, skill_names, compact=True, message=formatted)
         if skill_context:
             slots["skills"].append(skill_context)
 
@@ -1316,9 +1311,7 @@ class ContextBuilder:
                         system_parts[-1] = wake_budget_line
                     else:
                         system_parts.append(wake_budget_line)
-                    slots["system_notice"] = [
-                        self._format_system_notice(system_parts, is_compact)
-                    ]
+                    slots["system_notice"] = [self._format_system_notice(system_parts, is_compact)]
                     prompt = self._render_slots(slots)
 
         flags = {
@@ -1582,9 +1575,7 @@ class ContextBuilder:
             )
             self._record_file(chat_id, chat_memory_path)
 
-        recall_block, chat_block = self._combined_chat_memory_block(
-            recall, short_term, chat_mem
-        )
+        recall_block, chat_block = self._combined_chat_memory_block(recall, short_term, chat_mem)
         if recall_block:
             slots["recall"].append(recall_block)
         if chat_block:
@@ -1614,9 +1605,7 @@ class ContextBuilder:
         if build_ctx.interrupted_turn:
             slots["continuation"].append(build_ctx.interrupted_turn)
 
-        skill_context = self._skill_context(
-            chat_id, skill_names, compact=True, message=formatted
-        )
+        skill_context = self._skill_context(chat_id, skill_names, compact=True, message=formatted)
         if skill_context:
             slots["skills"].append(skill_context)
 

@@ -40,7 +40,7 @@ def test_reload_unknown_plugin() -> None:
     assert "Unknown plugin" in manager.reload_plugin("1", "missing")
 
 
-_IMPL_TEMPLATE = '''\
+_IMPL_TEMPLATE = """\
 class Impl:
     MARKER = "{marker}"
 
@@ -54,7 +54,7 @@ class Impl:
 
     def stop(self):
         self.stopped = True
-'''
+"""
 
 
 def _write_pkg(root: Path, name: str, marker: str) -> None:

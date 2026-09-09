@@ -151,18 +151,14 @@ def test_oversized_update_line_is_processed(
         assert result.reply == "ok"
         assert result.stop_reason == "end_turn"
         assert _wait_for(
-            lambda: any(
-                u.get("rawOutput") and len(u["rawOutput"]) == 200 * 1024 for u in updates
-            )
+            lambda: any(u.get("rawOutput") and len(u["rawOutput"]) == 200 * 1024 for u in updates)
         )
         assert client.health()
     finally:
         client.close()
 
 
-def test_reader_death_fails_inflight_fast(
-    fake_acp: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_reader_death_fails_inflight_fast(fake_acp: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """If the reader still dies, in-flight calls must fail fast, not hang.
 
     Shrink the stream limit so a moderately sized line kills the reader; the
@@ -183,9 +179,7 @@ def test_reader_death_fails_inflight_fast(
         client.close()
 
 
-def test_malformed_line_is_skipped(
-    fake_acp: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_malformed_line_is_skipped(fake_acp: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A non-UTF-8 line must be skipped, not kill the reader."""
     monkeypatch.setenv("FAKE_ACP_GARBAGE", "1")
     client = _make_client(fake_acp)
@@ -470,9 +464,7 @@ def test_resume_budget_bounds_hanging_resume(
         client.close()
 
 
-def test_prompt_updates_buffer_is_bounded(
-    fake_acp: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_prompt_updates_buffer_is_bounded(fake_acp: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Retained prompt updates are capped; the live callback still sees all."""
     from diploid_agent.acp_client.types import _PROMPT_UPDATES_MAXLEN
 

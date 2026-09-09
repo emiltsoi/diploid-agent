@@ -85,9 +85,7 @@ def test_create_session_keeps_transport_healthy_on_completed(client, monkeypatch
     """A completed result should not kill the transport."""
     monkeypatch.setattr(client, "_ensure_started", lambda *a, **k: None)
     client._transport_healthy = True
-    monkeypatch.setattr(
-        client, "_run", lambda coro, timeout=None, **kw: _make_result(None, False)
-    )
+    monkeypatch.setattr(client, "_run", lambda coro, timeout=None, **kw: _make_result(None, False))
 
     client.create_session("test prompt")
 
@@ -117,7 +115,7 @@ def test_create_session_restarts_transport_after_timeout(client, monkeypatch) ->
     results = iter(
         [
             _make_result("timeout", True),  # first turn hard times out
-            _make_result(None, False),       # second turn completes
+            _make_result(None, False),  # second turn completes
         ]
     )
 
@@ -237,9 +235,7 @@ def test_close_does_not_stop_or_clear_next_generation(client, monkeypatch) -> No
         coro.close()  # never awaited on a fake loop; silence the warning
         return future
 
-    monkeypatch.setattr(
-        asyncio, "run_coroutine_threadsafe", fake_run_coroutine_threadsafe
-    )
+    monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", fake_run_coroutine_threadsafe)
     monkeypatch.setattr(client._sandbox, "cleanup", lambda: None)
     monkeypatch.setattr(client._control, "close", lambda: None)
 
@@ -284,9 +280,7 @@ def test_close_stops_captured_loop_on_timeout(client, monkeypatch) -> None:
         coro.close()
         return future
 
-    monkeypatch.setattr(
-        asyncio, "run_coroutine_threadsafe", fake_run_coroutine_threadsafe
-    )
+    monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", fake_run_coroutine_threadsafe)
     monkeypatch.setattr(client._sandbox, "cleanup", lambda: None)
     monkeypatch.setattr(client._control, "close", lambda: None)
 

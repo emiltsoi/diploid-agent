@@ -74,9 +74,7 @@ class PromptWatchdog:
             # kill would land on the replacement (observed in production: a
             # watchdog_stall kill 1 ms after ``transport.start``).
             transport = getattr(client, "_transport", None)
-            gen = getattr(
-                transport if transport is not None else client, "generation", None
-            )
+            gen = getattr(transport if transport is not None else client, "generation", None)
 
         # All _stall_recovery calls must happen outside ``client._lock``:
         # recovery acquires ``_lifecycle_lock`` and the required lock order is
@@ -127,10 +125,7 @@ class PromptWatchdog:
         # ``silence_after`` interval while it persists.
         if has_prompt and silence_after > 0 and last_stdout > 0:
             silence = now - last_stdout
-            if (
-                silence >= silence_after
-                and now - self._last_silence_warn >= silence_after
-            ):
+            if silence >= silence_after and now - self._last_silence_warn >= silence_after:
                 self._last_silence_warn = now
                 session_id = next(iter(client._active_prompts), None)
                 logger.warning(
@@ -166,9 +161,7 @@ class PromptWatchdog:
         with lifecycle_lock:
             self._stall_recovery_inner(trigger, observed_proc, observed_gen)
 
-    def _still_stalled(
-        self, client: Any, trigger: str, observed_proc: Any
-    ) -> bool:
+    def _still_stalled(self, client: Any, trigger: str, observed_proc: Any) -> bool:
         """Re-verify the stall condition under ``client._lock``.
 
         The in-flight call may have completed while recovery waited on
@@ -181,11 +174,7 @@ class PromptWatchdog:
             return observed_proc is not None and observed_proc.returncode is not None
         if trigger == "inflight_deadline":
             inflight = client._inflight_future
-            return (
-                inflight is not None
-                and not inflight.done()
-                and now > client._inflight_deadline
-            )
+            return inflight is not None and not inflight.done() and now > client._inflight_deadline
         if trigger == "control_deadline":
             if not client._pending or client._active_prompts:
                 return False

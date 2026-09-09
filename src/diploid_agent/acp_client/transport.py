@@ -89,8 +89,8 @@ class AcpTransport:
         # Dispatch them on a dedicated worker thread instead.  The queue is
         # bounded: a wedged callback must never backpressure the reader, so
         # overflow drops work instead of blocking.
-        self._cb_queue: queue.Queue[tuple[Callable[[Any], None], Any] | None] = (
-            queue.Queue(maxsize=2048)
+        self._cb_queue: queue.Queue[tuple[Callable[[Any], None], Any] | None] = queue.Queue(
+            maxsize=2048
         )
         self._cb_dropped = 0
         self._cb_thread: threading.Thread | None = None
@@ -183,11 +183,7 @@ class AcpTransport:
         if self._terminated:
             raise AcpTransportError(op, msg="ACP transport terminated")
         proc = self._proc
-        if (
-            proc is None
-            or getattr(proc, "stdin", None) is None
-            or proc.returncode is not None
-        ):
+        if proc is None or getattr(proc, "stdin", None) is None or proc.returncode is not None:
             raise AcpTransportError(op, msg="ACP process not running")
         if self._reader_task is not None and self._reader_task.done():
             raise AcpTransportError(op, msg="ACP stdout reader stopped")
@@ -365,7 +361,7 @@ class AcpTransport:
                 str(Path.home() / ".cache"),
             )
 
-        # Isolate the subprocess from the user's systemd/D-Bus session so it cannot
+            # Isolate the subprocess from the user's systemd/D-Bus session so it cannot
             # run raw `systemctl --user restart ...` directly. Restarts go through
             # the fake binaries in .local/bin and the harness control socket.
             env["XDG_RUNTIME_DIR"] = str(self._client._sandbox.devin_home / ".run")
@@ -434,9 +430,7 @@ class AcpTransport:
                     "transport.initialize.failure",
                     detail={
                         "error": str(exc),
-                        "duration_ms": round(
-                            (time.perf_counter() - init_start) * 1000, 2
-                        ),
+                        "duration_ms": round((time.perf_counter() - init_start) * 1000, 2),
                     },
                 )
             raise
@@ -444,9 +438,7 @@ class AcpTransport:
             lifecycle_log.write(
                 "transport.initialize.success",
                 detail={
-                    "duration_ms": round(
-                        (time.perf_counter() - init_start) * 1000, 2
-                    ),
+                    "duration_ms": round((time.perf_counter() - init_start) * 1000, 2),
                 },
             )
         logger.info(
@@ -533,9 +525,7 @@ class AcpTransport:
         if exc is not None:
             logger.error("ACP reader task crashed: %s", exc)
         else:
-            logger.error(
-                "ACP reader task ended while the ACP process is still running"
-            )
+            logger.error("ACP reader task ended while the ACP process is still running")
         self._terminated = True
         self._transport_healthy = False
         self._unblock_inflight("ACP stdout reader stopped")
@@ -548,19 +538,13 @@ class AcpTransport:
         """
         if task.cancelled() or self._stderr_task is not task:
             return
-        if (
-            self._proc is None
-            or self._proc.stderr is None
-            or self._proc.returncode is not None
-        ):
+        if self._proc is None or self._proc.stderr is None or self._proc.returncode is not None:
             return
         exc = task.exception()
         if exc is not None:
             logger.error("ACP stderr drain crashed: %s", exc)
         else:
-            logger.error(
-                "ACP stderr drain ended while the ACP process is still running"
-            )
+            logger.error("ACP stderr drain ended while the ACP process is still running")
         self._terminated = True
         self._transport_healthy = False
         self._unblock_inflight("ACP stderr drain stopped")

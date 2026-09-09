@@ -378,14 +378,10 @@ class AgentRuntime(RuntimeAPI):
                 self._flush_plugins_for_restart()
             finally:
                 # Short residual delay so the final reply/outbox can deliver.
-                self._schedule_systemd_restart(
-                    service, delay=5.0, chat_id=chat_id, reason=reason
-                )
+                self._schedule_systemd_restart(service, delay=5.0, chat_id=chat_id, reason=reason)
                 self._arm_restart_watchdog(service, due_in=5.0, chat_id=chat_id)
 
-        threading.Thread(
-            target=_drain_then_restart, daemon=True, name="restart-drain"
-        ).start()
+        threading.Thread(target=_drain_then_restart, daemon=True, name="restart-drain").start()
         return True
 
     def _arm_restart_watchdog(
@@ -423,9 +419,7 @@ class AgentRuntime(RuntimeAPI):
                 except Exception:
                     logger.exception("Failed to record failed-restart incident")
 
-        threading.Thread(
-            target=_reaper, daemon=True, name="restart-watchdog"
-        ).start()
+        threading.Thread(target=_reaper, daemon=True, name="restart-watchdog").start()
 
     def _wait_for_active_turns(self, timeout: float) -> bool:
         """Block until every ActiveTurn finishes or ``timeout`` expires.

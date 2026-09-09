@@ -292,8 +292,7 @@ class TurnWorker(threading.Thread):
                         shown = tail_text[:4096]
                         committed_display = (
                             committed_display + shown
-                            if committed_display
-                            and display_text.startswith(committed_display)
+                            if committed_display and display_text.startswith(committed_display)
                             else shown
                         )
                         if committed_raw_ok and len(tail_text) <= 4096:

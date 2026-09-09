@@ -228,9 +228,7 @@ class TurnProcess:
                 continue
             content = update.get("content", {})
             if isinstance(content, list):
-                seg_chars += sum(
-                    len(b.get("text", "")) for b in content if b.get("type") == "text"
-                )
+                seg_chars += sum(len(b.get("text", "")) for b in content if b.get("type") == "text")
             elif isinstance(content, dict) and content.get("type") == "text":
                 seg_chars += len(content.get("text", ""))
         if seg_chars <= 0 or not reply:

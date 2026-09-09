@@ -787,9 +787,7 @@ def test_status_exposes_continuity(monkeypatch, tmp_path: Path) -> None:
     assert cont["state"] == "new"
 
 
-def test_status_continuity_reports_last_wake_and_resume_counts(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_status_continuity_reports_last_wake_and_resume_counts(monkeypatch, tmp_path: Path) -> None:
     """status() exposes the last wake event and a resume success/failure summary."""
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
     config = _make_config(tmp_path, fixture_root, acp_resume_enabled=True)
@@ -1294,7 +1292,9 @@ def test_hard_timeout_auto_resend_does_not_ask(monkeypatch, tmp_path: Path) -> N
 
     transcript_path = harness._chat_dir("chat-auto") / "chat_transcript.jsonl"
     assert transcript_path.exists()
-    transcript = [json.loads(line) for line in transcript_path.read_text().splitlines() if line.strip()]
+    transcript = [
+        json.loads(line) for line in transcript_path.read_text().splitlines() if line.strip()
+    ]
     system_notes = [e for e in transcript if e.get("role") == "system"]
     assert len(system_notes) == 1
     assert "interrupted by a hard timeout" in system_notes[0]["content"]
@@ -1451,9 +1451,7 @@ def test_rehydrate_reuses_transport(monkeypatch, tmp_path: Path) -> None:
     assert restart_calls[0] == 0
 
 
-def test_rehydrate_anchors_to_persisted_interrupted_turn(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_rehydrate_anchors_to_persisted_interrupted_turn(monkeypatch, tmp_path: Path) -> None:
     """A leftover on-disk partial snapshot feeds the interrupted-turn anchor."""
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
     config = _make_config(tmp_path, fixture_root)
@@ -1507,9 +1505,7 @@ def test_rehydrate_anchors_to_persisted_interrupted_turn(
     assert "edit_file (completed)" in rehydrated_prompt
 
 
-def test_interrupted_turn_number_is_not_reused(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_interrupted_turn_number_is_not_reused(monkeypatch, tmp_path: Path) -> None:
     """A killed turn's number is persisted and skipped by the next turn."""
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
     config = _make_config(tmp_path, fixture_root)

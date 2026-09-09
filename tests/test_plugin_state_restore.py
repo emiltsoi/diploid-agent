@@ -79,7 +79,9 @@ def test_restore_preserves_newer_live_file(tmp_path: Path, monkeypatch: pytest.M
     assert live.read_text() == "newer live content"
 
 
-def test_restore_recovers_missing_live_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_restore_recovers_missing_live_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     runtime = AgentRuntime(_make_config(tmp_path))
     chat_id = "chat1"
     _set_durable(runtime, monkeypatch, ["chat_working_memory.json"])

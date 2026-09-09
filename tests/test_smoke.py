@@ -27,7 +27,9 @@ from diploid_agent.config import (
 from diploid_agent.harness import ConversationHarness
 
 
-def _smoke_config(tmp_path: Path, fixture_root: Path, *, acp_resume_enabled: bool = False) -> Config:
+def _smoke_config(
+    tmp_path: Path, fixture_root: Path, *, acp_resume_enabled: bool = False
+) -> Config:
     engine = EngineConfig(
         bin=shutil.which("devin") or "devin",
         model="swe-1-7",
