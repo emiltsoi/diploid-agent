@@ -141,9 +141,10 @@ def _trim_to_last_section(text: str, limit: int) -> str:
 class FileMemoryBackend(MemoryBackend):
     """Local-file memory: transcript JSONL + MEMORY.md summaries.
 
-    Recall is a simple keyword search over the transcript and the memory file.
-    This is the fallback and the default. It is not semantic, but it never
-    blocks and never requires a network.
+    Recall is a simple keyword search over the transcript, the memory file, and
+    its `chat_MEMORY_archive.md` sibling if one exists. This is the fallback and
+    the default. It is not semantic, but it never blocks and never requires a
+    network.
     """
 
     def __init__(
@@ -179,6 +180,12 @@ class FileMemoryBackend(MemoryBackend):
     @property
     def _memory_path(self) -> Path:
         return self._session_dir / "chat_MEMORY.md"
+
+    @property
+    def _archive_path(self) -> Path:
+        return self._memory_path.with_name(
+            f"{self._memory_path.stem}_archive{self._memory_path.suffix}"
+        )
 
     def health(self) -> bool:
         return True
@@ -230,6 +237,12 @@ class FileMemoryBackend(MemoryBackend):
             return ""
         return path.read_text()
 
+    def _load_archive_text(self) -> str:
+        path = self._archive_path
+        if not path.exists():
+            return ""
+        return path.read_text()
+
     def _keyword_score(self, query: str, text: str) -> float:
         words = [w.lower() for w in re.findall(r"\w+", query) if len(w) > 2]
         if not words:
@@ -265,6 +278,14 @@ class FileMemoryBackend(MemoryBackend):
                     if score > 0:
                         candidates.append(("Memory:\n" + block, score))
 
+        archive_text = self._load_archive_text()
+        if archive_text:
+            for block in archive_text.split("\n## "):
+                if block.strip():
+                    score = self._keyword_score(query, block) * 0.9
+                    if score > 0:
+                        candidates.append(("Memory (archive):\n" + block, score))
+
         candidates.sort(key=lambda x: x[1], reverse=True)
         selected: list[str] = []
         total = 0
@@ -282,10 +303,12 @@ class FileMemoryBackend(MemoryBackend):
     def stats(self) -> dict[str, Any]:
         transcript = self.load_transcript()
         memory_size = self._memory_path.stat().st_size if self._memory_path.exists() else 0
+        archive_size = self._archive_path.stat().st_size if self._archive_path.exists() else 0
         return {
             "backend": "file",
             "transcript_turns": len(transcript) // 2,
             "memory_bytes": memory_size,
+            "archive_bytes": archive_size,
         }
 
 

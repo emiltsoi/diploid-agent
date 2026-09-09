@@ -54,6 +54,35 @@ def test_file_backend_recall_returns_empty_when_no_match(tmp_path: Path) -> None
     assert result == ""
 
 
+def test_file_backend_recall_searches_archive(tmp_path: Path) -> None:
+    backend = FileMemoryBackend(tmp_path, "chat-1")
+    backend.retain([MemoryItem(content="Postgres is the current database", tags=["memory"])])
+    backend._archive_path.write_text("## 2026-09-01 (memory)\n\nold project used SQLite\n")
+    result = backend.recall("SQLite")
+    assert "SQLite" in result
+    assert "Memory (archive):" in result
+    assert "Postgres" not in result
+
+
+def test_file_backend_recall_active_outranks_archive(tmp_path: Path) -> None:
+    backend = FileMemoryBackend(tmp_path, "chat-1")
+    backend.retain([MemoryItem(content="Postgres is the current database", tags=["memory"])])
+    backend._archive_path.write_text("## 2026-09-01 (memory)\n\nold project used a SQLite database\n")
+    result = backend.recall("database")
+    assert "Postgres" in result
+    assert "SQLite" in result
+    active_pos = result.find("Postgres")
+    archive_pos = result.find("SQLite")
+    assert active_pos < archive_pos
+
+
+def test_file_backend_recall_archive_no_match(tmp_path: Path) -> None:
+    backend = FileMemoryBackend(tmp_path, "chat-1")
+    backend._archive_path.write_text("## 2026-09-01 (memory)\n\nold project used SQLite\n")
+    result = backend.recall("completely unrelated")
+    assert result == ""
+
+
 def test_hindsight_spool_when_unhealthy(tmp_path: Path) -> None:
     backend = HindsightMemoryBackend(
         base_url="http://127.0.0.1:65535",
