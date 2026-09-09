@@ -352,7 +352,17 @@ class TurnDispatch:
                 with self._lock:
                     a = self.runtime._active_turns.get(chat_id)
                     if a:
-                        content = update.get("content") or {}
+                        raw_content = update.get("content") or {}
+                        if isinstance(raw_content, list):
+                            content = {}
+                            for item in raw_content:
+                                if isinstance(item, dict):
+                                    content = item
+                                    break
+                        elif isinstance(raw_content, dict):
+                            content = raw_content
+                        else:
+                            content = {}
                         title = (
                             content.get("title")
                             or content.get("kind")
