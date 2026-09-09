@@ -28,9 +28,10 @@ a restart notice, optional MCP servers and reusable skills, robust ACP transport
 recovery with ACP session resume (bounded resume budget, hard-timeout transport
 reset, and a dedicated callback worker so the stdout reader is never starved),
 a per-harness ACP lifecycle audit log, proactive context-window sizing with a
-`fresh` compact soul mode, smart short-term summarization, a `/promote` pocket
-that survives `fresh` resets, Hindsight retain that slices off working
-narration and bundles several turns per document, wake-time continuity
-narrative, plugin/body-state snapshot and restore, resume/load/new telemetry,
-and a rich plugin lifecycle hook surface for intercepting and extending
-conversations.
+`fresh` compact soul mode and tiered prompt assembly, smart short-term
+summarization, a `/promote` pocket that survives `fresh` resets, Hindsight
+retain that slices off working narration and bundles several turns per document,
+wake-time continuity narrative, interrupted-turn anchoring with monotonic turn
+numbering, plugin hot-reload, plugin/body-state snapshot and restore,
+resume/load/new telemetry, and a rich plugin lifecycle hook surface for
+intercepting and extending conversations.

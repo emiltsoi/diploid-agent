@@ -53,9 +53,13 @@ retention to a Hindsight memory server.
   restart waits for the current reply instead of cutting it off mid-sentence.
 - Preserves active-turn `current_intent` and `last_side_effect` breadcrumbs in
   `chat_active_turn.json`, carrying them into `chat_interrupted_turn.json` if the
-  process is killed before `record_turn` runs.
-- Sizes the next prompt with data from the last turn's actual token usage and a
-  hand-maintained chars-per-token table, instead of a fixed 4:1 guess.
+  process is killed before `record_turn` runs, and anchors them in the protected
+  continuation slot of rehydrated prompts. Turn numbers are reserved up front so
+  a killed turn's number is never reused.
+- Sizes the next prompt with live chars-per-token calibration from the session's
+  first-turn prompt metrics, instead of a fixed 4:1 guess; `fresh` compact mode
+  uses tiered prompt assembly with a `prompt_blocks` allowlist/denylist and a
+  capped recall escape hatch.
 - Pre-computes the smart short-term summary only when the recent-turn window is
   overflowing, avoiding unnecessary summarizer calls.
 - Records resume / load / new latency and outcome telemetry in the lifecycle log
@@ -65,6 +69,10 @@ retention to a Hindsight memory server.
 - Supports agent-to-agent mesh messaging via [`diploid-mesh`](https://github.com/emiltsoi/diploid-mesh), with `reply=yes/no/end` semantics, DSN recording, and per-turn nudges/caps to prevent mesh-send loops.
 - Exposes a plugin framework for per-chat state plugins; the built-in state plugins
   live in [`diploid-plugins`](https://github.com/emiltsoi/diploid-plugins).
+- Hot-reloads plugins without a service restart: `/plugin reload <name>`
+  deep-reloads the configured module and every already-imported submodule
+  (deepest-first) before dropping instances, so a broken edit keeps the old
+  plugin running.
 
 ## Quick start
 
@@ -120,6 +128,10 @@ curl -X POST http://127.0.0.1:4003/switch-model \
 
 - `/status` — current model, session id, working directory, context-window usage, ACP continuity state, and resume telemetry.
 - `/metrics` — token usage and latency for this chat.
+- `/mcp list | /mcp enable <name> | /mcp disable <name>` — manage per-chat MCP servers.
+- `/skill list | /skill enable <name> | /skill disable <name> | /skill create <name> <markdown>` — manage skills.
+- `/plugin list | /plugin enable <name> | /plugin disable <name> | /plugin reload <name>` — manage state plugins; `reload` hot-swaps the plugin's code without a restart.
+- `/state <plugin> <event> [args...]` — dispatch a state event to a plugin.
 - `/models` — list available ACP models.
 - `/model <name>` — switch this chat to a new model.
 - `/new` — start a fresh session.
@@ -127,6 +139,7 @@ curl -X POST http://127.0.0.1:4003/switch-model \
 - `/restart` — kill the ACP subprocess and start a fresh transport.
 - `/graceful-restart [service]` — schedule a graceful systemd restart of the named service (default: the current persona's `.service` unit).
 - `/subagent <prompt>` — start a background ACP subagent and continue the chat with its result when it finishes.
+- `/subagents` — list background subagents for this chat.
 - `/continue` — resume the previous turn after a partial reply or timeout.
 - `/sessions` — list numbered sessions.
 - `/resume <n>` — resume session `n`.

@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.6.0 — 2026-09-09
+
+### Summary
+Continuity and context-pressure release. The harness resumes stale ACP sessions
+with `session/resume`/`session/load` (bounded budgets, jittered retries),
+restores interrupted-turn intent into rehydrated prompts, and keeps turn
+numbering monotonic across kills and restarts. Fresh-session prompts are sized
+with live token calibration and tiered compact assembly, and graceful service
+restarts now drain in-flight turns instead of cutting them off.
+
+### Added
+- ACP continuity waves 1–7: resume-by-default stale-session recovery,
+  `acp_resume_timeout` / `acp_resume_after_restart_timeout` budgets, resume/load
+  retries with jitter, per-prompt lifecycle telemetry in `acp-lifecycle.jsonl`,
+  and `/status` resume counters.
+- Tiered compact prompt assembly for fresh sessions (`prompt_blocks`
+  allowlist/denylist), a real recent-turns tail, and a capped recall escape
+  hatch in `fresh` compact mode.
+- Live chars-per-token calibration from first-turn prompt metrics.
+- Interrupted-turn anchoring: `current_intent` / `last_side_effect` from
+  `chat_active_turn.json` / `chat_interrupted_turn.json` feed the protected
+  continuation slot of rehydrated prompts, with a disk fallback when the
+  in-process turn is gone.
+- Monotonic turn numbering via `SessionRecord.pending_turn_number`.
+- Global `DeliveryWorker` consuming the per-chat `ChatResult` outbox so wake,
+  mesh, dispatch, and subagent completions reach Telegram.
+- Mesh session chat mapping (`/mesh/chat-map`) and Telegram fallback routing.
+- Full skill content injection when the user message matches a skill trigger.
+- Promoted-pocket content-level dedup, auto-population, and
+  `record_system_note`; trimmed chat-memory blocks point at the archive file.
+- Hindsight retain bundles several turns per document and keeps only the
+  post-tool final segment of each reply.
+- Hard-timeout auto-resend (`acp_timeout_auto_resend`) with transcript marking.
+- Kill-and-resume smoke test exercising the interrupted-turn path.
+- Per-call ACP timeout plumbing for background calls (summaries, subagents,
+  session resume).
+
+### Changed
+- Plugin `reload` deep-hot-swaps package-based plugins (all already-imported
+  submodules, deepest-first) before dropping instances; a broken reload keeps
+  the old plugin running.
+- Plugin/body-state snapshots no longer roll back newer live files on restore.
+- `/stop` cancels the live ACP session instead of a stale recorded one.
+- Prompt updates are bounded (256 entries) and the prompt-callback queue is
+  bounded (2048) with drop-oldest + telemetry instead of backpressure.
+- Graceful restart resolves the correct persona unit instead of a hardcoded
+  name, and external `systemctl restart` drains active turns first.
+- The ACP transport restarts after a prompt hard timeout, and the watchdog no
+  longer kills replacement transports mid-recovery.
+- Telegram intermediate messages show only the uncommitted tail; streamed
+  thoughts ship as multi-part messages before the final reply; TurnWorker wakes
+  at the intermediate idle deadline so tool-call gaps split cleanly.
+
 ## 0.5.0 — 2026-08-30
 
 ### Summary
