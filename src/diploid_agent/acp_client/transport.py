@@ -15,6 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from diploid_agent.acp_client.control import ControlSocketInUseError
 from diploid_agent.acp_client.errors import (
     AcpError,
     AcpTransportError,
@@ -172,6 +173,141 @@ class AcpTransport:
         # Any request futures that have not been resolved by the reader should
         # be aborted now, including in-flight _run() callers.
         self._unblock_inflight("ACP transport closed")
+
+    def ensure_started(
+        self,
+        mcp_servers: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Start the ACP transport, writing the active MCP list first.
+
+        If the transport is already running with a different MCP server list,
+        restart it so `devin acp` picks up the new `mcp_config.json`.
+        """
+        # Serialize the whole close/start sequence: a second caller racing in
+        # swaps ``self._loop`` out from under the in-progress
+        # ``_start_transport`` task ("Future attached to a different loop")
+        # and leaks the subprocess it spawned.  Fall back to ``_lock`` for
+        # test fakes that do not model the lifecycle lock.
+        lifecycle_lock = getattr(self._client, "_lifecycle_lock", None)
+        if lifecycle_lock is None:
+            lifecycle_lock = self._client._lock
+        with lifecycle_lock:
+            self._ensure_started_inner(mcp_servers)
+
+    def _ensure_started_inner(
+        self,
+        mcp_servers: list[dict[str, Any]] | None = None,
+    ) -> None:
+        client = self._client
+        target = client._sandbox.normalize_mcp_servers(
+            mcp_servers if mcp_servers is not None else client._mcp_servers
+        )
+
+        while True:
+            transport_ready = False
+            with client._lock:
+                if self._is_transport_healthy():
+                    if client._sandbox.mcp_servers_key(target) == client._sandbox.mcp_servers_key(
+                        client._mcp_servers
+                    ):
+                        transport_ready = True
+                    else:
+                        # MCP list changed; restart outside the lock.
+                        needs_restart = True
+                else:
+                    needs_restart = False
+                    if self._initialized:
+                        logger.warning(
+                            "ACP transport was marked initialized but is not healthy; resetting"
+                        )
+                        self._cleanup_stale_transport()
+
+                    self._initialized = False
+                    self._transport_healthy = False
+                    self._loop = asyncio.new_event_loop()
+                    self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
+                    self._thread.start()
+
+                    client._sandbox.prepare(target)
+
+            if transport_ready:
+                # The transport is fine but the control listener can die on its
+                # own (e.g. an accept() OSError); re-bind the stable path. A
+                # live foreign owner degrades the control channel but must not
+                # fail an otherwise working turn.
+                try:
+                    client._control.ensure_listening()
+                except ControlSocketInUseError:
+                    logger.warning(
+                        "ACP control socket %s is held by a foreign listener; "
+                        "control channel degraded until the next restart",
+                        client._control.socket_path,
+                    )
+                client._watchdog.start()
+                return
+
+            if needs_restart:
+                lifecycle_log = getattr(client, "_lifecycle_log", None)
+                if lifecycle_log is not None:
+                    lifecycle_log.write(
+                        "transport.restart",
+                        reason="mcp_change",
+                        detail={"mcp_servers": [s.get("name") for s in (target or [])]},
+                    )
+                client._check_restart_backoff("mcp_change")
+                client._record_restart_attempt("mcp_change")
+                client.close()
+                # close() sets _initialized=False and clears the transport. Loop
+                # back to start a fresh one with the new target list.
+                continue
+
+            # Do not hold _lock while waiting for the transport to start; the
+            # background _send coroutine needs to acquire it to record request time,
+            # and holding it here would block the event loop.
+            last_exc: Exception | None = None
+            attempts = 2
+            for attempt in range(1, attempts + 1):
+                try:
+                    # Re-bind the stable control socket before every spawn so the
+                    # child's DIPLOID_CONTROL_SOCKET always points at a live
+                    # listener of this service.
+                    client._control.ensure_listening()
+                    self.run(client._start_transport(), timeout=client._startup_timeout)
+                    break
+                except ControlSocketInUseError:
+                    # A live foreign listener owns the stable path; handing the
+                    # child a socket owned by another process is worse than
+                    # failing the start cleanly.
+                    raise
+                except AcpTransportError as exc:
+                    last_exc = exc
+                    logger.warning(
+                        "ACP transport startup timed out (attempt %d/%d)", attempt, attempts
+                    )
+                    client.close()
+                    if attempt < attempts:
+                        with client._lock:
+                            self._loop = asyncio.new_event_loop()
+                            self._thread = threading.Thread(
+                                target=self._loop.run_forever, daemon=True
+                            )
+                            self._thread.start()
+                            client._sandbox.prepare(target)
+                    else:
+                        raise last_exc
+
+            with client._lock:
+                self._initialized = True
+                client._mcp_servers = target
+                self._transport_healthy = True
+            lifecycle_log = getattr(client, "_lifecycle_log", None)
+            if lifecycle_log is not None:
+                proc = self._proc
+                lifecycle_log.write(
+                    "transport.start",
+                    detail={"child_pid": proc.pid if proc is not None else None},
+                )
+            return
 
     def _check_accepting(self, op: str) -> None:
         """Raise if this transport generation can never deliver a response.
