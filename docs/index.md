@@ -33,5 +33,5 @@ summarization, a `/promote` pocket that survives `fresh` resets, Hindsight
 retain that slices off working narration and bundles several turns per document,
 wake-time continuity narrative, interrupted-turn anchoring with monotonic turn
 numbering, plugin hot-reload, plugin/body-state snapshot and restore,
-resume/load/new telemetry, and a rich plugin lifecycle hook surface for
-intercepting and extending conversations.
+a bridge/SURFACE first-person handoff, a body/felt state layer, and a rich
+plugin lifecycle hook surface for intercepting and extending conversations.

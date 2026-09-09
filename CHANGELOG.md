@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.1 — 2026-09-10
+
+### Summary
+
+Documentation and continuity release. README and GitHub Pages are updated to
+reflect the `bridge`/`SURFACE` handoff and the `body`/`felt` state layer, the
+Hindsight API contract page is restored, and the built-in plugin list in the
+docs is now complete.
+
+### Added
+
+- `docs/hindsight-api-contract.md` describing the Hindsight retain/recall/stats
+  HTTP contract.
+- README callouts for the BRIDGE/SURFACE handoff and the body/felt state layer.
+
+### Changed
+
+- `docs/state.md` now lists all built-in plugins from `diploid-plugins`
+  (`body`, `bridge`, `continuity`, `curriculum`, `identity`,
+  `persistent_memory`, `planner`, `self_management`, `self_state`,
+  `working_memory`).
+- `docs/index.md` one-sentence summary mentions bridge/SURFACE and body/felt.
+
 ## 0.6.0 — 2026-09-09
 
 ### Summary

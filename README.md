@@ -49,6 +49,11 @@ retention to a Hindsight memory server.
   a new ACP session.
 - Snapshots and restores plugin and body-state files across ACP transport
   restarts, keeping per-chat state intact when the child process is replaced.
+- Provides a first-person BRIDGE/SURFACE handoff (`bridge` plugin) so a wake after
+  a clean close reads a concise first-person re-entry from `chat_surface.md`.
+- Tracks per-chat body/felt state (`body` plugin) with event-keyed `felt_warmth`
+  and agent-authored `felt_summary`; reads are pure so merely rendering the body
+  does not age it.
 - Drains active turns before an external `systemctl restart` exits, so a service
   restart waits for the current reply instead of cutting it off mid-sentence.
 - Preserves active-turn `current_intent` and `last_side_effect` breadcrumbs in

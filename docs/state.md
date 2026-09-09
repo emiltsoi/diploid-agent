@@ -118,6 +118,14 @@ This is the mechanism for proposing summarization or other memory discipline beh
 
 The built-in state plugins now live in the [`diploid-plugins`](https://github.com/emiltsoi/diploid-plugins) package. Install them with `pip install diploid-agent[plugins]` (or `pip install diploid-plugins`).
 
+### `body`
+
+Per-chat physical/emotional body state that survives transport restarts. Includes a `felt` layer: `felt_warmth` (an ember that fades per wake/turn/event, not per wall-clock minute) and `felt_summary` (one agent-authored line of texture via the `body_felt` MCP tool). Reads are pure — `state_for_prompt` never mutates state.
+
+### `bridge`
+
+Writes a first-person BRIDGE at session close and surfaces a short SURFACE re-entry at the next wake. State is sourced from `chat_self_state.md`, `chat_body_state.json`, `chat_working_memory.json`, `chat_PROMOTED.md`, and `chat_TASKS.md`; output is written to `chat_surface.md` and `chat_bridge.md`.
+
 ### `continuity`
 
 Tracks wake state: time since last turn, last stop reason, instance identity, and any pending background dispatches.
@@ -135,6 +143,30 @@ Tracks a language-learning target, unit, and vocabulary. The `curriculum` skill 
 - `/state curriculum add_word hola hello`
 
 State is stored in `sessions/<chat_id>/chat_curriculum.json`. An MCP server `diploid-curriculum` is also exposed.
+
+### `identity`
+
+Keeps a chat-scoped self-narrative in `chat_SELF.md` with changelog tracking. Useful for persona-specific identity work.
+
+### `persistent_memory`
+
+Auto-recall and auto-promote of ` ```memory ` code blocks, including mid-stream promotion while the reply is still being written.
+
+### `planner`
+
+Turns a user request into an executable plan and stores it in chat state.
+
+### `self_management`
+
+No prompt block; only exposes the `diploid-self-management` MCP server for in-chat plugin enable/disable and approvals.
+
+### `self_state`
+
+Saves and resumes a first-person self-state note across sessions, with a guard that keeps the previous note if a new block is not written in `I am`/`We are`/`My` form.
+
+### `working_memory`
+
+A small, persistent working-memory scratchpad for each chat, stored in `chat_working_memory.json`.
 
 ## Adding custom plugins
 
