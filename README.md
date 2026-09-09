@@ -76,7 +76,19 @@ retention to a Hindsight memory server.
 
 ## Quick start
 
+From PyPI:
+
 ```bash
+pip install "diploid-agent[plugins]"   # harness + built-in state plugins
+pip install diploid-mesh               # optional: agent-to-agent mesh
+```
+
+The example config and systemd unit live in this repository, so clone it for
+those files — or for a development install:
+
+```bash
+git clone https://github.com/emiltsoi/diploid-agent.git
+cd diploid-agent
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
@@ -180,7 +192,7 @@ Browse the docs as a searchable site: **https://emiltsoi.github.io/diploid-agent
 
 ## Mesh support
 
-`diploid-agent` can participate in the cross-harness mesh via the [`diploid-mesh`](https://github.com/emiltsoi/diploid-mesh) plugin:
+`diploid-agent` can participate in the cross-harness mesh via the [`diploid-mesh`](https://github.com/emiltsoi/diploid-mesh) plugin (`pip install diploid-mesh`):
 
 - Receives Ed25519-signed `[mesh]` webhooks on `/mesh/receive` (and the OpenClaw alias `/plugins/openclaw-mesh/webhook`).
 - Wakes the diploid runtime with mesh context so the agent can reply.
