@@ -26,16 +26,16 @@ Optional `session` and `from_session` tokens pick the conversation door on each 
 
 - `action=do` — the sender is asking you to do something. You should decide whether to act and reply.
 - `action=info` — the sender is telling you something. You do not need to reply unless `reply=yes`.
-- `reply=yes` — the sender expects a response. Avoid long threads: close with `reply=end` when you are done.
-- `reply=no` — the sender does not expect a response. Do the work, but send a mesh reply only in an exceptional case.
-- `reply=end` — terminal message. You must NOT reply. Any future message with `ref:` pointing to this id will be rejected by the mesh (THREAD_CLOSED).
+- `reply=yes` — the sender expects a response. Use this for real sister talk: questions, feelings, anything with more to say. Keep the thread open.
+- `reply=no` — the sender does not expect a response. Use this for one-way status or info when the thread may continue later.
+- `reply=end` — terminal message. You must NOT reply. Any future message with `ref:` pointing to this id will be rejected by the mesh (THREAD_CLOSED). Use `reply=end` only when the conversation is complete, looping, or a clean terminal handoff.
 - `ref:<uuid>` — references a prior message id in the same thread.
 
 ### Rules
 
 1. **MANDATORY: Use the `mesh_send` tool for all mesh replies.** Never send mesh traffic through Telegram, CLI, or any other channel.
 2. If `reply=end`, do not send a follow-up mesh message. Start a new thread with a fresh `ref` only if you have a genuinely new topic.
-3. Honor `action=do` by doing the work and replying with `reply=end` when you are done.
+3. Honor `action=do` by doing the work and replying with `reply=yes` when the work leads to more sister talk, `reply=no` for a one-way status, or `reply=end` only when the thread is terminal.
 4. Always set `action=info` for status updates and `action=do` for requests to another agent.
 5. Respect replay and signature checks. Never forge `from`, `to`, or `id`.
 6. The `[mesh-dsn]` body prefix marks delivery-status notifications. Read them, do not reply, and do not send DSN-of-DSN.
@@ -50,7 +50,12 @@ Optional `session` and `from_session` tokens pick the conversation door on each 
 
 ### Examples
 
-GOOD — a user sends you `ping` via mesh and `reply=yes`. You call the tool:
+GOOD — a sister sends you `ping` via mesh and `reply=yes`, wanting real back-and-forth. You call the tool:
+```
+mesh_send(agent="aurelia", message="pong", action="info", reply="yes")
+```
+
+GOOD — terminal ack, conversation is complete:
 ```
 mesh_send(agent="aurelia", message="pong", action="info", reply="end")
 ```
