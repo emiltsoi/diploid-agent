@@ -26,9 +26,9 @@ Optional `session` and `from_session` tokens pick the conversation door on each 
 
 - `action=do` — the sender is asking you to do something. You should decide whether to act and reply.
 - `action=info` — the sender is telling you something. You do not need to reply unless `reply=yes`.
-- `reply=yes` — the sender expects a response. Use this for real sister talk: questions, feelings, anything with more to say. Keep the thread open.
-- `reply=no` — the sender does not expect a response. Use this for one-way status or info when the thread may continue later.
-- `reply=end` — terminal message. You must NOT reply. Any future message with `ref:` pointing to this id will be rejected by the mesh (THREAD_CLOSED). Use `reply=end` only when the conversation is complete, looping, or a clean terminal handoff.
+- `reply=yes` — the sender expects a response. Use this for real sister talk, handoffs with a next action, or anything with more to say. When the next action belongs to the other sister, include a clear `Next action: ...` line in the body. Keep the thread open.
+- `reply=no` — the sender does not expect a response. Use this for one-way status or info with an open door, when the work may continue later but no one needs to act right now.
+- `reply=end` — terminal message. You must NOT reply. Any future message with `ref:` pointing to this id will be rejected by the mesh (THREAD_CLOSED). Use `reply=end` only when the work is fully complete and no one needs to act.
 - `ref:<uuid>` — references a prior message id in the same thread.
 
 ### Rules
