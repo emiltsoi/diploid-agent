@@ -194,8 +194,9 @@ class AgentRuntime(RuntimeAPI):
         self._auto_continue_globally_suppressed_until: float = 0.0
 
         # Plugins can declare MCP servers and skills; add them before McpManager.
+        plugins = list(self.config.harness.plugins)
         self._plugins = PluginManager(
-            plugins=list(self.config.harness.plugins),
+            plugins=plugins,
             sessions_root=self.sessions_root,
             instance_id=self.instance_id,
             instance_started_at=self.instance_started_at,

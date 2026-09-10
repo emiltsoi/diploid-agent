@@ -90,6 +90,25 @@ class PersonaConfig(BaseModel):
         return v.expanduser() if v is not None else None
 
 
+class AuthorshipConfig(BaseModel):
+    """Per-plugin toggles for self-wake, self-inference, and felt authorship.
+
+    The master on/off switch is the plugin's own ``enabled`` flag.  These
+    settings live inside ``PluginConfig.config`` so the contract is owned by
+    the authorship plugin, not the runtime.
+    """
+
+    self_wake_enabled: bool = False
+    self_inference_enabled: bool = False
+    felt_authorship_enabled: bool = False
+    user_override: list[str] = Field(default_factory=list)
+
+    @field_validator("user_override", mode="before")
+    @classmethod
+    def _ensure_list(cls, v: Any) -> list[str]:
+        return v if isinstance(v, list) else []
+
+
 class TelegramConfig(BaseModel):
     enabled: bool = False
     webhook_port: int = 8080

@@ -62,6 +62,7 @@ class ContextBuilder:
             "self_narrative",
             "self_state",
             "body",
+            "authorship",
             "wake",
             "bridge",
             "mesh",
@@ -109,6 +110,7 @@ class ContextBuilder:
         "working_memory",
         "body",
         "self_state",
+        "authorship",
         "mesh",
         "metrics",
         "skills",
@@ -122,7 +124,7 @@ class ContextBuilder:
     WAKE_TRIM_STEPS: ClassVar[list[frozenset[str]]] = [
         frozenset({"metrics"}),
         frozenset({"memory", "chat_memory", "persistent_memory", "mesh"}),
-        frozenset({"promoted", "recall", "self_narrative", "working_memory", "body", "self_state", "bridge", "checkpoint"}),
+        frozenset({"promoted", "recall", "self_narrative", "working_memory", "body", "self_state", "authorship", "bridge", "checkpoint"}),
     ]
 
     def __init__(
@@ -1231,6 +1233,7 @@ class ContextBuilder:
             "working_memory": [],
             "body": [],
             "self_state": [],
+            "authorship": [],
             "mesh": [],
             "metrics": [],
             "skills": [],
@@ -1528,6 +1531,7 @@ class ContextBuilder:
             "working_memory": [],
             "body": [],
             "self_state": [],
+            "authorship": [],
             "mesh": [],
             "metrics": [],
             "skills": [],
