@@ -230,7 +230,7 @@ class RuntimeActions:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to load memory stats for %s: %s", chat_id, exc)
 
-        context_usage = self._runtime._context_usage(record)
+        context_usage = self._runtime._runtime_metrics._context_usage(record)
         background_tasks = self._runtime.subagent_status(chat_id)
 
         active_turn = self._runtime.turn_status(chat_id, wait=0.0)
@@ -300,13 +300,13 @@ class RuntimeActions:
     def summarize(self, chat_id: str) -> ChatResult:
         """Trigger a manual summarization for a chat."""
         record = self._runtime._active_record(chat_id)
-        model = self._runtime._model(record)
+        model = self._runtime._prompts._model(record)
         mgr = self._runtime._memory_manager(chat_id)
         self._runtime._call_unlocked(mgr._summarize, model)
 
         notice = None
         if record:
-            notice = self._runtime._check_chat_memory_transition(chat_id, record)
+            notice = self._runtime._prompts._check_chat_memory_transition(chat_id, record)
             self._runtime._append_record(record)
 
         return ChatResult(reply="Summarization complete.", notice=notice)

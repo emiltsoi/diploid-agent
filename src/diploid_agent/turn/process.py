@@ -270,8 +270,8 @@ class TurnProcess:
                 )
 
             record = self.runtime._active_record(chat_id)
-            current_model = self.runtime._model(record)
-            route = self.runtime.resolve_model(chat_id, user_message, record)
+            current_model = self.runtime._prompts._model(record)
+            route = self.runtime._prompts.resolve_model(chat_id, user_message, record)
             if route.budget_exceeded:
                 return ChatResult(reply="", notice=route.notice)
             budget_notice = route.notice
@@ -692,7 +692,7 @@ class TurnProcess:
                 reply = self._final_reply_text(active, result.reply)
 
             if result.partial:
-                partial = self.runtime._partial_notice(result, continue_word=continue_word)
+                partial = self.runtime._prompts._partial_notice(result, continue_word=continue_word)
                 notice = partial if notice is None else f"{notice}\n\n{partial}"
             if rehydrate_notice:
                 notice = rehydrate_notice if notice is None else f"{rehydrate_notice}\n\n{notice}"
@@ -719,7 +719,7 @@ class TurnProcess:
                 if record_is_new:
                     if not is_new:
                         session_number = self.runtime._next_session_number(chat_id)
-                    record = self.runtime._create_record(
+                    record = self.runtime._prompts._create_record(
                         chat_id,
                         session_number,
                         session_id,
@@ -825,7 +825,7 @@ class TurnProcess:
                 )
                 self.runtime._plugins.on_turn_end(chat_id, turn)
 
-                transition = self.runtime._check_chat_memory_transition(chat_id, record)
+                transition = self.runtime._prompts._check_chat_memory_transition(chat_id, record)
                 if transition:
                     turn.notice = _join_notices(turn.notice, transition)
 

@@ -482,7 +482,7 @@ def test_system_notice_uses_recall_numbers_not_disk_size(monkeypatch, tmp_path: 
         total=0,
     )
 
-    notice = harness._build_system_notice(persona, recall, chat_status)
+    notice = harness._prompts._build_system_notice(persona, recall, chat_status)
     assert notice is not None
     # The notice should use recall's loaded/total, not the raw file size.
     assert "17539 of 17541" in notice
@@ -517,7 +517,7 @@ def test_chat_memory_exceeded_flag_tracks_file_not_prompt(monkeypatch, tmp_path:
             turn_number=i + 1,
         )
     # The MEMORY.md file is still small; only recall is truncated.
-    prompt, _, flags = harness._build_first_prompt("chat-flag", "hello keyword")
+    prompt, _, flags = harness._prompts._build_first_prompt("chat-flag", "hello keyword")
     assert (
         "Chat memory (short-term transcript + recalled content)" in prompt
         or not prompt.startswith("##")
@@ -529,7 +529,7 @@ def test_chat_memory_exceeded_flag_tracks_file_not_prompt(monkeypatch, tmp_path:
     memory_path = Path(mgr.chat_memory_path)
     memory_path.parent.mkdir(parents=True, exist_ok=True)
     memory_path.write_text("x" * 9000)
-    _, _, flags = harness._build_first_prompt("chat-flag", "hello keyword")
+    _, _, flags = harness._prompts._build_first_prompt("chat-flag", "hello keyword")
     assert flags["chat_memory_exceeded"] is True
 
 
@@ -567,7 +567,7 @@ def test_system_notice_uses_chat_status_when_file_exceeds(tmp_path: Path) -> Non
         total=0,
     )
 
-    notice = harness._build_system_notice(persona, recall, chat_status)
+    notice = harness._prompts._build_system_notice(persona, recall, chat_status)
     assert notice is not None
     assert "8192 of 18555" in notice
     assert "(limit: 8192)" in notice
@@ -589,7 +589,7 @@ def test_process_uses_telegram_message_registry_for_bot_reply(monkeypatch, tmp_p
 
     monkeypatch.setattr(harness.client, "create_session", fake_create_session)
 
-    registry_path = harness._telegram_message_registry_path("chat-reg")
+    registry_path = harness._prompts._telegram_message_registry_path("chat-reg")
     registry_path.parent.mkdir(parents=True, exist_ok=True)
     entry = {
         "message_id": 42,
@@ -1323,10 +1323,10 @@ def test_continuation_triggers_match_punctuation(monkeypatch, tmp_path: Path) ->
     config = _make_config(tmp_path, fixture_root)
     harness = ConversationHarness(config)
 
-    assert harness.is_continuation_message("Continue.") is True
-    assert harness.is_continuation_message("  Go On!  ") is True
-    assert harness.is_continuation_message("proceed") is True
-    assert harness.is_continuation_message("what to continue") is False
+    assert harness._prompts.is_continuation_message("Continue.") is True
+    assert harness._prompts.is_continuation_message("  Go On!  ") is True
+    assert harness._prompts.is_continuation_message("proceed") is True
+    assert harness._prompts.is_continuation_message("what to continue") is False
 
 
 def test_harness_has_dispatch_store_and_notifier(tmp_path: Path) -> None:

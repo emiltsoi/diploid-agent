@@ -102,7 +102,7 @@ class RuntimeSubagent:
         if record is None:
             return ChatResult(reply="No active session for this chat.")
 
-        use_model = model or self._runtime._model(record)
+        use_model = model or self._runtime._prompts._model(record)
         started_at = time.time()
         dispatch = self.dispatch_store.add(
             chat_id,

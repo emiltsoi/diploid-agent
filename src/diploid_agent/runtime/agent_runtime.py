@@ -29,10 +29,10 @@ from diploid_agent.config import (
 )
 from diploid_agent.context import ContextBuilder
 from diploid_agent.dispatch import Dispatch, DispatchStatus, DispatchStore
-from diploid_agent.engine import AgentEngine, TurnResult, build_engine
-from diploid_agent.engine.router import ModelRoute, ModelRouter
+from diploid_agent.engine import AgentEngine, build_engine
+from diploid_agent.engine.router import ModelRouter
 from diploid_agent.mcp import McpManager
-from diploid_agent.memory import MemoryManager, RecallResult
+from diploid_agent.memory import MemoryManager
 from diploid_agent.metrics import MetricsCollector
 from diploid_agent.models import (
     ActiveTurn,
@@ -42,7 +42,6 @@ from diploid_agent.models import (
     SessionRecord,
     WakeEvent,
 )
-from diploid_agent.persona_composer import PersonaPrompt
 from diploid_agent.plan.manager import PlanManager
 from diploid_agent.plan.models import Plan, Task, TaskStatus, TaskType
 from diploid_agent.plugin_incidents import PluginIncidentStore
@@ -853,185 +852,7 @@ class AgentRuntime(RuntimeAPI):
         self._enqueue_plan_task_wake(plan, task)
         self._maybe_enqueue_plan_conclusion(plan)
 
-    def _build_system_notice(
-        self,
-        persona: PersonaPrompt,
-        recall: RecallResult,
-        chat_status: dict[str, Any],
-    ) -> str | None:
-        """Build a notice when memory is truncated for a first turn prompt."""
-        return self._prompts._build_system_notice(persona, recall, chat_status)
-
-    def _trim_reply_quote_to(self, quote: str, limit: int) -> str:
-        """Trim a reply-to quote to a given budget, with a truncation marker."""
-        return self._prompts._trim_reply_quote_to(quote, limit)
-
-    def _trim_reply_quote(self, quote: str) -> str:
-        """Trim a reply-to quote to the configured budget, with a truncation marker."""
-        return self._prompts._trim_reply_quote(quote)
-
-    def _telegram_message_registry_path(self, chat_id: str) -> Path:
-        return self._prompts._telegram_message_registry_path(chat_id)
-
-    def _load_telegram_message_registry(self, chat_id: str) -> dict[int, dict[str, Any]]:
-        return self._prompts._load_telegram_message_registry(chat_id)
-
-    def _format_user_message(
-        self,
-        user_message: str,
-        reply_to: str | None = None,
-        reply_to_is_bot: bool | None = None,
-        reply_to_message_id: int | None = None,
-        chat_id: str | None = None,
-    ) -> str:
-        """Wrap the user message with a labeled reply-to reference if present."""
-        return self._prompts._format_user_message(
-            user_message,
-            reply_to=reply_to,
-            reply_to_is_bot=reply_to_is_bot,
-            reply_to_message_id=reply_to_message_id,
-            chat_id=chat_id,
-        )
-
-    def _build_first_prompt(
-        self,
-        chat_id: str,
-        user_message: str,
-        *,
-        model: str | None = None,
-        reply_to: str | None = None,
-        reply_to_is_bot: bool | None = None,
-        reply_to_message_id: int | None = None,
-        continuation_anchor: str | None = None,
-    ) -> tuple[str, str | None, dict[str, bool]]:
-        """Build a first-turn prompt and any memory truncation notice."""
-        return self._prompts._build_first_prompt(
-            chat_id,
-            user_message,
-            model=model,
-            reply_to=reply_to,
-            reply_to_is_bot=reply_to_is_bot,
-            reply_to_message_id=reply_to_message_id,
-            continuation_anchor=continuation_anchor,
-        )
-
-    def _follow_up_prompt(
-        self,
-        user_message: str,
-        *,
-        chat_id: str,
-        reply_to: str | None = None,
-        reply_to_is_bot: bool | None = None,
-        reply_to_message_id: int | None = None,
-        continuation_anchor: str | None = None,
-    ) -> str:
-        """Build a follow-up prompt for an existing session."""
-        return self._prompts._follow_up_prompt(
-            user_message,
-            chat_id=chat_id,
-            reply_to=reply_to,
-            reply_to_is_bot=reply_to_is_bot,
-            reply_to_message_id=reply_to_message_id,
-            continuation_anchor=continuation_anchor,
-        )
-
-    def _model(self, record: SessionRecord | None) -> str:
-        return self._prompts._model(record)
-
-    def resolve_model(
-        self,
-        chat_id: str,
-        user_message: str,
-        record: SessionRecord | None = None,
-    ) -> ModelRoute:
-        """Resolve the model for a user message, checking budget and lane rules."""
-        return self._prompts.resolve_model(chat_id, user_message, record=record)
-
-    def routing_context(
-        self,
-        chat_id: str,
-        record: SessionRecord | None = None,
-    ) -> dict[str, Any]:
-        """Return the current routing/budget context for a chat."""
-        return self._prompts.routing_context(chat_id, record=record)
-
-    def _partial_notice(self, result: TurnResult, continue_word: str = "Continue") -> str:
-        """Return a user-facing notice for an interrupted/partial ACP turn."""
-        return self._prompts._partial_notice(result, continue_word=continue_word)
-
-    def is_continuation_message(self, user_message: str) -> bool:
-        """Return True if the user message is a continuation trigger."""
-        return self._prompts.is_continuation_message(user_message)
-
-    def _continuation_anchor(self, record: SessionRecord | None, user_message: str) -> str | None:
-        """Return a prompt anchor when resuming an interrupted turn."""
-        return self._prompts._continuation_anchor(record, user_message)
-
-    def _turn_number(self, record: SessionRecord | None) -> int:
-        return self._prompts._turn_number(record)
-
-    def _create_record(
-        self,
-        chat_id: str,
-        session_number: int,
-        session_id: str,
-        model: str,
-        reply: str,
-        memory_flags: dict[str, bool],
-        *,
-        parent: int | None = None,
-        label: str | None = None,
-    ) -> SessionRecord:
-        return self._prompts._create_record(
-            chat_id,
-            session_number,
-            session_id,
-            model,
-            reply,
-            memory_flags,
-            parent=parent,
-            label=label,
-        )
-
-    def _start_new_session(
-        self,
-        chat_id: str,
-        prompt: str,
-        model: str,
-        *,
-        mcp_servers: list[dict[str, Any]] | None = None,
-        skill_names: set[str] | None = None,
-        on_chunk: Any | None = None,
-        on_update: Any | None = None,
-    ) -> tuple[TurnResult, str]:
-        """Create a new ACP session and return the prompt result + session id."""
-        return self._prompts._start_new_session(
-            chat_id,
-            prompt,
-            model,
-            mcp_servers=mcp_servers,
-            skill_names=skill_names,
-            on_chunk=on_chunk,
-            on_update=on_update,
-        )
-
-    def _check_chat_memory_transition(self, chat_id: str, record: SessionRecord) -> str | None:
-        """Return a system notice if the chat memory just exceeded its cap."""
-        return self._prompts._check_chat_memory_transition(chat_id, record)
-
-    def _check_persona_memory_transition(self, record: SessionRecord) -> str | None:
-        """Return a system notice if the persona memory just exceeded its cap."""
-        return self._prompts._check_persona_memory_transition(record)
-
     # ---------------------------------------------------------------- public API
-
-    def get_model(self, chat_id: str) -> str:
-        """Return the model currently used for a chat, or the default."""
-        return self._prompts.get_model(chat_id)
-
-    def _context_usage(self, record: SessionRecord) -> dict[str, Any]:
-        """Return context-window and prompt-budget usage for a chat record."""
-        return self._runtime_metrics._context_usage(record)
 
     def status(self, chat_id: str) -> dict[str, Any]:
         """Return the harness-recorded status for a chat."""

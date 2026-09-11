@@ -113,7 +113,7 @@ class TurnSession:
             notice=notice,
         )
 
-        transition = self.runtime._check_chat_memory_transition(chat_id, record)
+        transition = self.runtime._prompts._check_chat_memory_transition(chat_id, record)
         if transition:
             notice = transition if notice is None else f"{notice}\n\n{transition}"
 
@@ -146,7 +146,7 @@ class TurnSession:
     ) -> ChatResult:
         """Archive any active session and start a fresh ACP session for the chat."""
         record = self.runtime._active_record(chat_id)
-        current_model = self.runtime._model(record)
+        current_model = self.runtime._prompts._model(record)
         if record and desired_model == current_model and kind == "switch_model":
             return ChatResult(reply=f"Already using model `{desired_model}` for this chat.")
 
@@ -205,7 +205,7 @@ class TurnSession:
         use_model = pctx.model or use_model
 
         result, session_id = self.runtime._call_unlocked(
-            self.runtime._start_new_session,
+            self.runtime._prompts._start_new_session,
             chat_id,
             prompt,
             use_model,
@@ -214,7 +214,7 @@ class TurnSession:
         )
         reply = result.reply
 
-        new_record = self.runtime._create_record(
+        new_record = self.runtime._prompts._create_record(
             chat_id,
             session_number,
             session_id,
@@ -254,7 +254,7 @@ class TurnSession:
     def switch_model(self, chat_id: str, model: str) -> ChatResult:
         """Switch the model for a chat by starting a fresh Devin session."""
         record = self.runtime._active_record(chat_id)
-        current_model = self.runtime._model(record)
+        current_model = self.runtime._prompts._model(record)
         return self._start_fresh_session(
             chat_id,
             desired_model=model,
@@ -272,7 +272,7 @@ class TurnSession:
         plugin_overrides = record.plugin_overrides if record else None
         return self._start_fresh_session(
             chat_id,
-            desired_model=model or self.runtime._model(record),
+            desired_model=model or self.runtime._prompts._model(record),
             kind="new",
             label="new session",
             system_message="new session started",
@@ -394,7 +394,7 @@ class TurnSession:
                 self.runtime._append_record(source)
 
                 result, session_id = self.runtime._call_unlocked(
-                    self.runtime._start_new_session,
+                    self.runtime._prompts._start_new_session,
                     chat_id,
                     prompt,
                     use_model,
@@ -603,7 +603,7 @@ class TurnSession:
             memory_flags = pctx.memory_flags
             use_model = pctx.model or use_model
             result, session_id = self.runtime._call_unlocked(
-                self.runtime._start_new_session,
+                self.runtime._prompts._start_new_session,
                 chat_id,
                 prompt,
                 use_model,
@@ -613,7 +613,7 @@ class TurnSession:
             )
             reply = result.reply
 
-        new_record = self.runtime._create_record(
+        new_record = self.runtime._prompts._create_record(
             chat_id,
             new_number,
             session_id,

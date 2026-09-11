@@ -195,7 +195,6 @@ def test_agent_runtime_non_turn_public_api(tmp_path: Path) -> None:
         "skill_create",
         "get_metrics",
         "list_models",
-        "get_model",
         "status",
         "subagent_status",
         "list_sessions",
@@ -247,14 +246,14 @@ def test_conversation_harness_delegates_to_runtime(tmp_path: Path) -> None:
 
     # Private helpers that live on the runtime are accessible via __getattr__.
     for name in (
-        "is_continuation_message",
-        "_build_first_prompt",
         "_memory_manager",
         "_active_record",
         "_chat_dir",
-        "_telegram_message_registry_path",
     ):
         assert hasattr(harness, name)
+    assert hasattr(harness, "_prompts")
+    assert hasattr(harness._prompts, "_build_first_prompt")
+    assert hasattr(harness._prompts, "_telegram_message_registry_path")
 
 
 class _ChunkingEngine(AgentEngine):

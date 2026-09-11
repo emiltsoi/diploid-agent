@@ -254,9 +254,9 @@ class TurnDispatch:
             if record is None:
                 return ChatResult(reply="No active session for this chat.")
 
-            use_model = self.runtime._model(record)
+            use_model = self.runtime._prompts._model(record)
             user_message = "Continue"
-            route = self.runtime.resolve_model(chat_id, user_message, record)
+            route = self.runtime._prompts.resolve_model(chat_id, user_message, record)
             if route.budget_exceeded:
                 return ChatResult(reply="", notice=route.notice)
             budget_notice = route.notice
@@ -543,7 +543,7 @@ class TurnDispatch:
             )
             notice: str | None = None
             if turn_result and turn_result.partial:
-                partial = self.runtime._partial_notice(turn_result, continue_word=continue_word)
+                partial = self.runtime._prompts._partial_notice(turn_result, continue_word=continue_word)
                 notice = partial if notice is None else f"{notice}\n\n{partial}"
             if rehydrate_notice:
                 notice = rehydrate_notice if notice is None else f"{rehydrate_notice}\n\n{notice}"
@@ -563,7 +563,7 @@ class TurnDispatch:
 
             with self._lock:
                 if is_new:
-                    record = self.runtime._create_record(
+                    record = self.runtime._prompts._create_record(
                         chat_id,
                         session_number,
                         session_id,
@@ -673,7 +673,7 @@ class TurnDispatch:
                     context=dispatch.context or "continuation",
                 )
 
-                transition = self.runtime._check_chat_memory_transition(chat_id, record)
+                transition = self.runtime._prompts._check_chat_memory_transition(chat_id, record)
                 if transition:
                     turn.notice = _join_notices(turn.notice, transition)
 

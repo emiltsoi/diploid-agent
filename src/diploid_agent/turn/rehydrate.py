@@ -393,7 +393,7 @@ class TurnRehydrate:
         for attempt in range(2):
             try:
                 result, session_id = self.runtime.call_engine_unlocked(
-                    self.runtime._start_new_session,
+                    self.runtime._prompts._start_new_session,
                     chat_id,
                     pctx.prompt,
                     model,
