@@ -1166,6 +1166,163 @@ class ContextBuilder:
 
     # ---------------------------------------------------------------- prompt builders
 
+    def _assemble_prompt(
+        self,
+        chat_id: str,
+        record: SessionRecord | None,
+        effective_model: str,
+        formatted: str,
+        persona: PersonaPrompt,
+        recall: RecallResult,
+        short_term: str,
+        chat_status: dict[str, Any],
+        promoted: dict[str, Any],
+        chat_mem: str | None,
+        build_ctx: PromptBuildContext,
+        system_parts: list[str],
+        skill_names: set[str] | None,
+        force_slots: set[str] | None,
+        is_compact: bool,
+        soul_mode: str,
+        is_first: bool,
+        record_persona: bool = True,
+        record_chat: bool = True,
+        chat_memory_path: Path | None = None,
+        last_prompt_time: float | None = None,
+        force_new_session: bool = False,
+        notice: str = "",
+        metrics_compact: bool = False,
+        wake_budget: int | None = None,
+    ) -> PromptContext:
+        """Build a ``PromptContext`` from the loaded prompt components.
+
+        This is the shared tail of ``build_first`` and ``build_follow_up``:
+        it assembles the slot dictionary, applies context-pressure formatting,
+        records file mtimes, runs plugin slot fills, and renders the prompt.
+        """
+        if chat_id not in self._last_blocks:
+            self._reset_cache(chat_id)
+
+        slots: dict[str, list[str]] = {
+            "identity": [persona.text],
+            "self_narrative": [],
+            "system_notice": [],
+            "memory": [],
+            "promoted": [],
+            "recall": [],
+            "chat_memory": [],
+            "persistent_memory": [],
+            "wake": [],
+            "working_memory": [],
+            "body": [],
+            "self_state": [],
+            "authorship": [],
+            "mesh": [],
+            "metrics": [],
+            "skills": [],
+            "continuation": [],
+            "user": [formatted],
+        }
+
+        if is_compact:
+            system_parts.append(self._context_budget_line(record, soul_mode))
+        if system_parts:
+            slots["system_notice"].append(self._format_system_notice(system_parts, is_compact))
+        if persona.memory_text:
+            slots["memory"].append(
+                f"## Current memory ({persona.memory_path.name})\n\n{persona.memory_text}"
+            )
+        if promoted["text"]:
+            slots["promoted"].append(f"## Promoted memory\n\n{promoted['text']}")
+
+        recall_block, chat_block = self._combined_chat_memory_block(recall, short_term, chat_mem)
+        if recall_block:
+            slots["recall"].append(recall_block)
+        if chat_block:
+            slots["chat_memory"].append(chat_block)
+
+        # Record mtimes for the files we just loaded so follow-ups can tell if
+        # persona or chat memory has changed.
+        if record_persona:
+            self._record_file(chat_id, persona.memory_path)
+        if record_chat and chat_memory_path is not None:
+            self._record_file(chat_id, chat_memory_path)
+
+        self.plugin_manager.fill_prompt_slots(
+            chat_id,
+            slots,
+            is_first=is_first,
+            rehydrated=build_ctx.rehydrated,
+            last_blocks=self._last_blocks[chat_id],
+            last_prompt_time=last_prompt_time,
+            force_slots=force_slots,
+            compact=is_compact,
+        )
+
+        metrics_context = self.metrics_context_for_prompt(chat_id, compact=metrics_compact)
+        if metrics_context:
+            slots["metrics"].append(metrics_context)
+
+        if build_ctx.continuation_anchor:
+            slots["continuation"].append(build_ctx.continuation_anchor)
+        if build_ctx.interrupted_turn:
+            slots["continuation"].append(build_ctx.interrupted_turn)
+
+        skill_context = self._skill_context(chat_id, skill_names, compact=True, message=formatted)
+        if skill_context:
+            slots["skills"].append(skill_context)
+
+        force_slots = force_slots or set()
+        self._apply_prompt_blocks(slots, is_compact, force_slots=force_slots)
+
+        # Remember when this prompt was built so plugins can use mtime-based
+        # change detection on the next follow-up.
+        self._last_prompt_time[chat_id] = time.time()
+
+        prompt = self._render_slots(slots)
+
+        if wake_budget is not None and is_compact:
+            estimated = self._estimate_prompt_tokens(prompt, record)
+            wake_budget_line = self._wake_context_budget_line(record, soul_mode, estimated)
+            if wake_budget_line:
+                # Add the wake budget/pressure line and re-render.
+                system_parts.append(wake_budget_line)
+                slots["system_notice"] = [self._format_system_notice(system_parts, is_compact)]
+                prompt = self._render_slots(slots)
+
+            # If the prompt still exceeds the wake budget, drop lower-tier slots.
+            if self._estimate_prompt_tokens(prompt, record) > wake_budget:
+                slots, prompt = self._trim_slots_to_budget(slots, record, wake_budget)
+                estimated = self._estimate_prompt_tokens(prompt, record)
+                wake_budget_line = self._wake_context_budget_line(record, soul_mode, estimated)
+                if wake_budget_line and system_parts:
+                    if system_parts[-1].startswith("[Wake context budget:"):
+                        system_parts[-1] = wake_budget_line
+                    else:
+                        system_parts.append(wake_budget_line)
+                    slots["system_notice"] = [self._format_system_notice(system_parts, is_compact)]
+                    prompt = self._render_slots(slots)
+
+        flags = {
+            "persona_memory_exceeded": persona.memory_truncated,
+            # The record's chat_memory_exceeded flag should track only the
+            # on-disk chat memory file size, not the prompt's recall/context
+            # truncation. Prompt truncation is reported in the system notice
+            # and is not a persistent file-exceeded state.
+            "chat_memory_exceeded": chat_status.get("exceeded", False),
+        }
+
+        pctx = PromptContext(
+            prompt,
+            notice,
+            flags,
+            slots,
+            model=effective_model,
+            force_new_session=force_new_session,
+            compact=is_compact,
+        )
+        return self.plugin_manager.after_prompt_built(chat_id, pctx)
+
     def build_first(
         self,
         chat_id: str,
@@ -1260,46 +1417,6 @@ class ContextBuilder:
         persona.total = pm["total"]
         notice = self.build_system_notice(persona, recall, chat_status)
 
-        slots: dict[str, list[str]] = {
-            "identity": [persona.text],
-            "self_narrative": [],
-            "system_notice": [],
-            "memory": [],
-            "promoted": [],
-            "recall": [],
-            "chat_memory": [],
-            "persistent_memory": [],
-            "wake": [],
-            "working_memory": [],
-            "body": [],
-            "self_state": [],
-            "authorship": [],
-            "mesh": [],
-            "metrics": [],
-            "skills": [],
-            "continuation": [],
-            "user": [formatted],
-        }
-
-        rehydration_notice = self._rehydration_notice(build_ctx.rehydration_reason)
-        wake_narrative = ""
-        if rehydrated or (record is not None and self.lifecycle_log is not None):
-            wake_narrative = self._wake_narrative(
-                chat_id, self._last_wake_event(chat_id), record=record
-            )
-
-        system_parts = [p for p in [rehydration_notice, wake_narrative, notice] if p]
-        if is_compact:
-            system_parts.append(self._context_budget_line(record, "fresh"))
-        if system_parts:
-            slots["system_notice"].append(self._format_system_notice(system_parts, is_compact))
-        if persona.memory_text:
-            slots["memory"].append(
-                f"## Current memory ({persona.memory_path.name})\n\n{persona.memory_text}"
-            )
-        if promoted["text"]:
-            slots["promoted"].append(f"## Promoted memory\n\n{promoted['text']}")
-
         if is_compact and not is_fresh_memory_query:
             chat_mem = self._chat_memory_summary(chat_status)
         else:
@@ -1309,88 +1426,45 @@ class ContextBuilder:
                 )
             )
 
-        recall_block, chat_block = self._combined_chat_memory_block(recall, short_term, chat_mem)
-        if recall_block:
-            slots["recall"].append(recall_block)
-        if chat_block:
-            slots["chat_memory"].append(chat_block)
+        rehydration_notice = self._rehydration_notice(build_ctx.rehydration_reason)
+        wake_narrative = ""
+        if rehydrated or (record is not None and self.lifecycle_log is not None):
+            wake_narrative = self._wake_narrative(
+                chat_id, self._last_wake_event(chat_id), record=record
+            )
 
-        # Record mtimes for the files we just loaded so follow-ups can tell if
-        # persona or chat memory has changed.
-        self._record_file(chat_id, persona.memory_path)
-        self._record_file(chat_id, mgr.chat_memory_path)
-
-        self.plugin_manager.fill_prompt_slots(
-            chat_id,
-            slots,
-            is_first=True,
-            last_blocks=self._last_blocks[chat_id],
-            compact=is_compact,
-        )
-
-        metrics_context = self.metrics_context_for_prompt(chat_id, compact=is_compact)
-        if metrics_context:
-            slots["metrics"].append(metrics_context)
-
-        if build_ctx.continuation_anchor:
-            slots["continuation"].append(build_ctx.continuation_anchor)
-        if build_ctx.interrupted_turn:
-            slots["continuation"].append(build_ctx.interrupted_turn)
-
-        skill_context = self._skill_context(chat_id, skill_names, compact=True, message=formatted)
-        if skill_context:
-            slots["skills"].append(skill_context)
-
+        system_parts = [p for p in [rehydration_notice, wake_narrative, notice] if p]
         force_slots = self.SOUL_SLOTS if is_compact else set()
-        self._apply_prompt_blocks(slots, is_compact, force_slots=force_slots)
 
-        # Remember when this prompt was built so plugins can use mtime-based
-        # change detection on the next follow-up.
-        self._last_prompt_time[chat_id] = time.time()
-
-        prompt = self._render_slots(slots)
-
-        if tiered_compact:
-            budget = self.config.harness.wake_context_token_budget
-            estimated = self._estimate_prompt_tokens(prompt, record)
-            wake_budget_line = self._wake_context_budget_line(record, "fresh", estimated)
-            if wake_budget_line:
-                # Add the wake budget/pressure line and re-render.
-                system_parts.append(wake_budget_line)
-                slots["system_notice"] = [self._format_system_notice(system_parts, is_compact)]
-                prompt = self._render_slots(slots)
-
-            # If the prompt still exceeds the wake budget, drop lower-tier slots.
-            if self._estimate_prompt_tokens(prompt, record) > budget:
-                slots, prompt = self._trim_slots_to_budget(slots, record, budget)
-                estimated = self._estimate_prompt_tokens(prompt, record)
-                wake_budget_line = self._wake_context_budget_line(record, "fresh", estimated)
-                if wake_budget_line and system_parts:
-                    if system_parts[-1].startswith("[Wake context budget:"):
-                        system_parts[-1] = wake_budget_line
-                    else:
-                        system_parts.append(wake_budget_line)
-                    slots["system_notice"] = [self._format_system_notice(system_parts, is_compact)]
-                    prompt = self._render_slots(slots)
-
-        flags = {
-            "persona_memory_exceeded": persona.memory_truncated,
-            # The record's chat_memory_exceeded flag should track only the
-            # on-disk chat memory file size, not the prompt's recall/context
-            # truncation. Prompt truncation is reported in the system notice
-            # and is not a persistent file-exceeded state.
-            "chat_memory_exceeded": chat_status.get("exceeded", False),
-        }
-
-        pctx = PromptContext(
-            prompt,
-            notice,
-            flags,
-            slots,
-            model=effective_model,
-            compact=is_compact,
+        pctx = self._assemble_prompt(
+            chat_id=chat_id,
+            record=record,
+            effective_model=effective_model,
+            formatted=formatted,
+            persona=persona,
+            recall=recall,
+            short_term=short_term,
+            chat_status=chat_status,
+            promoted=promoted,
+            chat_mem=chat_mem,
+            build_ctx=build_ctx,
+            system_parts=system_parts,
+            skill_names=skill_names,
+            force_slots=force_slots,
+            is_compact=is_compact,
+            soul_mode=soul_mode,
+            is_first=True,
+            record_persona=True,
+            record_chat=True,
+            chat_memory_path=mgr.chat_memory_path,
+            notice=notice,
+            metrics_compact=is_compact,
+            wake_budget=(
+                self.config.harness.wake_context_token_budget
+                if tiered_compact
+                else None
+            ),
         )
-        pctx = self.plugin_manager.after_prompt_built(chat_id, pctx)
         return self.plugin_manager.after_first_prompt_built(chat_id, pctx)
 
     def build_follow_up(
@@ -1474,9 +1548,10 @@ class ContextBuilder:
         # changed since the last prompt.  Fresh compact mode only loads changed
         # persona memory and caps it tightly.
         persona_memory_path = mgr.persona_memory_path
-        if soul_mode == "full" or (
+        record_persona = soul_mode == "full" or (
             soul_mode == "fresh" and self._file_changed(chat_id, persona_memory_path)
-        ):
+        )
+        if record_persona:
             max_chars = self.config.harness.memory.max_persona_memory_chars
             if is_compact:
                 max_chars = min(
@@ -1484,7 +1559,6 @@ class ContextBuilder:
                     self.config.harness.memory.max_compact_persona_memory_chars,
                 )
             pm = mgr.persona_memory(max_chars)
-            self._record_file(chat_id, persona_memory_path)
         else:
             pm = {
                 "text": "",
@@ -1506,32 +1580,20 @@ class ContextBuilder:
         )
         notice = self.build_system_notice(persona, recall, chat_status)
 
-        # Ensure the change-detection cache exists. A resumed ACP session may
-        # start with an empty cache, in which case we re-inject changed blocks
-        # once and then cache them.
-        if chat_id not in self._last_blocks:
-            self._reset_cache(chat_id)
-
-        slots: dict[str, list[str]] = {
-            "identity": [persona.text],
-            "self_narrative": [],
-            "system_notice": [],
-            "memory": [],
-            "promoted": [],
-            "recall": [],
-            "chat_memory": [],
-            "persistent_memory": [],
-            "wake": [],
-            "working_memory": [],
-            "body": [],
-            "self_state": [],
-            "authorship": [],
-            "mesh": [],
-            "metrics": [],
-            "skills": [],
-            "continuation": [],
-            "user": [formatted],
-        }
+        # Load on-disk chat memory on full/fresh soul and when the file has
+        # changed.
+        chat_memory_path = mgr.chat_memory_path
+        record_chat = soul_mode in ("full", "fresh") or self._file_changed(
+            chat_id, chat_memory_path
+        )
+        if record_chat:
+            chat_mem = mgr.chat_memory_block(
+                max_chars=(
+                    self.config.harness.memory.max_compact_chat_memory_chars if is_compact else None
+                )
+            )
+        else:
+            chat_mem = None
 
         rehydration_notice = self._rehydration_notice(build_ctx.rehydration_reason)
 
@@ -1566,82 +1628,34 @@ class ContextBuilder:
             )
 
         system_parts = [p for p in [rehydration_notice, soul_notice, notice] if p]
-        if is_compact:
-            system_parts.append(self._context_budget_line(record, soul_mode))
-        if system_parts:
-            slots["system_notice"].append(self._format_system_notice(system_parts, is_compact))
-        if persona.memory_text:
-            slots["memory"].append(
-                f"## Current memory ({persona.memory_path.name})\n\n{persona.memory_text}"
-            )
-        if promoted["text"]:
-            slots["promoted"].append(f"## Promoted memory\n\n{promoted['text']}")
-
-        # Load on-disk chat memory on full/fresh soul and when the file has
-        # changed.
-        chat_mem = None
-        chat_memory_path = mgr.chat_memory_path
-        if soul_mode in ("full", "fresh") or self._file_changed(chat_id, chat_memory_path):
-            chat_mem = mgr.chat_memory_block(
-                max_chars=(
-                    self.config.harness.memory.max_compact_chat_memory_chars if is_compact else None
-                )
-            )
-            self._record_file(chat_id, chat_memory_path)
-
-        recall_block, chat_block = self._combined_chat_memory_block(recall, short_term, chat_mem)
-        if recall_block:
-            slots["recall"].append(recall_block)
-        if chat_block:
-            slots["chat_memory"].append(chat_block)
-
-        # Force cheap soul slots under pressure so they survive compression.
-        # Full soul also re-injects the cheap slots in case they were skipped.
         force_slots = self.SOUL_SLOTS if soul_mode in ("small", "full", "fresh") else None
 
-        self.plugin_manager.fill_prompt_slots(
-            chat_id,
-            slots,
-            is_first=False,
-            rehydrated=build_ctx.rehydrated,
-            last_blocks=self._last_blocks[chat_id],
-            last_prompt_time=self._last_prompt_time.get(chat_id),
+        pctx = self._assemble_prompt(
+            chat_id=chat_id,
+            record=record,
+            effective_model=effective_model,
+            formatted=formatted,
+            persona=persona,
+            recall=recall,
+            short_term=short_term,
+            chat_status=chat_status,
+            promoted=promoted,
+            chat_mem=chat_mem,
+            build_ctx=build_ctx,
+            system_parts=system_parts,
+            skill_names=skill_names,
             force_slots=force_slots,
-            compact=is_compact,
+            is_compact=is_compact,
+            soul_mode=soul_mode,
+            is_first=False,
+            record_persona=record_persona,
+            record_chat=record_chat,
+            chat_memory_path=chat_memory_path,
+            last_prompt_time=self._last_prompt_time.get(chat_id),
+            force_new_session=force_new_session,
+            notice=notice,
+            metrics_compact=True,
         )
-
-        self._last_prompt_time[chat_id] = time.time()
         if soul_mode == "full" and record is not None:
             self._last_full_soul_turn[chat_id] = record.turn_number
-
-        if build_ctx.continuation_anchor:
-            slots["continuation"].append(build_ctx.continuation_anchor)
-        if build_ctx.interrupted_turn:
-            slots["continuation"].append(build_ctx.interrupted_turn)
-
-        skill_context = self._skill_context(chat_id, skill_names, compact=True, message=formatted)
-        if skill_context:
-            slots["skills"].append(skill_context)
-
-        metrics_context = self.metrics_context_for_prompt(chat_id, compact=True)
-        if metrics_context:
-            slots["metrics"].append(metrics_context)
-
-        self._apply_prompt_blocks(slots, is_compact, force_slots=force_slots)
-
-        prompt = self._render_slots(slots)
-
-        flags = {
-            "persona_memory_exceeded": persona.memory_truncated,
-            "chat_memory_exceeded": chat_status.get("exceeded", False),
-        }
-        pctx = PromptContext(
-            prompt,
-            notice,
-            flags,
-            slots,
-            model=effective_model,
-            force_new_session=force_new_session,
-            compact=is_compact,
-        )
-        return self.plugin_manager.after_prompt_built(chat_id, pctx)
+        return pctx
