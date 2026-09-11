@@ -238,7 +238,7 @@ class AgentRuntime(RuntimeAPI):
             self._plugins,
             self._memory_manager,
             self.skills,
-            self._active_skill_names,
+            self._mcp_skills._active_skill_names,
             context_window_fn=self.engine.model_context_window,
             lifecycle_log=self.lifecycle_log,
         )
@@ -559,21 +559,6 @@ class AgentRuntime(RuntimeAPI):
         return self._runtime_metrics._hindsight_health()
 
     # ---------------------------------------------------------------- helpers
-
-    def _active_mcp_server_names(self, chat_id: str) -> list[str]:
-        return self._mcp_skills._active_mcp_server_names(chat_id)
-
-    def _active_mcp_servers(self, chat_id: str) -> list[dict[str, Any]]:
-        return self._mcp_skills._active_mcp_servers(chat_id)
-
-    def _default_active_skills(self) -> set[str]:
-        return self._mcp_skills._default_active_skills()
-
-    def _active_skill_names(self, chat_id: str) -> set[str]:
-        return self._mcp_skills._active_skill_names(chat_id)
-
-    def match_and_activate_skills(self, chat_id: str, user_message: str) -> set[str]:
-        return self._mcp_skills.match_and_activate_skills(chat_id, user_message)
 
     def _memory_manager(self, chat_id: str) -> MemoryManager:
         if chat_id not in self._memory_managers:

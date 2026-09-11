@@ -558,8 +558,8 @@ class TurnDispatch:
                 prompt_chars=len(request.prompt) if request.prompt else 0,
             )
 
-            mcp_names = self.runtime._active_mcp_server_names(chat_id)
-            skill_names = self.runtime._active_skill_names(chat_id)
+            mcp_names = self.runtime._mcp_skills._active_mcp_server_names(chat_id)
+            skill_names = self.runtime._mcp_skills._active_skill_names(chat_id)
 
             with self._lock:
                 if is_new:

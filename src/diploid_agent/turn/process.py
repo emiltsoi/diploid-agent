@@ -299,8 +299,8 @@ class TurnProcess:
             reply_to_is_bot = start_ctx.reply_to_is_bot
             reply_to_message_id = start_ctx.reply_to_message_id
 
-            self.runtime.match_and_activate_skills(chat_id, user_message)
-            active_skill_names = self.runtime._active_skill_names(chat_id)
+            self.runtime._mcp_skills.match_and_activate_skills(chat_id, user_message)
+            active_skill_names = self.runtime._mcp_skills._active_skill_names(chat_id)
 
             notice: str | None = None
             partial: str | None = None
@@ -533,7 +533,7 @@ class TurnProcess:
                     cwd=self.runtime._chat_dir(chat_id),
                     model=use_model,
                     mcp_servers=(
-                        self.runtime._active_mcp_servers(chat_id)
+                        self.runtime._mcp_skills._active_mcp_servers(chat_id)
                         if is_new or force_new_session
                         else None
                     ),
@@ -707,8 +707,8 @@ class TurnProcess:
                 prompt_chars=len(request.prompt) if request.prompt else 0,
             )
 
-            mcp_names = self.runtime._active_mcp_server_names(chat_id)
-            skill_names = self.runtime._active_skill_names(chat_id)
+            mcp_names = self.runtime._mcp_skills._active_mcp_server_names(chat_id)
+            skill_names = self.runtime._mcp_skills._active_skill_names(chat_id)
             with self.runtime._lock:
                 # `force_new_session` (context-pressure fresh mode) also crosses
                 # an ACP session boundary even though it took the follow-up

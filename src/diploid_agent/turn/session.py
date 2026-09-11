@@ -84,11 +84,11 @@ class TurnSession:
             return False
         if record.last_stop_reason == "timeout":
             return False
-        current_mcp = sorted(self.runtime._active_mcp_server_names(chat_id))
+        current_mcp = sorted(self.runtime._mcp_skills._active_mcp_server_names(chat_id))
         record_mcp = sorted(record.enabled_mcp_servers or [])
         if current_mcp != record_mcp:
             return False
-        current_skills = sorted(self.runtime._active_skill_names(chat_id))
+        current_skills = sorted(self.runtime._mcp_skills._active_skill_names(chat_id))
         record_skills = sorted(record.enabled_skills or [])
         return current_skills == record_skills
 
@@ -182,8 +182,8 @@ class TurnSession:
                 model=use_model,
                 session_number=session_number,
                 old_model=old_model,
-                skill_names=set(self.runtime._active_skill_names(chat_id)),
-                mcp_servers=self.runtime._active_mcp_servers(chat_id),
+                skill_names=set(self.runtime._mcp_skills._active_skill_names(chat_id)),
+                mcp_servers=self.runtime._mcp_skills._active_mcp_servers(chat_id),
             ),
         )
         if isinstance(start_ctx, ChatResult):
@@ -209,8 +209,8 @@ class TurnSession:
             chat_id,
             prompt,
             use_model,
-            mcp_servers=start_ctx.mcp_servers or self.runtime._active_mcp_servers(chat_id),
-            skill_names=start_ctx.skill_names or set(self.runtime._active_skill_names(chat_id)),
+            mcp_servers=start_ctx.mcp_servers or self.runtime._mcp_skills._active_mcp_servers(chat_id),
+            skill_names=start_ctx.skill_names or set(self.runtime._mcp_skills._active_skill_names(chat_id)),
         )
         reply = result.reply
 
@@ -223,8 +223,8 @@ class TurnSession:
             memory_flags,
             label=label,
         )
-        new_record.enabled_mcp_servers = self.runtime._active_mcp_server_names(chat_id)
-        new_record.enabled_skills = sorted(self.runtime._active_skill_names(chat_id))
+        new_record.enabled_mcp_servers = self.runtime._mcp_skills._active_mcp_server_names(chat_id)
+        new_record.enabled_skills = sorted(self.runtime._mcp_skills._active_skill_names(chat_id))
         # The synthetic activation prompt is the first sample of this ACP
         # session's context; stash it so _chars_per_token can calibrate from a
         # prompt that session history has not yet diluted. Not routed through
@@ -314,7 +314,7 @@ class TurnSession:
         source_skill_names = (
             set(source.enabled_skills)
             if source.enabled_skills is not None
-            else self.runtime._active_skill_names(chat_id)
+            else self.runtime._mcp_skills._active_skill_names(chat_id)
         )
 
         resumed_id: str | None = None
@@ -513,7 +513,7 @@ class TurnSession:
                 session_number=new_number,
                 skill_names=set(source.enabled_skills)
                 if source.enabled_skills is not None
-                else self.runtime._active_skill_names(chat_id),
+                else self.runtime._mcp_skills._active_skill_names(chat_id),
                 mcp_servers=self.runtime.mcp.enabled_servers(
                     chat_id,
                     source.enabled_mcp_servers
@@ -539,7 +539,7 @@ class TurnSession:
             if start_ctx.skill_names is not None
             else set(source.enabled_skills)
             if source.enabled_skills is not None
-            else self.runtime._active_skill_names(chat_id)
+            else self.runtime._mcp_skills._active_skill_names(chat_id)
         )
 
         resumed_id: str | None = None

@@ -249,7 +249,7 @@ class TurnRehydrate:
                     old_record.session_id,
                     cwd=self.runtime._chat_dir(chat_id),
                     model=use_model,
-                    mcp_servers=self.runtime._active_mcp_servers(chat_id),
+                    mcp_servers=self.runtime._mcp_skills._active_mcp_servers(chat_id),
                     timeout=resume_timeout,
                 )
                 logger.warning("Resumed ACP session %s for %s", resumed_id, chat_id)
