@@ -52,6 +52,7 @@ from diploid_agent.plugins.contexts import (
     ShutdownContext,
 )
 from diploid_agent.runtime.actions import RuntimeActions
+from diploid_agent.runtime.auto_continue import RuntimeAutoContinue
 from diploid_agent.runtime.config_manager import RuntimeConfigManager
 from diploid_agent.runtime.event_bus import Event, EventBus
 from diploid_agent.runtime.instance import InstanceManager
@@ -191,9 +192,7 @@ class AgentRuntime(RuntimeAPI):
         self._last_service_restart_at: float = 0.0
         self._service_restart_cooldown_seconds = 60.0
 
-        # Per-chat and global auto-continue suppression (e.g., before a restart).
-        self._auto_continue_suppressed: dict[str, float] = {}
-        self._auto_continue_globally_suppressed_until: float = 0.0
+        self._auto_continue = RuntimeAutoContinue()
 
         # Plugins can declare MCP servers and skills; add them before McpManager.
         plugins = list(self.config.harness.plugins)
@@ -346,24 +345,11 @@ class AgentRuntime(RuntimeAPI):
 
     def suppress_auto_continue(self, chat_id: str | None = None, seconds: float = 300.0) -> None:
         """Suppress auto-continue for a chat or globally for a number of seconds."""
-        until = time.time() + seconds
-        with self._lock:
-            if chat_id is None:
-                self._auto_continue_globally_suppressed_until = until
-            else:
-                self._auto_continue_suppressed[chat_id] = until
+        self._auto_continue.suppress(chat_id=chat_id, seconds=seconds)
 
     def is_auto_continue_suppressed(self, chat_id: str) -> bool:
         """Return True if auto-continue should be suppressed for this chat."""
-        now = time.time()
-        with self._lock:
-            if now < self._auto_continue_globally_suppressed_until:
-                return True
-            until = self._auto_continue_suppressed.get(chat_id, 0)
-            if now < until:
-                return True
-            self._auto_continue_suppressed.pop(chat_id, None)
-            return False
+        return self._auto_continue.is_suppressed(chat_id)
 
     def _create_notifier(self):
         """Create the runtime's configured notifier."""
