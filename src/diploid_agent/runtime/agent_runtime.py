@@ -66,6 +66,7 @@ from diploid_agent.runtime.restart import RuntimeRestart
 from diploid_agent.runtime.store import ChatSessionStore
 from diploid_agent.runtime.subagent import RuntimeSubagent
 from diploid_agent.runtime.timer_service import TimerService
+from diploid_agent.runtime.typing import RuntimeTyping
 from diploid_agent.runtime.wake_queue import WakeQueue
 from diploid_agent.skills import SkillManager
 from diploid_agent.task.engine import TaskEngine
@@ -146,14 +147,15 @@ class AgentRuntime(RuntimeAPI):
         self.event_bus = EventBus()
         self.event_bus.start()
         self.plan_manager = PlanManager(plan_root)
+        self._typing = RuntimeTyping(self)
         self.task_engine = TaskEngine(
             self.plan_manager,
             self.event_bus,
             engine=self.engine,
             config=self.config,
             task_config=config.harness.task,
-            on_task_start=self._on_task_started,
-            on_task_done=self._on_task_done,
+            on_task_start=self._typing.on_task_started,
+            on_task_done=self._typing.on_task_done,
             on_service_restart=self._on_service_restart,
         )
 
@@ -168,9 +170,6 @@ class AgentRuntime(RuntimeAPI):
             "task.failed": self._handle_task_failed,
         }
         self._plan_conclusion_enqueued: set[str] = set()
-        self._typing_counts: dict[str, int] = {}
-        self._typing_threads: dict[str, tuple[threading.Thread, threading.Event]] = {}
-        self._typing_lock = threading.Lock()
         self._started = False
 
         self._outbox = RuntimeOutbox(self)
@@ -784,14 +783,8 @@ class AgentRuntime(RuntimeAPI):
             logger.exception("Failed to drain active turns during shutdown")
         if hasattr(self, "timer_service"):
             self.timer_service.stop()
-        with self._typing_lock:
-            threads = list(self._typing_threads.values())
-            self._typing_counts.clear()
-            self._typing_threads.clear()
-        for _, stop_event in threads:
-            stop_event.set()
-        for thread, _ in threads:
-            thread.join(timeout=1.0)
+        if hasattr(self, "_typing"):
+            self._typing.stop()
         try:
             self.event_bus.unsubscribe(self._on_event)
         except ValueError:
@@ -896,47 +889,6 @@ class AgentRuntime(RuntimeAPI):
         handler = self._event_handlers.get(event.type)
         if handler is not None:
             handler(event)
-
-    def _typing_heartbeat(self, chat_id: str, stop_event: threading.Event) -> None:
-        while not stop_event.is_set():
-            try:
-                self.notifier.typing(chat_id)
-            except Exception:
-                logger.exception("Typing heartbeat for %s failed", chat_id)
-            if stop_event.wait(4.0):
-                break
-
-    def _on_task_started(self, plan_id: str, task: Task) -> None:
-        if task.chat_id is None:
-            return
-        with self._typing_lock:
-            count = self._typing_counts.get(task.chat_id, 0)
-            self._typing_counts[task.chat_id] = count + 1
-            if count == 0:
-                stop_event = threading.Event()
-                thread = threading.Thread(
-                    target=self._typing_heartbeat,
-                    args=(task.chat_id, stop_event),
-                    daemon=True,
-                    name=f"typing-{task.chat_id}",
-                )
-                self._typing_threads[task.chat_id] = (thread, stop_event)
-                thread.start()
-
-    def _on_task_done(self, plan_id: str, task: Task, outcome: tuple[str, str, int]) -> None:
-        if task.chat_id is None:
-            return
-        with self._typing_lock:
-            count = self._typing_counts.get(task.chat_id, 0)
-            if count <= 0:
-                return
-            count -= 1
-            self._typing_counts[task.chat_id] = count
-            if count == 0:
-                entry = self._typing_threads.pop(task.chat_id, None)
-                if entry is not None:
-                    _, stop_event = entry
-                    stop_event.set()
 
     def _handle_timer_fired(self, event: Event) -> None:
         payload = event.payload
