@@ -343,7 +343,7 @@ class RuntimeConfigManager:
             merged = list(by_name.values())
             self.config.harness.plugins = merged
             self._plugins.reconfigure(merged)
-            self._runtime._register_plugin_mcp_servers()
+            self._runtime._runtime_plugins._register_plugin_mcp_servers()
             self._runtime.context_builder.plugin_manager = self._runtime._plugins
             if not self._runtime._save_runtime_overrides():
                 raise ConfigPersistenceError(

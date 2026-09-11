@@ -616,9 +616,6 @@ class AgentRuntime(RuntimeAPI):
                 exc_info=exc,
             )
 
-    def _register_plugin_mcp_servers(self) -> None:
-        self._runtime_plugins._register_plugin_mcp_servers()
-
     def plugin_event(
         self,
         chat_id: str,
