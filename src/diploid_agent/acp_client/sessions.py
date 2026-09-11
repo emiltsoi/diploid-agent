@@ -106,7 +106,8 @@ class AcpSessionOps:
                 last_exc = exc
             if attempt < max_attempts - 1:
                 await asyncio.sleep(self._client._resume_jitter(attempt))
-        assert last_exc is not None
+        if last_exc is None:
+            raise RuntimeError(f"resume call made zero attempts for {method}")
         raise last_exc
 
     async def _resume_session(

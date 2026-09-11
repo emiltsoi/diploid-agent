@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -28,7 +29,17 @@ def client(tmp_path: Path, monkeypatch) -> AcpClient:
     # Start un-initialized so _ensure_started runs _start_transport.
     c._transport_healthy = False
     c._transport._initialized = False
-    return c
+    try:
+        yield c
+    finally:
+        # Reset transport handles so the atexit close() no-ops and does not
+        # try to schedule a close coroutine on test fakes/mocks.
+        c._initialized = False
+        c._transport._initialized = False
+        c._transport._transport_healthy = False
+        c._transport._loop = None
+        c._transport._thread = None
+        c._transport._proc = None
 
 
 def _make_result(stop_reason: str | None, timed_out: bool = False) -> AcpPromptResult:
@@ -41,11 +52,19 @@ def _make_result(stop_reason: str | None, timed_out: bool = False) -> AcpPromptR
     )
 
 
+def _consume_coro(coro: Any) -> None:
+    """Close an unawaited coroutine so tests do not emit RuntimeWarning."""
+    if inspect.iscoroutine(coro):
+        coro.close()
+
+
 def test_create_session_marks_transport_unhealthy_on_timeout(client, monkeypatch) -> None:
     """A hard timeout (stop_reason='timeout') makes the transport unhealthy."""
     monkeypatch.setattr(client, "_ensure_started", lambda *a, **k: None)
     monkeypatch.setattr(
-        client, "_run", lambda coro, timeout=None, **kw: _make_result("timeout", True)
+        client,
+        "_run",
+        lambda coro, timeout=None, **kw: _consume_coro(coro) or _make_result("timeout", True),
     )
 
     client.create_session("test prompt")
@@ -58,7 +77,9 @@ def test_send_message_marks_transport_unhealthy_on_timeout(client, monkeypatch) 
     """Same for follow-up messages."""
     monkeypatch.setattr(client, "_ensure_started", lambda *a, **k: None)
     monkeypatch.setattr(
-        client, "_run", lambda coro, timeout=None, **kw: _make_result("timeout", True)
+        client,
+        "_run",
+        lambda coro, timeout=None, **kw: _consume_coro(coro) or _make_result("timeout", True),
     )
 
     client.send_message("s1", "continue")
@@ -73,7 +94,9 @@ def test_create_session_keeps_transport_healthy_on_cancelled(client, monkeypatch
     # timed_out is True because _soft_timeout_canceller sets prompt.timed_out,
     # but the stop_reason is cancelled.
     monkeypatch.setattr(
-        client, "_run", lambda coro, timeout=None, **kw: _make_result("cancelled", True)
+        client,
+        "_run",
+        lambda coro, timeout=None, **kw: _consume_coro(coro) or _make_result("cancelled", True),
     )
 
     client.create_session("test prompt")
@@ -85,7 +108,11 @@ def test_create_session_keeps_transport_healthy_on_completed(client, monkeypatch
     """A completed result should not kill the transport."""
     monkeypatch.setattr(client, "_ensure_started", lambda *a, **k: None)
     client._transport_healthy = True
-    monkeypatch.setattr(client, "_run", lambda coro, timeout=None, **kw: _make_result(None, False))
+    monkeypatch.setattr(
+        client,
+        "_run",
+        lambda coro, timeout=None, **kw: _consume_coro(coro) or _make_result(None, False),
+    )
 
     client.create_session("test prompt")
 
@@ -121,6 +148,7 @@ def test_create_session_restarts_transport_after_timeout(client, monkeypatch) ->
 
     def fake_run(coro, timeout=None, **kw):
         name = getattr(coro, "__name__", None)
+        _consume_coro(coro)
         if name == "_start_transport":
             starts.append(1)
             client._transport._initialized = True
@@ -162,6 +190,33 @@ class _FakeLoop:
         self.stop_calls += 1
         self.running = False
 
+    def create_task(self, coro: Any) -> Any:
+        # The close coroutine is not actually running on this fake; close it
+        # so it is not reported as unawaited when the atexit handler fires.
+        try:
+            coro.close()
+        except (GeneratorExit, RuntimeError):
+            pass
+        return _FakeTask()
+
+
+class _FakeTask:
+    def add_done_callback(self, cb: Any, *args: Any) -> None:
+        # The task is already done as far as the harness is concerned.
+        cb(self, *args)
+
+    def done(self) -> bool:
+        return True
+
+    def cancelled(self) -> bool:
+        return False
+
+    def cancel(self) -> bool:
+        return False
+
+    def result(self) -> None:
+        return None
+
 
 class _FakeThread:
     def is_alive(self) -> bool:
@@ -186,14 +241,30 @@ class _LateFuture:
 
     def __init__(self) -> None:
         self._callbacks: list[Any] = []
+        self._completed = False
+        self._cancelled = False
 
     def add_done_callback(self, cb: Any) -> None:
         self._callbacks.append(cb)
 
+    def done(self) -> bool:
+        return self._completed or self._cancelled
+
     def result(self, timeout: float | None = None) -> None:
         return None
 
+    def cancel(self) -> bool:
+        if self.done():
+            return False
+        self._cancelled = True
+        for cb in list(self._callbacks):
+            cb(self)
+        return True
+
     def complete(self) -> None:
+        if self._cancelled:
+            return
+        self._completed = True
         for cb in list(self._callbacks):
             cb(self)
 

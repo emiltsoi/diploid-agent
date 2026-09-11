@@ -303,8 +303,11 @@ class AgentRuntime(RuntimeAPI):
         if self.wake_queue is not None:
             try:
                 self.wake_queue.cancel(reason="auto_continue")
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Failed to cancel auto-continue wakes before restart: %s", exc)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to cancel auto-continue wakes before restart",
+                    exc_info=exc,
+                )
 
         self.suppress_auto_continue()
 
@@ -317,8 +320,11 @@ class AgentRuntime(RuntimeAPI):
                     error=f"ACP subprocess requested restart of {service}: {reason}",
                     action="scheduled",
                 )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Failed to record restart incident: %s", exc)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to record restart incident",
+                    exc_info=exc,
+                )
 
         # Drain in-flight turns, flush plugin state, then schedule the restart.
         self._schedule_draining_restart(service, chat_id=None, reason=reason)
@@ -849,8 +855,12 @@ class AgentRuntime(RuntimeAPI):
                 text,
                 tags=["system", "acp", "restart"],
             )
-        except Exception:  # noqa: BLE001
-            logger.warning("Failed to record restart memory for %s", chat_id)
+        except Exception as exc:
+            logger.warning(
+                "Failed to record restart memory for %s",
+                chat_id,
+                exc_info=exc,
+            )
 
     def _register_plugin_mcp_servers(self) -> None:
         self._runtime_plugins._register_plugin_mcp_servers()
@@ -951,8 +961,11 @@ class AgentRuntime(RuntimeAPI):
                         "Cancelled %d stale auto-continue wake(s) on startup",
                         count,
                     )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Failed to cancel stale auto-continue wakes: %s", exc)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to cancel stale auto-continue wakes",
+                    exc_info=exc,
+                )
 
         if self.config.harness.timer.enabled:
             self.timer_service.start()
@@ -1451,8 +1464,12 @@ class AgentRuntime(RuntimeAPI):
         """Append a system note to the chat's transcript."""
         try:
             self._memory_manager(chat_id).append_mesh_note(text)
-        except Exception:  # noqa: BLE001
-            logger.warning("Failed to record system note for %s", chat_id)
+        except Exception as exc:
+            logger.warning(
+                "Failed to record system note for %s",
+                chat_id,
+                exc_info=exc,
+            )
 
     def list_models(self) -> list[str]:
         """Return the list of models the ACP server accepts."""

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shlex
 import subprocess
 import time
 import traceback
@@ -204,10 +205,18 @@ class TaskEngine:
     def _run_shell(self, task: Task) -> tuple[str, str, int, dict[str, Any] | None]:
         cwd = task.cwd if task.cwd is not None else Path(os.getcwd())
         timeout = self._task_config.shell_timeout
+        if not task.command or not task.command.strip():
+            return "", "Empty shell command", -1, {"stop_reason": "failed"}
+        try:
+            cmd = shlex.split(task.command)
+        except ValueError as exc:
+            return "", f"Invalid shell command: {exc}", -1, {"stop_reason": "failed"}
+        if not cmd:
+            return "", "Empty shell command after parsing", -1, {"stop_reason": "failed"}
         try:
             proc = subprocess.run(
-                task.command,
-                shell=True,
+                cmd,
+                shell=False,
                 cwd=cwd,
                 capture_output=True,
                 text=True,

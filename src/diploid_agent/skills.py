@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 from dataclasses import dataclass, field
@@ -9,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -96,7 +99,8 @@ class SkillManager:
             return None
         try:
             front = yaml.safe_load(parts[0]) or {}
-        except Exception:  # noqa: BLE001
+        except (yaml.YAMLError, TypeError, ValueError) as exc:
+            logger.warning("Invalid YAML front matter in %s", skill_md, exc_info=exc)
             return None
         if not isinstance(front, dict):
             return None

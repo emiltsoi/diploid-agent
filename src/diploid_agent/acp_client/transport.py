@@ -136,6 +136,10 @@ class AcpTransport:
                 await asyncio.wait_for(self._proc.wait(), timeout=5.0)
             except TimeoutError:
                 self._kill_process_group(self._proc)
+                try:
+                    await asyncio.wait_for(self._proc.wait(), timeout=5.0)
+                except (TimeoutError, ProcessLookupError, OSError):
+                    pass
 
         # Cancel reader and stderr drain so the loop does not keep them alive.
         for task in (self._reader_task, self._stderr_task):
@@ -145,8 +149,8 @@ class AcpTransport:
                     await task
                 except asyncio.CancelledError:
                     pass
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug("ACP task %s ended with %s", task.get_name(), exc)
+                except Exception as exc:
+                    logger.debug("ACP task %s ended", task.get_name(), exc_info=exc)
 
         # Stop the prompt-callback worker after queued callbacks drain.  Only
         # enqueue the sentinel when a worker actually ran -- a stale sentinel
@@ -350,7 +354,7 @@ class AcpTransport:
                 # _send succeeded; reset the per-call deadline for the response wait.
                 self._last_control_call_deadline = time.monotonic() + call_timeout
             resp = await asyncio.wait_for(future, timeout=call_timeout)
-        except BaseException:
+        except (Exception, asyncio.CancelledError):
             self._pending.pop(msg_id, None)
             raise
         finally:
@@ -374,9 +378,9 @@ class AcpTransport:
         if self._loop is None:
             raise RuntimeError("ACP transport not started")
         if timeout is None:
-            timeout = self._client.timeout
+            timeout = self._client.timeout if self._client.timeout is not None else 900.0
 
-        deadline = time.monotonic() + timeout if timeout is not None else float("inf")
+        deadline = time.monotonic() + timeout
         result_timeout = timeout + 5.0 if timeout is not None else None
         future: concurrent.futures.Future[Any] = asyncio.run_coroutine_threadsafe(coro, self._loop)
         with self._client._lock:
@@ -436,7 +440,7 @@ class AcpTransport:
                 if future is not None and not future.done():
                     future.cancel()
             except (RuntimeError, OSError, ValueError) as exc:
-                logger.debug("Could not cancel pending ACP task: %s", exc)
+                logger.debug("Could not cancel pending ACP task", exc_info=exc)
 
     # ---------------------------------------------------------------- internal
 
@@ -591,7 +595,7 @@ class AcpTransport:
             try:
                 line = await self._proc.stdout.readline()
             except (OSError, ValueError, RuntimeError) as exc:
-                logger.warning("ACP reader stopped: %s", exc)
+                logger.warning("ACP reader stopped", exc_info=exc)
                 break
             if not line:
                 break
@@ -659,7 +663,7 @@ class AcpTransport:
             return
         exc = task.exception()
         if exc is not None:
-            logger.error("ACP reader task crashed: %s", exc)
+            logger.error("ACP reader task crashed", exc_info=exc)
         else:
             logger.error("ACP reader task ended while the ACP process is still running")
         self._terminated = True
@@ -678,7 +682,7 @@ class AcpTransport:
             return
         exc = task.exception()
         if exc is not None:
-            logger.error("ACP stderr drain crashed: %s", exc)
+            logger.error("ACP stderr drain crashed", exc_info=exc)
         else:
             logger.error("ACP stderr drain ended while the ACP process is still running")
         self._terminated = True

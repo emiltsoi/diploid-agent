@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import socket
+import stat
 import tempfile
 import threading
 import time
@@ -76,15 +77,16 @@ class ControlListener:
         self._bound_stat: tuple[int, int] | None = None
         try:
             self._start()
-        except ControlSocketInUseError:
+        except ControlSocketInUseError as exc:
             # A foreign process still owns the path (e.g. the old process during
             # a systemd restart overlap). Do not fail construction over it;
             # ensure_listening() retries on the next transport start and fails
             # loudly there if the path is still held.
-            logger.error(
+            logger.warning(
                 "ACP control socket %s is held by a live listener; control "
                 "channel stays down until it frees",
                 self._control_socket_path,
+                exc_info=exc,
             )
 
     @property
@@ -127,12 +129,7 @@ class ControlListener:
         """Create and bind the control socket used by the fake systemctl wrapper."""
         try:
             self._control_socket_dir.mkdir(parents=True, exist_ok=True)
-            try:
-                # mkdir() uses the process umask; tighten explicitly so another
-                # local user cannot pre-create the path and squat on the socket.
-                os.chmod(self._control_socket_dir, _CONTROL_DIR_MODE)
-            except OSError:
-                pass
+            self._ensure_control_dir_permissions()
             if self._control_socket_path.exists():
                 state = self._probe_socket()
                 # A live listener owned by *this* process (e.g. a per-task ACP
@@ -166,9 +163,39 @@ class ControlListener:
             return sock
         except ControlSocketInUseError:
             raise
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to bind ACP control socket: %s", exc)
+        except Exception as exc:
+            logger.warning("Failed to bind ACP control socket", exc_info=exc)
             return None
+
+    def _ensure_control_dir_permissions(self) -> None:
+        """Enforce that the control socket directory is private to this user.
+
+        ``mkdir`` with ``exist_ok=True`` does not set the mode on an existing
+        path and the directory may be pre-created by a local attacker with lax
+        permissions. Verify ownership and mode; raise if we cannot make it
+        exclusively ours.
+        """
+        path = self._control_socket_dir
+        try:
+            st = path.lstat()
+        except OSError as exc:
+            raise ControlSocketInUseError(self._control_socket_path) from exc
+
+        if st.st_uid != os.getuid():
+            raise ControlSocketInUseError(self._control_socket_path)
+
+        current_mode = stat.S_IMODE(st.st_mode)
+        if current_mode != _CONTROL_DIR_MODE:
+            try:
+                os.chmod(path, _CONTROL_DIR_MODE)
+            except OSError as exc:
+                raise ControlSocketInUseError(self._control_socket_path) from exc
+            try:
+                st = path.lstat()
+            except OSError as exc:
+                raise ControlSocketInUseError(self._control_socket_path) from exc
+            if stat.S_IMODE(st.st_mode) != _CONTROL_DIR_MODE:
+                raise ControlSocketInUseError(self._control_socket_path)
 
     def _probe_socket(self) -> str:
         """Probe the socket path: ``stale``, ``live_self``, or ``live_foreign``.
@@ -258,8 +285,8 @@ class ControlListener:
                                 }
                             ).encode("utf-8")
                         )
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning("ACP control socket request failed: %s", exc)
+                    except Exception as exc:
+                        logger.warning("ACP control socket request failed", exc_info=exc)
         finally:
             try:
                 sock.close()

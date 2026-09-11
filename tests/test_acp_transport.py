@@ -138,30 +138,38 @@ def test_record_and_check_restart_backoff() -> None:
 
 
 def test_unblock_inflight_sets_exception_and_aborts_prompts() -> None:
-    transport = _make_transport()
-    future = concurrent.futures.Future()
-    transport._inflight_future = future
-    transport._pending[1] = asyncio.Future()
-    prompt: Any = type(
-        "Prompt", (), {"cancelled": False, "timed_out": False, "cancel_done": asyncio.Future()}
-    )()
-    transport._client._active_prompts["s-1"] = prompt
+    async def _run() -> None:
+        transport = _make_transport()
+        future = concurrent.futures.Future()
+        transport._inflight_future = future
+        transport._pending[1] = asyncio.Future()
+        prompt: Any = type(
+            "Prompt",
+            (),
+            {"cancelled": False, "timed_out": False, "cancel_done": asyncio.Future()},
+        )()
+        transport._client._active_prompts["s-1"] = prompt
 
-    transport._unblock_inflight("test reason")
+        transport._unblock_inflight("test reason")
 
-    assert future.done()
-    assert future.exception() is not None
-    assert transport._pending == {}
-    assert prompt.cancelled is True
-    assert prompt.timed_out is True
-    assert prompt.cancel_done.done()
+        assert future.done()
+        assert future.exception() is not None
+        assert transport._pending == {}
+        assert prompt.cancelled is True
+        assert prompt.timed_out is True
+        assert prompt.cancel_done.done()
+
+    asyncio.run(_run())
 
 
 def test_unblock_inflight_clears_pending() -> None:
-    transport = _make_transport()
-    transport._pending[1] = asyncio.Future()
-    transport._unblock_inflight("test reason")
-    assert transport._pending == {}
+    async def _run() -> None:
+        transport = _make_transport()
+        transport._pending[1] = asyncio.Future()
+        transport._unblock_inflight("test reason")
+        assert transport._pending == {}
+
+    asyncio.run(_run())
 
 
 def test_kill_process_group_swallows_errors() -> None:

@@ -471,12 +471,19 @@ class AcpClient:
                     try:
                         future.result(timeout=10.0)
                     except (RuntimeError, TimeoutError) as exc:
-                        logger.warning("ACP close transport failed: %s", exc)
+                        logger.warning("ACP close transport failed", exc_info=exc)
+                        if not future.done():
+                            # Cancel the close task so it is awaited (up to its
+                            # first suspension) before the loop is stopped.
+                            future.cancel()
                         if proc is not None and proc.returncode is None:
                             try:
                                 proc.kill()
-                            except Exception:
-                                logger.exception("Failed to kill ACP process during close")
+                            except (OSError, ProcessLookupError) as kill_exc:
+                                logger.warning(
+                                    "Failed to kill ACP process during close",
+                                    exc_info=kill_exc,
+                                )
                         if loop.is_running():
                             try:
                                 loop.call_soon_threadsafe(loop.stop)
@@ -489,8 +496,11 @@ class AcpClient:
                     if proc is not None and proc.returncode is None:
                         try:
                             proc.kill()
-                        except Exception:
-                            logger.exception("Failed to kill ACP process during close")
+                        except (OSError, ProcessLookupError) as kill_exc:
+                            logger.warning(
+                                "Failed to kill ACP process during close",
+                                exc_info=kill_exc,
+                            )
             finally:
                 self._watchdog.stop()
                 if thread is not None and thread.is_alive():
@@ -508,6 +518,11 @@ class AcpClient:
                         self._reader_task = None
                     if self._stderr_task is stderr_task:
                         self._stderr_task = None
+                if loop is not None and not loop.is_closed() and not loop.is_running():
+                    try:
+                        loop.close()
+                    except RuntimeError:
+                        pass
                 self._sandbox.cleanup()
                 self._control.close()
 

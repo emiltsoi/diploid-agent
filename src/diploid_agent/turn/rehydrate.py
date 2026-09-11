@@ -224,7 +224,10 @@ class TurnRehydrate:
             self.runtime.config.engine.acp_resume_enabled
             and self.controller.session._can_resume_record(chat_id, old_record, use_model)
         ):
-            assert old_record is not None
+            if old_record is None:
+                raise RuntimeError(
+                    f"_can_resume_record returned true but old_record is None for chat {chat_id}"
+                )
             self.runtime._restore_plugin_states(chat_id)
             # After a transport restart the old session is likely gone from the
             # fresh child; give session/load a short budget instead of stalling

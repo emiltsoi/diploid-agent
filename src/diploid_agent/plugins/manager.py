@@ -107,7 +107,7 @@ class PluginManager:
                     if not isinstance(plugin, FailedPlugin):
                         try:
                             plugin.stop()
-                        except BaseException:
+                        except Exception:
                             logger.exception("stop() failed for plugin %s", name)
                             self._record_incident(
                                 plugin=name,
@@ -151,7 +151,7 @@ class PluginManager:
             if plugin is not None and not isinstance(plugin, FailedPlugin):
                 try:
                     plugin.stop()
-                except BaseException:
+                except Exception:
                     logger.exception("stop() failed for plugin %s", name)
                     self._record_incident(
                         plugin=name,
@@ -175,7 +175,7 @@ class PluginManager:
                 if plugin is not None and not isinstance(plugin, FailedPlugin):
                     try:
                         plugin.stop()
-                    except BaseException:
+                    except Exception:
                         logger.exception("stop() failed for plugin %s", name)
                         self._record_incident(
                             plugin=name,
@@ -203,7 +203,7 @@ class PluginManager:
                 if plugin is not None and not isinstance(plugin, FailedPlugin):
                     try:
                         plugin.stop()
-                    except BaseException:
+                    except Exception:
                         logger.exception("stop() failed during rollback for plugin %s", name)
                         self._record_incident(
                             plugin=name,
@@ -225,7 +225,7 @@ class PluginManager:
                 if not isinstance(plugin, FailedPlugin):
                     try:
                         plugin.stop()
-                    except BaseException:
+                    except Exception:
                         logger.exception("stop() failed for plugin %s", name)
                         self._record_incident(
                             plugin=name,
@@ -241,7 +241,7 @@ class PluginManager:
         if config.name not in cache:
             try:
                 plugin = self._load_plugin(config, chat_id)
-            except BaseException:
+            except Exception:
                 logger.exception("Failed to load plugin %s", config.name)
                 self._record_incident(
                     plugin=config.name,
@@ -261,7 +261,7 @@ class PluginManager:
             if not isinstance(plugin, FailedPlugin):
                 try:
                     plugin.start()
-                except BaseException:
+                except Exception:
                     logger.exception("start() failed for plugin %s", config.name)
                     self._record_incident(
                         plugin=config.name,
@@ -335,7 +335,7 @@ class PluginManager:
             else:
                 try:
                     h = plugin.health()
-                except BaseException:
+                except Exception:
                     logger.exception("health() failed for plugin %s", cfg.name)
                     self._record_incident(
                         plugin=cfg.name,
@@ -396,7 +396,7 @@ class PluginManager:
         if instance is not None and not isinstance(instance, FailedPlugin):
             try:
                 instance.stop()
-            except BaseException:
+            except Exception:
                 logger.exception("stop() failed for plugin %s", name)
                 self._record_incident(
                     plugin=name,
@@ -444,7 +444,7 @@ class PluginManager:
             if plugin is not None and not isinstance(plugin, FailedPlugin):
                 try:
                     plugin.stop()
-                except BaseException:
+                except Exception:
                     logger.exception("stop() failed for plugin %s during reload", name)
                     self._record_incident(
                         plugin=name,
