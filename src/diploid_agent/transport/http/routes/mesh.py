@@ -59,7 +59,7 @@ def register_mesh(
     )
     async def mesh_notify(chat_id: str, req: MeshNotifyRequest) -> dict[str, str]:
         """Mirror a successfully sent mesh message to Telegram as a system notice."""
-        runtime._float_mesh_to_telegram(
+        runtime._outbox._float_mesh_to_telegram(
             chat_id,
             sender=req.sender,
             recipient=req.recipient,
