@@ -698,7 +698,7 @@ class TurnProcess:
                 notice = rehydrate_notice if notice is None else f"{rehydrate_notice}\n\n{notice}"
 
             latency = time.perf_counter() - turn_start
-            turn_metrics = self.runtime._record_turn_metrics(
+            turn_metrics = self.runtime._runtime_metrics._record_turn_metrics(
                 chat_id,
                 turn_number,
                 use_model,
@@ -741,7 +741,7 @@ class TurnProcess:
 
                 record.consume_turn_number()
                 record.updated_at = time.time()
-                record.cumulative_metrics = self.runtime._per_chat_metrics[chat_id].get(
+                record.cumulative_metrics = self.runtime._runtime_metrics._per_chat_metrics[chat_id].get(
                     "cumulative", {}
                 )
                 if not result.partial:

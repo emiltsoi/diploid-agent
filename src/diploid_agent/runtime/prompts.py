@@ -66,7 +66,7 @@ class RuntimePrompts:
 
     @property
     def _per_chat_metrics(self) -> dict[str, Any]:
-        return self._runtime._per_chat_metrics
+        return self._runtime._runtime_metrics._per_chat_metrics
 
     @property
     def _router(self) -> Any:

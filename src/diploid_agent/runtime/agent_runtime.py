@@ -11,7 +11,6 @@ import sys
 import threading
 import time
 import uuid
-from collections import deque
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -521,39 +520,6 @@ class AgentRuntime(RuntimeAPI):
     def _generate_label(self, chat_id: str, user_message: str) -> str:
         """Auto-generate a short label from the first user message."""
         return self._chat_store._generate_label(chat_id, user_message)
-
-    # ---------------------------------------------------------------- metrics
-
-    @property
-    def _per_chat_metrics(self) -> dict[str, dict[str, Any]]:
-        return self._runtime_metrics._per_chat_metrics
-
-    @property
-    def _global_metrics(self) -> dict[str, Any]:
-        return self._runtime_metrics._global_metrics
-
-    @property
-    def _recent_turns(self) -> deque[dict[str, Any]]:
-        return self._runtime_metrics._recent_turns
-
-    def _rehydrate_metrics(self) -> None:
-        return self._runtime_metrics._rehydrate_metrics()
-
-    def _record_turn_metrics(
-        self,
-        chat_id: str,
-        turn_number: int,
-        model: str,
-        usage: dict[str, Any] | None,
-        latency_seconds: float,
-        prompt_chars: int = 0,
-    ) -> dict[str, Any]:
-        return self._runtime_metrics._record_turn_metrics(
-            chat_id, turn_number, model, usage, latency_seconds, prompt_chars=prompt_chars
-        )
-
-    def _metrics_context_for_prompt(self, chat_id: str, compact: bool = False) -> str | None:
-        return self._runtime_metrics._metrics_context_for_prompt(chat_id, compact=compact)
 
     def mcp_list(self, chat_id: str) -> str:
         return self._mcp_skills.mcp_list(chat_id)
