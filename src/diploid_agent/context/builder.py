@@ -124,7 +124,19 @@ class ContextBuilder:
     WAKE_TRIM_STEPS: ClassVar[list[frozenset[str]]] = [
         frozenset({"metrics"}),
         frozenset({"memory", "chat_memory", "persistent_memory", "mesh"}),
-        frozenset({"promoted", "recall", "self_narrative", "working_memory", "body", "self_state", "authorship", "bridge", "checkpoint"}),
+        frozenset(
+            {
+                "promoted",
+                "recall",
+                "self_narrative",
+                "working_memory",
+                "body",
+                "self_state",
+                "authorship",
+                "bridge",
+                "checkpoint",
+            }
+        ),
     ]
 
     def __init__(

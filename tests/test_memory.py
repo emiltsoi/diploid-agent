@@ -67,7 +67,9 @@ def test_file_backend_recall_searches_archive(tmp_path: Path) -> None:
 def test_file_backend_recall_active_outranks_archive(tmp_path: Path) -> None:
     backend = FileMemoryBackend(tmp_path, "chat-1")
     backend.retain([MemoryItem(content="Postgres is the current database", tags=["memory"])])
-    backend._archive_path.write_text("## 2026-09-01 (memory)\n\nold project used a SQLite database\n")
+    backend._archive_path.write_text(
+        "## 2026-09-01 (memory)\n\nold project used a SQLite database\n"
+    )
     result = backend.recall("database")
     assert "Postgres" in result
     assert "SQLite" in result

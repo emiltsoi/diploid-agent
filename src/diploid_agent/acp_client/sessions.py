@@ -211,9 +211,7 @@ class AcpSessionOps:
         except (AcpError, TimeoutError) as exc:
             duration_ms = round((time.perf_counter() - start) * 1000, 2)
             if self._client.metrics is not None:
-                self._client.metrics.inc(
-                    "acp_resume_total", result="failure", method=resume_method
-                )
+                self._client.metrics.inc("acp_resume_total", result="failure", method=resume_method)
                 self._client.metrics.set("acp_resume_latency_ms", duration_ms, result="failure")
             if self._client._lifecycle_log is not None:
                 self._client._lifecycle_log.write(
@@ -419,9 +417,7 @@ class AcpSessionOps:
             self._client._model_options = self._extract_model_options(session)
 
         # Honor the requested mode and model for this session.
-        await self._client._apply_session_config(
-            session_id, use_model, timeout=session_new_timeout
-        )
+        await self._client._apply_session_config(session_id, use_model, timeout=session_new_timeout)
 
         return await self._client._prompt(
             session_id,
