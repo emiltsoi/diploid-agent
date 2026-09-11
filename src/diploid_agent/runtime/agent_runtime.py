@@ -47,14 +47,12 @@ from diploid_agent.plan.manager import PlanManager
 from diploid_agent.plan.models import Plan, Task, TaskStatus, TaskType
 from diploid_agent.plugin_incidents import PluginIncidentStore
 from diploid_agent.plugins import PluginManager
-from diploid_agent.plugins.contexts import (
-    ShutdownContext,
-)
 from diploid_agent.runtime.actions import RuntimeActions
 from diploid_agent.runtime.auto_continue import RuntimeAutoContinue
 from diploid_agent.runtime.config_manager import RuntimeConfigManager
 from diploid_agent.runtime.event_bus import Event, EventBus
 from diploid_agent.runtime.instance import InstanceManager
+from diploid_agent.runtime.lifecycle import RuntimeLifecycle
 from diploid_agent.runtime.mcp_skills import RuntimeMcpSkills
 from diploid_agent.runtime.metrics import RuntimeMetrics
 from diploid_agent.runtime.outbox import RuntimeOutbox
@@ -250,6 +248,7 @@ class AgentRuntime(RuntimeAPI):
         self._actions = RuntimeActions(self)
 
         self.turn_controller = TurnController(self)
+        self._lifecycle = RuntimeLifecycle(self)
 
         self.notifier = self._create_notifier()
 
@@ -676,94 +675,19 @@ class AgentRuntime(RuntimeAPI):
 
     def start(self) -> None:
         """Start background services. Idempotent."""
-        if self._started:
-            return
-        self._started = True
-        if not self.event_bus.running:
-            self.event_bus.start()
-        self.event_bus.subscribe(self._on_event)
-
-        # Drop auto-continue wakes that were created by a previous process.
-        # Queued user messages and other system wakes are kept, and the
-        # conversation/session state used for resume is not touched.
-        if self.wake_queue is not None:
-            try:
-                count = self.wake_queue.cancel_older_than(
-                    self.instance_started_at,
-                    reason="auto_continue",
-                )
-                if count:
-                    logger.info(
-                        "Cancelled %d stale auto-continue wake(s) on startup",
-                        count,
-                    )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to cancel stale auto-continue wakes",
-                    exc_info=exc,
-                )
-
-        if self.config.harness.timer.enabled:
-            self.timer_service.start()
-        self.instance_manager.start_heartbeat()
-        self._load_mesh_ingress()
-        self._outbox._send_restart_notices()
+        self._lifecycle.start()
 
     def _send_restart_notices(self) -> None:
         """Notify recently active chats that the service has restarted."""
-        self._outbox._send_restart_notices()
+        self._lifecycle.send_restart_notices()
 
-    def _create_direct_notifier(self):
+    def _create_direct_notifier(self) -> Any:
         """Create a notifier that bypasses the outbox if possible."""
-        return self._outbox._create_direct_notifier()
+        return self._lifecycle.create_direct_notifier()
 
     def shutdown(self, drain_timeout: float = 120.0) -> None:
         """Drain active turns, notify plugins, and stop background workers."""
-        self._started = False
-        self._restart_draining.set()
-        try:
-            if not self._restart._wait_for_active_turns(drain_timeout):
-                logger.warning(
-                    "Shutdown drain cap (%.0fs) expired with turn(s) still active",
-                    drain_timeout,
-                )
-        except Exception:
-            logger.exception("Failed to drain active turns during shutdown")
-        if hasattr(self, "timer_service"):
-            self.timer_service.stop()
-        if hasattr(self, "_typing"):
-            self._typing.stop()
-        try:
-            self.event_bus.unsubscribe(self._on_event)
-        except ValueError:
-            pass
-        if hasattr(self, "instance_manager"):
-            self.instance_manager.stop_heartbeat()
-        if hasattr(self, "task_engine"):
-            self.task_engine.shutdown(wait=False)
-        if hasattr(self, "event_bus"):
-            self.event_bus.stop()
-        now = time.time()
-        for chat_id in list(self._store.keys()):
-            record = self._active_record(chat_id)
-            self._plugins.on_shutdown(
-                chat_id,
-                ShutdownContext(
-                    chat_id=chat_id,
-                    record=record,
-                    reason="shutdown",
-                    now=now,
-                    instance_id=self.instance_id,
-                    instance_started_at=self.instance_started_at,
-                ),
-            )
-        self._plugins.stop_all()
-
-        with self._lock:
-            managers = list(self._memory_managers.values())
-            self._memory_managers.clear()
-        for manager in managers:
-            manager.close()
+        self._lifecycle.shutdown(drain_timeout)
 
     @property
     def _runtime_overrides_path(self) -> Path:
@@ -1184,19 +1108,6 @@ class AgentRuntime(RuntimeAPI):
                 detail=f"Unknown ingress protocol: {protocol}",
             )
         return await handler.handle(request)
-
-    def _load_mesh_ingress(self) -> None:
-        """Load the configured mesh ingress handler if mesh is enabled."""
-        from diploid_agent.transport.ingress import load_ingress_handler
-
-        mesh = self.config.harness.mesh
-        if not mesh.enabled:
-            return
-        try:
-            handler = load_ingress_handler(mesh.ingress_module, runtime=self)
-            self.register_ingress_handler("mesh", handler)
-        except Exception:
-            logger.exception("Failed to load mesh ingress handler: %s", mesh.ingress_module)
 
     def process(
         self,
