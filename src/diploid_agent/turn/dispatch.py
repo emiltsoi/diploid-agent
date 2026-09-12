@@ -9,7 +9,13 @@ from typing import TYPE_CHECKING, Any
 from diploid_agent.dispatch import DispatchStatus
 from diploid_agent.engine import TurnRequest, TurnResult
 from diploid_agent.locking import locked
-from diploid_agent.models import ActiveTurn, ChatResult, PartialTurn, WakeEvent
+from diploid_agent.models import (
+    ActiveTurn,
+    ChatResult,
+    PartialTurn,
+    WakeEvent,
+    final_segment_reply,
+)
 from diploid_agent.plugins.base import TurnInfo
 from diploid_agent.plugins.contexts import (
     DispatchCompleteContext,
@@ -21,23 +27,12 @@ from diploid_agent.plugins.contexts import (
     TurnErrorContext,
     TurnStartContext,
 )
-from diploid_agent.turn.process import TurnProcess
+from diploid_agent.turn.utils import join_notices
 
 if TYPE_CHECKING:
     from diploid_agent.turn.controller import TurnController
 
 logger = logging.getLogger(__name__)
-
-# Cap the in-memory thought stream so a runaway model cannot exhaust memory
-# or produce giant wake/auto-continue payloads and Telegram status messages.
-_MAX_THOUGHT_TEXT_CHARS = 20000
-
-
-def _join_notices(*parts: str | None) -> str | None:
-    """Concatenate non-empty notice strings with a blank line between them."""
-    joined = "\n\n".join(p for p in parts if p)
-    return joined or None
-
 
 class TurnDispatch:
     """Background dispatch / continue-turn logic for a single chat."""
@@ -92,70 +87,6 @@ class TurnDispatch:
     @property
     def rehydrate(self) -> Any:
         return self.controller.rehydrate
-
-    @staticmethod
-    def _append_full_text(active: ActiveTurn, text: str) -> None:
-        """Append an agent_message chunk, keeping full_text as a rolling window."""
-        active.full_text += text
-        excess = len(active.full_text) - _MAX_THOUGHT_TEXT_CHARS
-        if excess > 0:
-            dropped = active.full_text[:excess]
-            active.full_text_offset += len(dropped)
-            active.full_text = active.full_text[excess:]
-
-    @staticmethod
-    def _full_text_has_thought_prefix(active: ActiveTurn) -> bool:
-        """Return True if the retained full_text window starts within the thought."""
-        if not active.thought_total or not active.full_text:
-            return False
-        if active.thought_total <= _MAX_THOUGHT_TEXT_CHARS:
-            return active.full_text.startswith(active.thought_text)
-        prefix_start = active.full_text_offset
-        prefix_end = min(_MAX_THOUGHT_TEXT_CHARS, prefix_start + len(active.full_text))
-        if prefix_end <= prefix_start:
-            return False
-        return (
-            active.full_text[: prefix_end - prefix_start]
-            == active.thought_prefix[prefix_start:prefix_end]
-        )
-
-    @staticmethod
-    def _recompute_message_text(active: ActiveTurn) -> None:
-        """Keep message_text as the part of full_text after the thought prefix."""
-        if not active.full_text:
-            active.message_text = ""
-            return
-        if active.thought_total > 0 and TurnDispatch._full_text_has_thought_prefix(active):
-            start = max(0, active.thought_total - active.full_text_offset)
-            active.message_text = active.full_text[start:]
-        else:
-            active.message_text = active.full_text
-        if len(active.message_text) > _MAX_THOUGHT_TEXT_CHARS:
-            active.message_text = active.message_text[-_MAX_THOUGHT_TEXT_CHARS:]
-
-    @staticmethod
-    def _append_thought_text(active: ActiveTurn, text: str) -> None:
-        """Append an agent_thought update and bump the cumulative counter."""
-        active.thought_text += text
-        active.thought_prefix += text
-        active.thought_total += len(text)
-        if len(active.thought_text) > _MAX_THOUGHT_TEXT_CHARS:
-            active.thought_text = active.thought_text[-_MAX_THOUGHT_TEXT_CHARS:]
-        if len(active.thought_prefix) > _MAX_THOUGHT_TEXT_CHARS:
-            active.thought_prefix = active.thought_prefix[:_MAX_THOUGHT_TEXT_CHARS]
-
-    @staticmethod
-    def _final_reply_text(active: ActiveTurn, reply: str) -> str:
-        """Return the final reply with any leading thought text removed."""
-        if not active.thought_total:
-            return reply
-        if active.thought_total <= _MAX_THOUGHT_TEXT_CHARS:
-            thought = active.thought_text
-        else:
-            thought = active.thought_prefix
-        if thought and reply.startswith(thought):
-            return reply[active.thought_total :].lstrip("\n")
-        return reply
 
     @locked
     def dispatch(
@@ -328,8 +259,8 @@ class TurnDispatch:
             with self._lock:
                 a = self.runtime._active_turns.get(chat_id)
                 if a:
-                    self._append_full_text(a, text)
-                    self._recompute_message_text(a)
+                    a.append_full_text(text)
+                    a.recompute_message_text()
             if a:
                 with a._condition:
                     a._condition.notify_all()
@@ -379,8 +310,8 @@ class TurnDispatch:
             with self._lock:
                 a = self.runtime._active_turns.get(chat_id)
                 if a:
-                    self._append_thought_text(a, text)
-                    self._recompute_message_text(a)
+                    a.append_thought_text(text)
+                    a.recompute_message_text()
             if a:
                 with a._condition:
                     a._condition.notify_all()
@@ -426,7 +357,7 @@ class TurnDispatch:
                         on_update=call_ctx.on_update,
                     )
                     session_id = turn_result.session_id or old_record.session_id
-                    reply = self._final_reply_text(active, turn_result.reply)
+                    reply = active.final_reply_text(turn_result.reply)
 
                 result_ctx = self.runtime._plugins.after_engine_call(
                     chat_id,
@@ -448,7 +379,7 @@ class TurnDispatch:
                     turn_result.usage = result_ctx.usage
                     turn_result.stop_reason = result_ctx.stop_reason
                     session_id = turn_result.session_id or session_id
-                reply = self._final_reply_text(active, turn_result.reply)
+                reply = active.final_reply_text(turn_result.reply)
             except (RuntimeError, TimeoutError) as exc:
                 if isinstance(exc, TimeoutError) or self.runtime.engine.is_transport_error(exc):
                     log_prefix = "ACP transport unresponsive"
@@ -490,12 +421,12 @@ class TurnDispatch:
                 if isinstance(ret, ChatResult):
                     return ret
                 turn_result, session_id, pctx = ret
-                rehydrate_notice = _join_notices(rehydrate_notice, pctx.notice)
+                rehydrate_notice = join_notices(rehydrate_notice, pctx.notice)
                 memory_flags = pctx.memory_flags
                 use_model = pctx.model or use_model
                 is_new = session_id != (old_record.session_id if old_record else None)
                 active.session_id = turn_result.session_id
-                reply = self._final_reply_text(active, turn_result.reply)
+                reply = active.final_reply_text(turn_result.reply)
 
             if not turn_result.reply and turn_result and not turn_result.partial:
                 empty_id = session_id or (old_record.session_id if old_record else "unknown")
@@ -518,12 +449,12 @@ class TurnDispatch:
                 if isinstance(ret, ChatResult):
                     return ret
                 turn_result, session_id, pctx = ret
-                rehydrate_notice = _join_notices(rehydrate_notice, pctx.notice)
+                rehydrate_notice = join_notices(rehydrate_notice, pctx.notice)
                 memory_flags = pctx.memory_flags
                 use_model = pctx.model or use_model
                 is_new = session_id != (old_record.session_id if old_record else None)
                 active.session_id = turn_result.session_id
-                reply = self._final_reply_text(active, turn_result.reply)
+                reply = active.final_reply_text(turn_result.reply)
 
             continue_word = (
                 self.runtime.config.engine.continuation_triggers[0].capitalize()
@@ -621,14 +552,14 @@ class TurnDispatch:
                 # and the partial/timeout notice (deferred by auto-continue).
                 turn_notice = rehydrate_notice
                 turn_partial = partial
-                combined = _join_notices(rehydrate_notice, partial)
+                combined = join_notices(rehydrate_notice, partial)
                 if record_ctx.notice is not None and record_ctx.notice != combined:
                     turn_notice = record_ctx.notice
                     turn_partial = None
 
                 extra_items = self.runtime._plugins.memory_items(chat_id, since=previous_updated_at)
 
-                assistant_notice = _join_notices(turn_notice, turn_partial)
+                assistant_notice = join_notices(turn_notice, turn_partial)
                 self.runtime._memory_manager(chat_id).record_turn(
                     user_message=user_message,
                     reply=reply,
@@ -637,7 +568,7 @@ class TurnDispatch:
                     turn_number=record.turn_number,
                     extra_items=extra_items,
                     notice=assistant_notice,
-                    final_segment=TurnProcess._final_segment_reply(turn_result, reply),
+                    final_segment=final_segment_reply(turn_result, reply),
                 )
 
                 turn = TurnInfo(
@@ -664,7 +595,7 @@ class TurnDispatch:
 
                 transition = self.runtime._prompts._check_chat_memory_transition(chat_id, record)
                 if transition:
-                    turn.notice = _join_notices(turn.notice, transition)
+                    turn.notice = join_notices(turn.notice, transition)
 
                 self.runtime._append_record(record)
                 self.runtime._prune_and_compact(chat_id)
@@ -675,7 +606,7 @@ class TurnDispatch:
 
                 chat_result = ChatResult(
                     reply=reply,
-                    notice=_join_notices(budget_notice, turn.notice, turn.partial_notice),
+                    notice=join_notices(budget_notice, turn.notice, turn.partial_notice),
                     session_id=record.session_id,
                     session_number=record.session_number,
                     turn_number=record.turn_number,

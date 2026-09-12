@@ -40,7 +40,7 @@ class TurnController:
 
     def _seed_active_turn(self, active: ActiveTurn, wake_event: WakeEvent | None) -> None:
         """Pre-populate the active turn with content from a previous partial turn."""
-        self._process._seed_active_turn(active, wake_event)
+        active.seed_from_wake(wake_event)
 
     def _rehydrate(self, *args: Any, **kwargs: Any) -> Any:
         """Resume a persisted ACP session if possible, otherwise start a new one."""

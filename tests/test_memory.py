@@ -964,7 +964,7 @@ def _msg(text: str) -> dict[str, Any]:
 
 
 def test_final_segment_reply_uses_last_tool_boundary() -> None:
-    from diploid_agent.turn.process import TurnProcess
+    from diploid_agent.models import final_segment_reply
 
     result = _fake_result(
         [
@@ -979,22 +979,22 @@ def test_final_segment_reply_uses_last_tool_boundary() -> None:
         ]
     )
     reply = "Working on it. All done. Here is the answer."
-    assert TurnProcess._final_segment_reply(result, reply) == "All done. Here is the answer."
+    assert final_segment_reply(result, reply) == "All done. Here is the answer."
 
 
 def test_final_segment_reply_no_tool_returns_none() -> None:
-    from diploid_agent.turn.process import TurnProcess
+    from diploid_agent.models import final_segment_reply
 
-    assert TurnProcess._final_segment_reply(_fake_result([_msg("hi")]), "hi") is None
-    assert TurnProcess._final_segment_reply(_fake_result([]), "hi") is None
-    assert TurnProcess._final_segment_reply(_fake_result(None), "hi") is None
+    assert final_segment_reply(_fake_result([_msg("hi")]), "hi") is None
+    assert final_segment_reply(_fake_result([]), "hi") is None
+    assert final_segment_reply(_fake_result(None), "hi") is None
     # Tool call last with no message after it -> no final segment.
     result = _fake_result([_msg("only narration"), {"sessionUpdate": "tool_call"}])
-    assert TurnProcess._final_segment_reply(result, "only narration") is None
+    assert final_segment_reply(result, "only narration") is None
 
 
 def test_final_segment_reply_all_post_tool_returns_reply() -> None:
-    from diploid_agent.turn.process import TurnProcess
+    from diploid_agent.models import final_segment_reply
 
     result = _fake_result([{"sessionUpdate": "tool_call"}, _msg("whole reply")])
-    assert TurnProcess._final_segment_reply(result, "whole reply") == "whole reply"
+    assert final_segment_reply(result, "whole reply") == "whole reply"

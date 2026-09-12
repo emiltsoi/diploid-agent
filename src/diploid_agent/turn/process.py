@@ -7,7 +7,14 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from diploid_agent.engine import TurnRequest, TurnResult
-from diploid_agent.models import ActiveTurn, ChatResult, PartialTurn, SessionRecord, WakeEvent
+from diploid_agent.models import (
+    ActiveTurn,
+    ChatResult,
+    PartialTurn,
+    SessionRecord,
+    WakeEvent,
+    final_segment_reply,
+)
 from diploid_agent.plugins.base import TurnInfo
 from diploid_agent.plugins.contexts import (
     EngineCallContext,
@@ -18,22 +25,12 @@ from diploid_agent.plugins.contexts import (
     TurnStartContext,
 )
 from diploid_agent.turn.notifier import _NotifyStream, _OutboxHeartbeat
+from diploid_agent.turn.utils import join_notices
 
 if TYPE_CHECKING:
     from diploid_agent.turn.controller import TurnController
 
 logger = logging.getLogger(__name__)
-
-# Cap the in-memory thought stream so a runaway model cannot exhaust memory
-# or produce giant wake/auto-continue payloads and Telegram status messages.
-_MAX_THOUGHT_TEXT_CHARS = 20000
-
-
-def _join_notices(*parts: str | None) -> str | None:
-    """Concatenate non-empty notice strings with a blank line between them."""
-    joined = "\n\n".join(p for p in parts if p)
-    return joined or None
-
 
 class TurnProcess:
     """Main per-turn ACP loop for a single chat."""
@@ -102,138 +99,6 @@ class TurnProcess:
             if event.reason == "auto_continue" and not event.silent:
                 return True
         return False
-
-    def _seed_active_turn(self, active: ActiveTurn, wake_event: WakeEvent | None) -> None:
-        """Pre-populate the active turn with content from a previous partial turn."""
-        if not wake_event or not isinstance(wake_event.payload, dict):
-            return
-        message_text = wake_event.payload.get("message_text") or ""
-        thought_text = wake_event.payload.get("thought_text") or ""
-        thought_prefix = wake_event.payload.get("thought_prefix") or ""
-        active.thought_text = thought_text[-_MAX_THOUGHT_TEXT_CHARS:]
-        active.thought_prefix = thought_prefix or thought_text[:_MAX_THOUGHT_TEXT_CHARS]
-        active.full_text = active.thought_text + message_text
-        active.thought_total = wake_event.payload.get("thought_total") or len(active.thought_text)
-        active.full_text_offset = wake_event.payload.get("full_text_offset") or 0
-        self._recompute_message_text(active)
-
-    @staticmethod
-    def _append_full_text(active: ActiveTurn, text: str) -> None:
-        """Append an agent_message chunk, keeping full_text as a rolling window.
-
-        When the buffer grows past _MAX_THOUGHT_TEXT_CHARS we drop the oldest
-        prefix (which is part of the thought) and adjust full_text_offset so
-        message_text can still be computed correctly.
-        """
-        active.full_text += text
-        excess = len(active.full_text) - _MAX_THOUGHT_TEXT_CHARS
-        if excess > 0:
-            dropped = active.full_text[:excess]
-            active.full_text_offset += len(dropped)
-            active.full_text = active.full_text[excess:]
-
-    @staticmethod
-    def _full_text_has_thought_prefix(active: ActiveTurn) -> bool:
-        """Return True if the retained full_text window starts within the thought.
-
-        For short thoughts, full_text must simply start with the thought_text.
-        For long (capped) thoughts, we compare the first _MAX chars of the
-        thought against the retained window starting at full_text_offset.
-        """
-        if not active.thought_total or not active.full_text:
-            return False
-        if active.thought_total <= _MAX_THOUGHT_TEXT_CHARS:
-            return active.full_text.startswith(active.thought_text)
-        # The thought is longer than the cap. The first _MAX chars are in
-        # thought_prefix; the retained window starts at full_text_offset.
-        prefix_start = active.full_text_offset
-        prefix_end = min(_MAX_THOUGHT_TEXT_CHARS, prefix_start + len(active.full_text))
-        if prefix_end <= prefix_start:
-            return False
-        return (
-            active.full_text[: prefix_end - prefix_start]
-            == active.thought_prefix[prefix_start:prefix_end]
-        )
-
-    @staticmethod
-    def _recompute_message_text(active: ActiveTurn) -> None:
-        """Keep message_text as the part of full_text after the thought prefix.
-
-        thought_total is the cumulative length of agent_thought updates.
-        full_text_offset is how much of the agent_message stream has been
-        discarded from the front. We only remove the thought prefix if we can
-        verify that full_text actually contains it; otherwise the ACP subprocess
-        streams the answer and thought on separate channels.
-        """
-        if not active.full_text:
-            active.message_text = ""
-            return
-        if active.thought_total > 0 and TurnProcess._full_text_has_thought_prefix(active):
-            start = max(0, active.thought_total - active.full_text_offset)
-            active.message_text = active.full_text[start:]
-        else:
-            active.message_text = active.full_text
-        if len(active.message_text) > _MAX_THOUGHT_TEXT_CHARS:
-            active.message_text = active.message_text[-_MAX_THOUGHT_TEXT_CHARS:]
-
-    @staticmethod
-    def _append_thought_text(active: ActiveTurn, text: str) -> None:
-        """Append an agent_thought update and bump the cumulative counter."""
-        active.thought_text += text
-        active.thought_prefix += text
-        active.thought_total += len(text)
-        if len(active.thought_text) > _MAX_THOUGHT_TEXT_CHARS:
-            active.thought_text = active.thought_text[-_MAX_THOUGHT_TEXT_CHARS:]
-        if len(active.thought_prefix) > _MAX_THOUGHT_TEXT_CHARS:
-            active.thought_prefix = active.thought_prefix[:_MAX_THOUGHT_TEXT_CHARS]
-
-    @staticmethod
-    def _final_reply_text(active: ActiveTurn, reply: str) -> str:
-        """Return the final reply with any leading thought text removed."""
-        if not active.thought_total:
-            return reply
-        # For short thoughts the full thought_text is still accurate; for long
-        # (capped) thoughts we verify with the first _MAX chars prefix.
-        if active.thought_total <= _MAX_THOUGHT_TEXT_CHARS:
-            thought = active.thought_text
-        else:
-            thought = active.thought_prefix
-        if thought and reply.startswith(thought):
-            return reply[active.thought_total :].lstrip("\n")
-        return reply
-
-    @staticmethod
-    def _final_segment_reply(result: Any, reply: str) -> str | None:
-        """Return the reply text produced after the last tool-call update.
-
-        ``result.updates`` is a bounded tail of the turn's session/update
-        stream (oldest entries are dropped, newest kept), so the last
-        ``tool_call*`` update visible in it is still the last boundary and the
-        agent_message text after it is complete.  That suffix of the reply is
-        the "final segment" — the post-investigation answer without the working
-        narration between tool calls.  Returns None when no tool boundary is
-        visible or nothing was said after it; callers then retain the full
-        reply.
-        """
-        updates = list(getattr(result, "updates", None) or [])
-        last_tool = -1
-        for i, update in enumerate(updates):
-            if update.get("sessionUpdate") in ("tool_call", "tool_call_update"):
-                last_tool = i
-        if last_tool < 0:
-            return None
-        seg_chars = 0
-        for update in updates[last_tool + 1 :]:
-            if update.get("sessionUpdate") not in ("agent_message", "agent_message_chunk"):
-                continue
-            content = update.get("content", {})
-            if isinstance(content, list):
-                seg_chars += sum(len(b.get("text", "")) for b in content if b.get("type") == "text")
-            elif isinstance(content, dict) and content.get("type") == "text":
-                seg_chars += len(content.get("text", ""))
-        if seg_chars <= 0 or not reply:
-            return None
-        return reply[-seg_chars:] if seg_chars < len(reply) else reply
 
     def process(
         self,
@@ -377,7 +242,7 @@ class TurnProcess:
                 cwd.mkdir(parents=True, exist_ok=True)
                 self.runtime.skills.sync_to_chat(chat_id, cwd, active_skill_names)
                 active = ActiveTurn(chat_id, None, user_message, time.time())
-                self._seed_active_turn(active, wake_event)
+                active.seed_from_wake(wake_event)
                 self.runtime._active_turns[chat_id] = active
                 is_new = True
                 old_record: SessionRecord | None = record
@@ -400,7 +265,7 @@ class TurnProcess:
                 use_model = pctx.model or use_model
                 force_new_session = pctx.force_new_session
                 active = ActiveTurn(chat_id, record.session_id, user_message, time.time())
-                self._seed_active_turn(active, wake_event)
+                active.seed_from_wake(wake_event)
                 self.runtime._active_turns[chat_id] = active
                 is_new = False
                 session_number = record.session_number
@@ -464,8 +329,8 @@ class TurnProcess:
             with self.runtime._lock:
                 a = self.runtime._active_turns.get(chat_id)
                 if a:
-                    self._append_full_text(a, text)
-                    self._recompute_message_text(a)
+                    a.append_full_text(text)
+                    a.recompute_message_text()
             if a:
                 with a._condition:
                     a._condition.notify_all()
@@ -515,8 +380,8 @@ class TurnProcess:
             with self.runtime._lock:
                 a = self.runtime._active_turns.get(chat_id)
                 if a:
-                    self._append_thought_text(a, text)
-                    self._recompute_message_text(a)
+                    a.append_thought_text(text)
+                    a.recompute_message_text()
             if a:
                 with a._condition:
                     a._condition.notify_all()
@@ -653,7 +518,7 @@ class TurnProcess:
                 use_model = pctx.model or use_model
                 is_new = session_id != (old_record.session_id if old_record else None)
                 active.session_id = result.session_id
-                reply = self._final_reply_text(active, result.reply)
+                reply = active.final_reply_text(result.reply)
 
             # If a prompt came back with a genuinely empty reply,
             # the ACP session is almost certainly stale. Rehydrate once.
@@ -684,12 +549,12 @@ class TurnProcess:
                 if isinstance(ret, ChatResult):
                     return ret
                 result, session_id, pctx = ret
-                rehydrate_notice = _join_notices(rehydrate_notice, pctx.notice)
+                rehydrate_notice = join_notices(rehydrate_notice, pctx.notice)
                 memory_flags = pctx.memory_flags
                 use_model = pctx.model or use_model
                 is_new = session_id != (old_record.session_id if old_record else None)
                 active.session_id = result.session_id
-                reply = self._final_reply_text(active, result.reply)
+                reply = active.final_reply_text(result.reply)
 
             if result.partial:
                 partial = self.runtime._prompts._partial_notice(result, continue_word=continue_word)
@@ -790,7 +655,7 @@ class TurnProcess:
                 # non-deferred and let the plugin own it.
                 turn_notice = rehydrate_notice
                 turn_partial = partial
-                combined = _join_notices(rehydrate_notice, partial)
+                combined = join_notices(rehydrate_notice, partial)
                 if record_ctx.notice is not None and record_ctx.notice != combined:
                     turn_notice = record_ctx.notice
                     turn_partial = None
@@ -798,7 +663,7 @@ class TurnProcess:
                 # Collect plugin memory items since the previous turn.
                 extra_items = self.runtime._plugins.memory_items(chat_id, since=previous_updated_at)
 
-                assistant_notice = _join_notices(turn_notice, turn_partial)
+                assistant_notice = join_notices(turn_notice, turn_partial)
                 self.runtime._memory_manager(chat_id).record_turn(
                     user_message=user_message,
                     reply=reply,
@@ -808,7 +673,7 @@ class TurnProcess:
                     extra_items=extra_items,
                     notice=assistant_notice,
                     system_note=resend_system_note,
-                    final_segment=self._final_segment_reply(result, reply),
+                    final_segment=final_segment_reply(result, reply),
                 )
 
                 turn = TurnInfo(
@@ -827,7 +692,7 @@ class TurnProcess:
 
                 transition = self.runtime._prompts._check_chat_memory_transition(chat_id, record)
                 if transition:
-                    turn.notice = _join_notices(turn.notice, transition)
+                    turn.notice = join_notices(turn.notice, transition)
 
                 self.runtime._append_record(record)
                 turn.reply = reply
@@ -835,7 +700,7 @@ class TurnProcess:
                 self.runtime._plugins.after_turn(chat_id, turn)
                 chat_result = ChatResult(
                     reply=reply,
-                    notice=_join_notices(budget_notice, turn.notice, turn.partial_notice),
+                    notice=join_notices(budget_notice, turn.notice, turn.partial_notice),
                     session_id=record.session_id,
                     session_number=record.session_number,
                     turn_number=record.turn_number,
