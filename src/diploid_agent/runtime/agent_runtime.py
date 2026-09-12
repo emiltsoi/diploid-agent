@@ -311,7 +311,28 @@ class AgentRuntime(RuntimeAPI):
         self._actions = RuntimeActions(self)
 
         self.turn_controller = TurnController(self)
-        self._lifecycle = RuntimeLifecycle(self)
+        self._lifecycle = RuntimeLifecycle(
+            state=self._state,
+            config=config,
+            lock=self._lock,
+            event_bus=self.event_bus,
+            wake_queue=self.wake_queue,
+            instance_manager=self.instance_manager,
+            task_engine=self.task_engine,
+            timer_service=self.timer_service,
+            typing=self._typing,
+            restart=self._restart,
+            outbox=self._outbox,
+            plugins=self._plugins,
+            chat_store=self._chat_store,
+            memory_managers=self._memory_managers,
+            store=self._store,
+            ingress_handlers=self._ingress_handlers,
+            instance_id=self.instance_id,
+            instance_started_at=self.instance_started_at,
+            on_event_fn=self._on_event,
+            runtime_api=self,
+        )
 
         self.notifier = self._create_notifier()
 
