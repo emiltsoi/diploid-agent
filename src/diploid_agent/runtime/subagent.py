@@ -5,13 +5,26 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from diploid_agent.dispatch import Dispatch, DispatchStatus, DispatchStore
 from diploid_agent.locking import locked
 from diploid_agent.models import ChatResult, WakeEvent
 from diploid_agent.plan.models import Task, TaskStatus, TaskType
 from diploid_agent.text import human_duration
+
+if TYPE_CHECKING:
+    import threading
+
+    from diploid_agent.mcp import McpManager
+    from diploid_agent.plan.manager import PlanManager
+    from diploid_agent.runtime.mcp_skills import RuntimeMcpSkills
+    from diploid_agent.runtime.outbox import RuntimeOutbox
+    from diploid_agent.runtime.prompts import RuntimePrompts
+    from diploid_agent.runtime.store import ChatSessionStore
+    from diploid_agent.runtime.wake_queue import WakeQueue
+    from diploid_agent.task.engine import TaskEngine
+
 
 logger = logging.getLogger(__name__)
 
@@ -22,16 +35,16 @@ class RuntimeSubagent:
     def __init__(
         self,
         *,
-        wake_queue: Any,
-        plan_manager: Any,
-        chat_store: Any,
-        task_engine: Any,
-        prompts: Any,
-        outbox: Any,
-        mcp: Any,
+        wake_queue: WakeQueue,
+        plan_manager: PlanManager,
+        chat_store: ChatSessionStore,
+        task_engine: TaskEngine,
+        prompts: RuntimePrompts,
+        outbox: RuntimeOutbox,
+        mcp: McpManager,
         dispatch_store: DispatchStore,
-        mcp_skills: Any,
-        lock: Any,
+        mcp_skills: RuntimeMcpSkills,
+        lock: threading.RLock,
     ) -> None:
         self.wake_queue = wake_queue
         self.plan_manager = plan_manager

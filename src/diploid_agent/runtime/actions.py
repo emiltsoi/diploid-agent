@@ -4,16 +4,39 @@ from __future__ import annotations
 
 import functools
 import logging
+import threading
 import time
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from diploid_agent.models import ChatResult, WakeEvent
 from diploid_agent.plan.models import Plan, Task, TaskStatus
 from diploid_agent.plugins.contexts import PromoteContext, RetainContext
 from diploid_agent.runtime.event_bus import Event
 from diploid_agent.runtime.state import RuntimeState
+
+if TYPE_CHECKING:
+    import threading
+
+    from diploid_agent.acp_client import AcpLifecycleLog
+    from diploid_agent.config import Config
+    from diploid_agent.engine import AgentEngine
+    from diploid_agent.memory import MemoryManager
+    from diploid_agent.plan.manager import PlanManager
+    from diploid_agent.plugin_incidents import PluginIncidentStore
+    from diploid_agent.plugins import PluginManager
+    from diploid_agent.runtime.event_bus import EventBus
+    from diploid_agent.runtime.metrics import RuntimeMetrics
+    from diploid_agent.runtime.outbox import RuntimeOutbox
+    from diploid_agent.runtime.prompts import RuntimePrompts
+    from diploid_agent.runtime.restart import RuntimeRestart
+    from diploid_agent.runtime.store import ChatSessionStore
+    from diploid_agent.runtime.subagent import RuntimeSubagent
+    from diploid_agent.runtime.wake_queue import WakeQueue
+    from diploid_agent.task.engine import TaskEngine
+    from diploid_agent.turn.controller import TurnController
+
 
 logger = logging.getLogger(__name__)
 
@@ -36,25 +59,25 @@ class RuntimeActions:
         self,
         *,
         state: RuntimeState,
-        config: Any,
-        lock: Any,
-        chat_store: Any,
-        lifecycle_log: Any,
-        memory_manager: Callable[[str], Any],
-        runtime_metrics: Any,
-        prompts: Any,
-        outbox: Any,
-        plugins: Any,
-        subagent: Any,
-        restart: Any,
-        incidents: Any,
-        wake_queue: Any,
-        plan_manager: Any,
-        task_engine: Any,
-        event_bus: Any,
-        turn_controller: Any,
+        config: Config,
+        lock: threading.RLock,
+        chat_store: ChatSessionStore,
+        lifecycle_log: AcpLifecycleLog,
+        memory_manager: Callable[[str], MemoryManager],
+        runtime_metrics: RuntimeMetrics,
+        prompts: RuntimePrompts,
+        outbox: RuntimeOutbox,
+        plugins: PluginManager,
+        subagent: RuntimeSubagent,
+        restart: RuntimeRestart,
+        incidents: PluginIncidentStore,
+        wake_queue: WakeQueue,
+        plan_manager: PlanManager,
+        task_engine: TaskEngine,
+        event_bus: EventBus,
+        turn_controller: TurnController,
         instance_id: str,
-        engine_fn: Callable[[], Any],
+        engine_fn: Callable[[], AgentEngine],
         call_unlocked_fn: Callable[..., Any],
         suppress_auto_continue_fn: Callable[..., None],
         acp_client_fn: Callable[[], Any],
@@ -320,9 +343,7 @@ class RuntimeActions:
                 context=context,
             ),
         )
-        self._memory_manager(chat_id).retain(
-            ctx.content, tags=ctx.tags, context=ctx.context
-        )
+        self._memory_manager(chat_id).retain(ctx.content, tags=ctx.tags, context=ctx.context)
         self._plugins.after_retain(chat_id, ctx)
         return ChatResult(reply="Retained.")
 
@@ -386,10 +407,7 @@ class RuntimeActions:
         if service is None:
             service = f"{self.config.persona.name}.service"
         now = time.time()
-        if (
-            now - self._state.last_service_restart_at
-            < self._state.service_restart_cooldown_seconds
-        ):
+        if now - self._state.last_service_restart_at < self._state.service_restart_cooldown_seconds:
             return ChatResult(
                 reply=f"A restart for {service} is already scheduled.",
                 notice="Please wait for it to complete.",

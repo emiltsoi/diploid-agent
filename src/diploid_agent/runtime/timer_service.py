@@ -5,10 +5,15 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Any
+from typing import TYPE_CHECKING
 
 from diploid_agent.config import TimerConfig
 from diploid_agent.runtime.event_bus import Event
+
+if TYPE_CHECKING:
+    from diploid_agent.runtime.event_bus import EventBus
+    from diploid_agent.runtime.wake_queue import WakeQueue
+
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +23,8 @@ class TimerService:
 
     def __init__(
         self,
-        wake_queue: Any,
-        event_bus: Any,
+        wake_queue: WakeQueue,
+        event_bus: EventBus,
         config: TimerConfig,
     ) -> None:
         self._wake_queue = wake_queue

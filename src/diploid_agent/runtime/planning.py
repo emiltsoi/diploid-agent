@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from diploid_agent.dispatch import Dispatch
 from diploid_agent.models import WakeEvent
 from diploid_agent.plan.models import Plan, PlanStatus, Task, TaskStatus
+
+if TYPE_CHECKING:
+    from diploid_agent.context import ContextBuilder
+    from diploid_agent.runtime.wake_queue import WakeQueue
+
 
 logger = logging.getLogger(__name__)
 
@@ -18,9 +23,9 @@ class RuntimePlanning:
 
     def __init__(
         self,
-        wake_queue: Any,
+        wake_queue: WakeQueue,
         plan_conclusion_enqueued: set[str],
-        context_builder: Any,
+        context_builder: ContextBuilder,
     ) -> None:
         self.wake_queue = wake_queue
         self._plan_conclusion_enqueued = plan_conclusion_enqueued

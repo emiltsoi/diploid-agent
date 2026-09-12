@@ -4,12 +4,25 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from diploid_agent.dispatch import DispatchStatus
 from diploid_agent.locking import locked
 from diploid_agent.models import ChatResult, WakeEvent
+
+if TYPE_CHECKING:
+    import threading
+
+    from diploid_agent.config import Config
+    from diploid_agent.dispatch import DispatchStore
+    from diploid_agent.runtime.instance import InstanceManager
+    from diploid_agent.runtime.planning import RuntimePlanning
+    from diploid_agent.runtime.wake_queue import WakeQueue
+    from diploid_agent.transport.ingress import IngressHandler
+    from diploid_agent.turn.controller import TurnController
+
 
 logger = logging.getLogger(__name__)
 
@@ -26,14 +39,14 @@ class RuntimeIngress:
     def __init__(
         self,
         *,
-        config: Any,
-        lock: Any,
-        instance_manager: Any,
-        wake_queue: Any,
-        dispatch_store: Any,
-        turn_controller: Any,
-        planning: Any,
-        ingress_handlers: dict[str, Any],
+        config: Config,
+        lock: threading.RLock,
+        instance_manager: InstanceManager,
+        wake_queue: WakeQueue,
+        dispatch_store: DispatchStore,
+        turn_controller: TurnController,
+        planning: RuntimePlanning,
+        ingress_handlers: dict[str, IngressHandler],
     ) -> None:
         self._config = config
         self._lock = lock
@@ -44,7 +57,7 @@ class RuntimeIngress:
         self._planning = planning
         self._ingress_handlers = ingress_handlers
 
-    def register_ingress_handler(self, protocol: str, handler: Any) -> None:
+    def register_ingress_handler(self, protocol: str, handler: IngressHandler) -> None:
         """Register a protocol-specific inbound HTTP handler."""
         self._ingress_handlers[protocol] = handler
 

@@ -9,7 +9,7 @@ import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from diploid_agent.acp_client import AcpLifecycleLog
 from diploid_agent.config import (
@@ -66,6 +66,10 @@ from diploid_agent.text import human_duration
 from diploid_agent.transport.base import RuntimeAPI
 from diploid_agent.turn import TurnController
 
+if TYPE_CHECKING:
+    from diploid_agent.notifier import Notifier
+    from diploid_agent.transport.ingress import IngressHandler
+
 logger = logging.getLogger(__name__)
 
 
@@ -120,9 +124,7 @@ class AgentRuntime(RuntimeAPI):
             plugins_fn=lambda: self._plugins,
             runtime_plugins_fn=lambda: self._runtime_plugins,
             context_builder_fn=lambda: self.context_builder,
-            recreate_notifier_fn=lambda: setattr(
-                self, "notifier", self._create_notifier()
-            ),
+            recreate_notifier_fn=lambda: setattr(self, "notifier", self._create_notifier()),
             save_overrides_fn=lambda: self._save_runtime_overrides(),
         )
         self._chat_store = ChatSessionStore(
@@ -256,7 +258,7 @@ class AgentRuntime(RuntimeAPI):
         )
 
         # Ingress handlers for pluggable transport protocols (e.g. mesh).
-        self._ingress_handlers: dict[str, Any] = {}
+        self._ingress_handlers: dict[str, IngressHandler] = {}
 
         self.mcp = McpManager(config)
         self.skills = SkillManager(
@@ -527,7 +529,9 @@ class AgentRuntime(RuntimeAPI):
         """Put a final ChatResult in the outbox for the transport to deliver."""
         self._outbox._enqueue_outbox(chat_id, chat_result)
 
-    def _safe_notifier_send(self, chat_id: str, text: str, notifier: Any = None) -> None:
+    def _safe_notifier_send(
+        self, chat_id: str, text: str, notifier: Notifier | None = None
+    ) -> None:
         """Send a notification, swallowing exceptions and logging them."""
         self._outbox._safe_notifier_send(chat_id, text, notifier=notifier)
 
@@ -900,7 +904,7 @@ class AgentRuntime(RuntimeAPI):
         """Return the list of models the ACP server accepts."""
         return self._actions.list_models()
 
-    def register_ingress_handler(self, protocol: str, handler: Any) -> None:
+    def register_ingress_handler(self, protocol: str, handler: IngressHandler) -> None:
         """Register a protocol-specific inbound HTTP handler."""
         self._ingress.register_ingress_handler(protocol, handler)
 
@@ -946,9 +950,7 @@ class AgentRuntime(RuntimeAPI):
         reason: str | None = None,
         silent: bool | None = None,
     ) -> ChatResult:
-        return self._ingress.wake(
-            chat_id, event_id=event_id, reason=reason, silent=silent
-        )
+        return self._ingress.wake(chat_id, event_id=event_id, reason=reason, silent=silent)
 
     def _enqueue_plan_task_wake(self, plan: Plan, task: Task) -> None:
         """Enqueue a non-silent wake that reports one task's completion or failure."""

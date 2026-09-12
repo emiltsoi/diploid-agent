@@ -8,10 +8,19 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING
 
 from diploid_agent.plugins.contexts import ShutdownContext
 from diploid_agent.runtime.state import RuntimeState
+
+if TYPE_CHECKING:
+    from diploid_agent.memory import MemoryManager
+    from diploid_agent.models import ActiveTurn, ChatState
+    from diploid_agent.plugin_incidents import PluginIncidentStore
+    from diploid_agent.plugins import PluginManager
+    from diploid_agent.runtime.store import ChatSessionStore
+    from diploid_agent.runtime.wake_queue import WakeQueue
+
 
 logger = logging.getLogger(__name__)
 
@@ -29,18 +38,18 @@ class RuntimeRestart:
         self,
         *,
         state: RuntimeState,
-        lock: Any,
-        wake_queue: Any,
-        incidents: Any,
-        plugins: Any,
-        chat_store: Any,
-        active_turns: dict[str, Any],
-        store: dict[str, Any],
+        lock: threading.RLock,
+        wake_queue: WakeQueue | None,
+        incidents: PluginIncidentStore | None,
+        plugins: PluginManager,
+        chat_store: ChatSessionStore,
+        active_turns: dict[str, ActiveTurn],
+        store: dict[str, ChatState],
         instance_id: str,
         instance_started_at: float,
         suppress_auto_continue_fn: Callable[..., None],
         unit_exists_fn: Callable[[str], bool],
-        memory_manager: Callable[[str], Any],
+        memory_manager: Callable[[str], MemoryManager],
     ) -> None:
         self._state = state
         self._lock = lock

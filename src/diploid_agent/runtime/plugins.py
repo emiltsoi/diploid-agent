@@ -6,11 +6,22 @@ import json as _json
 import shutil
 import subprocess
 import sys
-from typing import Any
+import threading
+from typing import TYPE_CHECKING, Any
 
-from diploid_agent.config import PluginConfig
+from diploid_agent.config import Config, PluginConfig
 from diploid_agent.locking import locked
 from diploid_agent.models import ChatResult
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from diploid_agent.acp_client.lifecycle import AcpLifecycleLog
+    from diploid_agent.context import ContextBuilder
+    from diploid_agent.plugin_incidents import PluginIncidentStore
+    from diploid_agent.plugins.manager import PluginManager
+    from diploid_agent.runtime.config_manager import RuntimeConfigManager
+    from diploid_agent.runtime.store import ChatSessionStore
 
 
 class RuntimePlugins:
@@ -19,14 +30,14 @@ class RuntimePlugins:
     def __init__(
         self,
         *,
-        plugins: Any,
-        incidents: Any,
-        config_manager: Any,
-        lock: Any,
-        config: Any,
-        chat_store: Any,
-        lifecycle_log: Any,
-        context_builder_fn: Any,
+        plugins: PluginManager,
+        incidents: PluginIncidentStore,
+        config_manager: RuntimeConfigManager,
+        lock: threading.RLock,
+        config: Config,
+        chat_store: ChatSessionStore,
+        lifecycle_log: AcpLifecycleLog | None,
+        context_builder_fn: Callable[[], ContextBuilder],
     ) -> None:
         self._plugins = plugins
         self._incidents = incidents
@@ -40,7 +51,7 @@ class RuntimePlugins:
         self._plugin_mcp_server_names: set[str] = set()
 
     @property
-    def context_builder(self) -> Any:
+    def context_builder(self) -> ContextBuilder:
         return self._context_builder_fn()
 
     _BODY_STATE_FILES = ("chat_body_state.json", "body_state.json", "body.json")

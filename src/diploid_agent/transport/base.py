@@ -5,9 +5,12 @@ from __future__ import annotations
 import abc
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from diploid_agent.config import NotificationsConfig, TaskConfig, TimerConfig, WakerConfig
+
+if TYPE_CHECKING:
+    from diploid_agent.transport.ingress import IngressHandler
 
 
 @dataclass
@@ -228,7 +231,7 @@ class RuntimeAPI(abc.ABC):
     def update_notifications_config(self, notifications_config: NotificationsConfig) -> str:
         """Update the live notifications configuration."""
 
-    def register_ingress_handler(self, protocol: str, handler: Any) -> None:
+    def register_ingress_handler(self, protocol: str, handler: IngressHandler) -> None:
         """Register a protocol-specific inbound HTTP handler."""
         raise NotImplementedError
 

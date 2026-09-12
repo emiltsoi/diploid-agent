@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from diploid_agent.engine import TurnRequest, TurnResult
 from diploid_agent.engine.router import ModelRoute
@@ -12,6 +12,22 @@ from diploid_agent.memory import RecallResult
 from diploid_agent.models import SessionRecord
 from diploid_agent.persona_composer import PersonaPrompt
 from diploid_agent.plugins.contexts import MemoryTransitionContext
+
+if TYPE_CHECKING:
+    import threading
+    from collections.abc import Callable
+
+    from diploid_agent.config import Config
+    from diploid_agent.context import ContextBuilder
+    from diploid_agent.engine import AgentEngine
+    from diploid_agent.engine.router import ModelRouter
+    from diploid_agent.memory import MemoryManager
+    from diploid_agent.plugins import PluginManager
+    from diploid_agent.runtime.mcp_skills import RuntimeMcpSkills
+    from diploid_agent.runtime.metrics import RuntimeMetrics
+    from diploid_agent.runtime.store import ChatSessionStore
+    from diploid_agent.skills import SkillManager
+
 
 logger = logging.getLogger(__name__)
 
@@ -22,17 +38,17 @@ class RuntimePrompts:
     def __init__(
         self,
         *,
-        config: Any,
-        lock: Any,
-        chat_store: Any,
-        context_builder: Any,
-        mcp_skills: Any,
-        plugins: Any,
-        skills: Any,
-        engine_fn: Any,
-        router: Any,
-        runtime_metrics: Any,
-        memory_manager: Any,
+        config: Config,
+        lock: threading.RLock,
+        chat_store: ChatSessionStore,
+        context_builder: ContextBuilder,
+        mcp_skills: RuntimeMcpSkills,
+        plugins: PluginManager,
+        skills: SkillManager,
+        engine_fn: Callable[[], AgentEngine],
+        router: ModelRouter,
+        runtime_metrics: RuntimeMetrics,
+        memory_manager: Callable[[str], MemoryManager],
     ) -> None:
         self.config = config
         self._lock = lock
@@ -241,8 +257,8 @@ class RuntimePrompts:
         *,
         mcp_servers: list[dict[str, Any]] | None = None,
         skill_names: set[str] | None = None,
-        on_chunk: Any | None = None,
-        on_update: Any | None = None,
+        on_chunk: Callable[[str], None] | None = None,
+        on_update: Callable[[dict[str, Any]], None] | None = None,
     ) -> tuple[TurnResult, str]:
         """Create a new ACP session and return the prompt result + session id."""
         cwd = self._chat_store._chat_dir(chat_id)

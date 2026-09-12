@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 import yaml
 from pydantic import BaseModel
@@ -23,6 +24,21 @@ from diploid_agent.config import (
 )
 from diploid_agent.models import RuntimeStatus
 from diploid_agent.plan.models import PlanStatus
+
+if TYPE_CHECKING:
+    import threading
+
+    from diploid_agent.config import Config
+    from diploid_agent.context import ContextBuilder
+    from diploid_agent.models import ActiveTurn
+    from diploid_agent.plan.manager import PlanManager
+    from diploid_agent.plugins import PluginManager
+    from diploid_agent.runtime.event_bus import EventBus
+    from diploid_agent.runtime.plugins import RuntimePlugins
+    from diploid_agent.runtime.timer_service import TimerService
+    from diploid_agent.runtime.wake_queue import WakeQueue
+    from diploid_agent.task.engine import TaskEngine
+
 
 logger = logging.getLogger(__name__)
 
@@ -41,19 +57,19 @@ class RuntimeConfigManager:
     def __init__(
         self,
         *,
-        config: Any,
-        lock: Any,
-        active_turns: dict[str, Any],
+        config: Config,
+        lock: threading.RLock,
+        active_turns: dict[str, ActiveTurn],
         instance_id: str,
         instance_started_at: float,
-        plan_manager_fn: Callable[[], Any],
-        event_bus_fn: Callable[[], Any],
-        timer_service_fn: Callable[[], Any],
-        task_engine_fn: Callable[[], Any],
-        wake_queue_fn: Callable[[], Any],
-        plugins_fn: Callable[[], Any],
-        runtime_plugins_fn: Callable[[], Any],
-        context_builder_fn: Callable[[], Any],
+        plan_manager_fn: Callable[[], PlanManager],
+        event_bus_fn: Callable[[], EventBus],
+        timer_service_fn: Callable[[], TimerService],
+        task_engine_fn: Callable[[], TaskEngine],
+        wake_queue_fn: Callable[[], WakeQueue],
+        plugins_fn: Callable[[], PluginManager],
+        runtime_plugins_fn: Callable[[], RuntimePlugins],
+        context_builder_fn: Callable[[], ContextBuilder],
         recreate_notifier_fn: Callable[[], None],
         save_overrides_fn: Callable[[], bool],
     ) -> None:
@@ -75,8 +91,7 @@ class RuntimeConfigManager:
         # monkeypatching the runtime delegate still apply.
         self._save_overrides_fn = save_overrides_fn
         self._runtime_overrides_path = (
-            Path(config.harness.session_store_path).expanduser().parent
-            / "runtime-overrides.yaml"
+            Path(config.harness.session_store_path).expanduser().parent / "runtime-overrides.yaml"
         )
         self._loaded_overrides: dict[str, Any] | None = None
 

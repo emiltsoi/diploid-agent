@@ -5,9 +5,21 @@ from __future__ import annotations
 import logging
 import time
 from collections import deque
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from diploid_agent.models import SessionRecord
+
+if TYPE_CHECKING:
+    import threading
+    from collections.abc import Callable
+
+    from diploid_agent.config import Config
+    from diploid_agent.context import ContextBuilder
+    from diploid_agent.engine import AgentEngine
+    from diploid_agent.metrics import MetricsCollector
+    from diploid_agent.models import ChatState
+    from diploid_agent.plugins import PluginManager
+
 
 logger = logging.getLogger(__name__)
 
@@ -18,15 +30,15 @@ class RuntimeMetrics:
     def __init__(
         self,
         *,
-        metrics: Any,
-        store: dict[str, Any],
-        lock: Any,
-        config: Any,
-        engine_fn: Any,
+        metrics: MetricsCollector,
+        store: dict[str, ChatState],
+        lock: threading.RLock,
+        config: Config,
+        engine_fn: Callable[[], AgentEngine],
         instance_started_at: float,
-        plugins_fn: Any,
-        context_builder_fn: Any,
-        notifier_fn: Any,
+        plugins_fn: Callable[[], PluginManager],
+        context_builder_fn: Callable[[], ContextBuilder],
+        notifier_fn: Callable[[], Any],
     ) -> None:
         self.metrics = metrics
         self._store = store

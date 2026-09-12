@@ -7,9 +7,18 @@ import logging
 import shutil
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from diploid_agent.models import ChatState, SessionRecord
+
+if TYPE_CHECKING:
+    import threading
+    from collections.abc import Callable
+
+    from diploid_agent.config import Config
+    from diploid_agent.context import ContextBuilder
+    from diploid_agent.plugins import PluginManager
+
 
 logger = logging.getLogger(__name__)
 
@@ -52,10 +61,10 @@ class ChatSessionStore:
         *,
         sessions_root: Path,
         store_path: Path,
-        lock: Any,
-        config: Any,
-        plugins_fn: Any,
-        context_builder_fn: Any,
+        lock: threading.RLock,
+        config: Config,
+        plugins_fn: Callable[[], PluginManager],
+        context_builder_fn: Callable[[], ContextBuilder],
     ) -> None:
         self.sessions_root = sessions_root
         self.store_path = store_path

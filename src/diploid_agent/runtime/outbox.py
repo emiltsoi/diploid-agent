@@ -6,10 +6,18 @@ import logging
 import threading
 import time
 from collections import deque
-from typing import Any
+from typing import TYPE_CHECKING
 
 from diploid_agent.models import ChatResult
 from diploid_agent.notifier import NoopNotifier, Notifier, TelegramNotifier, WebhookNotifier
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from diploid_agent.config import Config
+    from diploid_agent.metrics import MetricsCollector
+    from diploid_agent.models import ChatState
+
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +34,11 @@ class RuntimeOutbox:
     def __init__(
         self,
         *,
-        config: Any,
-        metrics: Any,
-        store: dict[str, Any],
-        lock: Any,
-        notifier_fn: Any,
+        config: Config,
+        metrics: MetricsCollector,
+        store: dict[str, ChatState],
+        lock: threading.RLock,
+        notifier_fn: Callable[[], Notifier | None],
     ) -> None:
         self.config = config
         self._metrics = metrics
@@ -42,7 +50,7 @@ class RuntimeOutbox:
         self._outbox_condition = threading.Condition()
 
     @property
-    def notifier(self) -> Any:
+    def notifier(self) -> Notifier | None:
         return self._notifier_fn()
 
     def _create_notifier(self) -> Notifier:

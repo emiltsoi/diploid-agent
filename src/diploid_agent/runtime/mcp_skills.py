@@ -3,9 +3,19 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from diploid_agent.plugins.contexts import McpCommandContext, SkillCommandContext
+
+if TYPE_CHECKING:
+    import threading
+
+    from diploid_agent.config import Config
+    from diploid_agent.mcp import McpManager
+    from diploid_agent.plugins import PluginManager
+    from diploid_agent.runtime.store import ChatSessionStore
+    from diploid_agent.skills import SkillManager
+
 
 logger = logging.getLogger(__name__)
 
@@ -16,13 +26,13 @@ class RuntimeMcpSkills:
     def __init__(
         self,
         *,
-        mcp: Any,
-        skills: Any,
-        plugins: Any,
-        chat_store: Any,
+        mcp: McpManager,
+        skills: SkillManager,
+        plugins: PluginManager,
+        chat_store: ChatSessionStore,
         active_chat_skills: dict[str, set[str]],
-        lock: Any,
-        config: Any,
+        lock: threading.RLock,
+        config: Config,
     ) -> None:
         self.mcp = mcp
         self.skills = skills

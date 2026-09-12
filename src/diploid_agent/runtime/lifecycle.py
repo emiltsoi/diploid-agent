@@ -3,13 +3,34 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from diploid_agent.plan.models import TaskType
 from diploid_agent.plugins.contexts import ShutdownContext
 from diploid_agent.runtime.event_bus import Event
 from diploid_agent.runtime.state import RuntimeState
+
+if TYPE_CHECKING:
+    from diploid_agent.config import Config
+    from diploid_agent.memory import MemoryManager
+    from diploid_agent.models import ChatState
+    from diploid_agent.plan.manager import PlanManager
+    from diploid_agent.plugins import PluginManager
+    from diploid_agent.runtime.event_bus import EventBus
+    from diploid_agent.runtime.instance import InstanceManager
+    from diploid_agent.runtime.outbox import RuntimeOutbox
+    from diploid_agent.runtime.planning import RuntimePlanning
+    from diploid_agent.runtime.restart import RuntimeRestart
+    from diploid_agent.runtime.store import ChatSessionStore
+    from diploid_agent.runtime.subagent import RuntimeSubagent
+    from diploid_agent.runtime.timer_service import TimerService
+    from diploid_agent.runtime.typing import RuntimeTyping
+    from diploid_agent.runtime.wake_queue import WakeQueue
+    from diploid_agent.task.engine import TaskEngine
+    from diploid_agent.transport.base import RuntimeAPI
+
 
 logger = logging.getLogger(__name__)
 
@@ -35,27 +56,27 @@ class RuntimeLifecycle:
         self,
         *,
         state: RuntimeState,
-        config: Any,
-        lock: Any,
-        event_bus: Any,
-        wake_queue: Any,
-        instance_manager: Any,
-        task_engine: Any,
-        timer_service: Any,
-        typing: Any,
-        restart: Any,
-        outbox: Any,
-        plugins: Any,
-        chat_store: Any,
-        memory_managers: dict[str, Any],
-        store: dict[str, Any],
+        config: Config,
+        lock: threading.RLock,
+        event_bus: EventBus,
+        wake_queue: WakeQueue | None,
+        instance_manager: InstanceManager,
+        task_engine: TaskEngine,
+        timer_service: TimerService,
+        typing: RuntimeTyping,
+        restart: RuntimeRestart,
+        outbox: RuntimeOutbox,
+        plugins: PluginManager,
+        chat_store: ChatSessionStore,
+        memory_managers: dict[str, MemoryManager],
+        store: dict[str, ChatState],
         ingress_handlers: dict[str, Any],
         instance_id: str,
         instance_started_at: float,
-        plan_manager: Any,
-        planning: Any,
-        subagent: Any,
-        runtime_api: Any,
+        plan_manager: PlanManager,
+        planning: RuntimePlanning,
+        subagent: RuntimeSubagent,
+        runtime_api: RuntimeAPI,
     ) -> None:
         self._state = state
         self._config = config
