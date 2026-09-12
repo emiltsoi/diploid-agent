@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING, Any
 
 from diploid_agent.engine import TurnRequest
 from diploid_agent.locking import locked
@@ -16,54 +15,13 @@ from diploid_agent.plugins.contexts import (
     SessionClearContext,
     SessionStartContext,
 )
-
-if TYPE_CHECKING:
-    from diploid_agent.turn.controller import TurnController
+from diploid_agent.turn.base import TurnComponent
 
 logger = logging.getLogger(__name__)
 
 
-class TurnSession:
+class TurnSession(TurnComponent):
     """Session management for a single chat."""
-
-    def __init__(self, controller: TurnController) -> None:
-        self.controller = controller
-
-    @property
-    def runtime(self) -> Any:
-        return self.controller.runtime
-
-    @property
-    def acp_client(self) -> Any:
-        return getattr(self.runtime, "acp_client", None)
-
-    @property
-    def _lock(self) -> Any:
-        return self.runtime._lock
-
-    @property
-    def _chat_store(self) -> Any:
-        return self.runtime._chat_store
-
-    @property
-    def _prompts(self) -> Any:
-        return self.runtime._prompts
-
-    @property
-    def _mcp_skills(self) -> Any:
-        return self.runtime._mcp_skills
-
-    @property
-    def _outbox(self) -> Any:
-        return self.runtime._outbox
-
-    @property
-    def context_builder(self) -> Any:
-        return self.runtime.context_builder
-
-    @property
-    def engine(self) -> Any:
-        return self.runtime.engine
 
     def _can_resume_record(self, chat_id: str, record: SessionRecord, use_model: str) -> bool:
         """Return True if the ACP session for this record can be resumed."""

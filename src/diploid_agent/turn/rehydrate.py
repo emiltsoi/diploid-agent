@@ -5,59 +5,18 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from diploid_agent.engine import TurnRequest, TurnResult
 from diploid_agent.models import ActiveTurn, ChatResult, PartialTurn, SessionRecord, WakeEvent
 from diploid_agent.plugins.contexts import PromptContext, RehydrationReason
-
-if TYPE_CHECKING:
-    from diploid_agent.turn.controller import TurnController
+from diploid_agent.turn.base import TurnComponent
 
 logger = logging.getLogger(__name__)
 
 
-class TurnRehydrate:
+class TurnRehydrate(TurnComponent):
     """Recover from stale ACP sessions by resuming or re-creating them."""
-
-    def __init__(self, controller: TurnController) -> None:
-        self.controller = controller
-
-    @property
-    def runtime(self) -> Any:
-        return self.controller.runtime
-
-    @property
-    def acp_client(self) -> Any:
-        return getattr(self.runtime, "acp_client", None)
-
-    @property
-    def _lock(self) -> Any:
-        return self.runtime._lock
-
-    @property
-    def _chat_store(self) -> Any:
-        return self.runtime._chat_store
-
-    @property
-    def _prompts(self) -> Any:
-        return self.runtime._prompts
-
-    @property
-    def _mcp_skills(self) -> Any:
-        return self.runtime._mcp_skills
-
-    @property
-    def _outbox(self) -> Any:
-        return self.runtime._outbox
-
-    @property
-    def context_builder(self) -> Any:
-        return self.runtime.context_builder
-
-    @property
-    def engine(self) -> Any:
-        return self.runtime.engine
 
     def _active_partial(self, chat_id: str) -> PartialTurn | None:
         """Return a PartialTurn snapshot of the in-flight turn, if any."""

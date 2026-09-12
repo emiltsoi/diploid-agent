@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from diploid_agent.dispatch import DispatchStatus
 from diploid_agent.engine import TurnRequest, TurnResult
-from diploid_agent.locking import locked
 from diploid_agent.models import (
     ActiveTurn,
     ChatResult,
@@ -27,68 +26,14 @@ from diploid_agent.plugins.contexts import (
     TurnErrorContext,
     TurnStartContext,
 )
+from diploid_agent.turn.base import TurnComponent
 from diploid_agent.turn.utils import join_notices
-
-if TYPE_CHECKING:
-    from diploid_agent.turn.controller import TurnController
 
 logger = logging.getLogger(__name__)
 
-class TurnDispatch:
+class TurnDispatch(TurnComponent):
     """Background dispatch / continue-turn logic for a single chat."""
 
-    def __init__(self, controller: TurnController) -> None:
-        self.controller = controller
-
-    @property
-    def runtime(self) -> Any:
-        return self.controller.runtime
-
-    @property
-    def acp_client(self) -> Any:
-        return getattr(self.runtime, "acp_client", None)
-
-    @property
-    def _lock(self) -> Any:
-        return self.runtime._lock
-
-    @property
-    def _chat_store(self) -> Any:
-        return self.runtime._chat_store
-
-    @property
-    def _prompts(self) -> Any:
-        return self.runtime._prompts
-
-    @property
-    def _mcp_skills(self) -> Any:
-        return self.runtime._mcp_skills
-
-    @property
-    def _outbox(self) -> Any:
-        return self.runtime._outbox
-
-    @property
-    def _runtime_metrics(self) -> Any:
-        return self.runtime._runtime_metrics
-
-    @property
-    def _planning(self) -> Any:
-        return self.runtime._planning
-
-    @property
-    def _subagent(self) -> Any:
-        return self.runtime._subagent
-
-    @property
-    def session(self) -> Any:
-        return self.controller.session
-
-    @property
-    def rehydrate(self) -> Any:
-        return self.controller.rehydrate
-
-    @locked
     def dispatch(
         self,
         chat_id: str,
