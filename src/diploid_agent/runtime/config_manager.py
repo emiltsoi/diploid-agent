@@ -55,6 +55,7 @@ class RuntimeConfigManager:
         runtime_plugins_fn: Callable[[], Any],
         context_builder_fn: Callable[[], Any],
         recreate_notifier_fn: Callable[[], None],
+        save_overrides_fn: Callable[[], bool],
     ) -> None:
         self.config = config
         self._lock = lock
@@ -70,6 +71,9 @@ class RuntimeConfigManager:
         self._runtime_plugins_fn = runtime_plugins_fn
         self._context_builder_fn = context_builder_fn
         self._recreate_notifier_fn = recreate_notifier_fn
+        # Resolves ``runtime._save_runtime_overrides`` at call time so tests
+        # monkeypatching the runtime delegate still apply.
+        self._save_overrides_fn = save_overrides_fn
         self._runtime_overrides_path = (
             Path(config.harness.session_store_path).expanduser().parent
             / "runtime-overrides.yaml"
@@ -146,7 +150,7 @@ class RuntimeConfigManager:
                 setattr(current, field, getattr(new, field))
             if post is not None:
                 post()
-            if not self._save_runtime_overrides():
+            if not self._save_overrides_fn():
                 raise ConfigPersistenceError(error)
             return success
 
@@ -388,7 +392,7 @@ class RuntimeConfigManager:
             self._plugins.reconfigure(merged)
             self._runtime_plugins._register_plugin_mcp_servers()
             self._context_builder.plugin_manager = self._plugins
-            if not self._save_runtime_overrides():
+            if not self._save_overrides_fn():
                 raise ConfigPersistenceError(
                     "Plugins config updated in memory but persistence failed"
                 )

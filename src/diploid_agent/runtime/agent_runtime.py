@@ -121,6 +121,7 @@ class AgentRuntime(RuntimeAPI):
             recreate_notifier_fn=lambda: setattr(
                 self, "notifier", self._create_notifier()
             ),
+            save_overrides_fn=lambda: self._save_runtime_overrides(),
         )
         self._chat_store = ChatSessionStore(
             sessions_root=self.sessions_root,
@@ -325,9 +326,32 @@ class AgentRuntime(RuntimeAPI):
             mcp_skills=self._mcp_skills,
             lock=self._lock,
         )
-        self._actions = RuntimeActions(self)
-
         self.turn_controller = TurnController(self)
+        self._actions = RuntimeActions(
+            state=self._state,
+            config=config,
+            lock=self._lock,
+            chat_store=self._chat_store,
+            lifecycle_log=self.lifecycle_log,
+            memory_manager=self._memory_manager,
+            runtime_metrics=self._runtime_metrics,
+            prompts=self._prompts,
+            outbox=self._outbox,
+            plugins=self._plugins,
+            subagent=self._subagent,
+            restart=self._restart,
+            incidents=self._incidents,
+            wake_queue=self.wake_queue,
+            plan_manager=self.plan_manager,
+            task_engine=self.task_engine,
+            event_bus=self.event_bus,
+            turn_controller=self.turn_controller,
+            instance_id=self.instance_id,
+            engine_fn=lambda: self.engine,
+            call_unlocked_fn=self._call_unlocked,
+            suppress_auto_continue_fn=lambda *a, **k: self.suppress_auto_continue(*a, **k),
+            acp_client_fn=lambda: getattr(self, "acp_client", None),
+        )
         self._lifecycle = RuntimeLifecycle(
             state=self._state,
             config=config,

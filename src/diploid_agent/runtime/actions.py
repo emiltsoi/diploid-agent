@@ -5,14 +5,15 @@ from __future__ import annotations
 import functools
 import logging
 import time
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
 from diploid_agent.models import ChatResult, WakeEvent
 from diploid_agent.plan.models import Plan, Task, TaskStatus
 from diploid_agent.plugins.contexts import PromoteContext, RetainContext
-from diploid_agent.runtime.component import RuntimeComponent
 from diploid_agent.runtime.event_bus import Event
+from diploid_agent.runtime.state import RuntimeState
 
 logger = logging.getLogger(__name__)
 
@@ -22,43 +23,78 @@ def _actions_locked(method: Any) -> Any:
 
     @functools.wraps(method)
     def wrapper(self: RuntimeActions, *args: Any, **kwargs: Any) -> Any:
-        with self._runtime._lock:
+        with self._lock:
             return method(self, *args, **kwargs)
 
     return wrapper
 
 
-class RuntimeActions(RuntimeComponent):
+class RuntimeActions:
     """Public, non-turn runtime actions backed by an AgentRuntime."""
 
+    def __init__(
+        self,
+        *,
+        state: RuntimeState,
+        config: Any,
+        lock: Any,
+        chat_store: Any,
+        lifecycle_log: Any,
+        memory_manager: Callable[[str], Any],
+        runtime_metrics: Any,
+        prompts: Any,
+        outbox: Any,
+        plugins: Any,
+        subagent: Any,
+        restart: Any,
+        incidents: Any,
+        wake_queue: Any,
+        plan_manager: Any,
+        task_engine: Any,
+        event_bus: Any,
+        turn_controller: Any,
+        instance_id: str,
+        engine_fn: Callable[[], Any],
+        call_unlocked_fn: Callable[..., Any],
+        suppress_auto_continue_fn: Callable[..., None],
+        acp_client_fn: Callable[[], Any],
+    ) -> None:
+        self._state = state
+        self.config = config
+        self._lock = lock
+        self._chat_store = chat_store
+        self._lifecycle_log = lifecycle_log
+        self._memory_manager = memory_manager
+        self._runtime_metrics = runtime_metrics
+        self._prompts = prompts
+        self._outbox = outbox
+        self._plugins = plugins
+        self._subagent = subagent
+        self._restart = restart
+        self._incidents = incidents
+        self.wake_queue = wake_queue
+        self.plan_manager = plan_manager
+        self.task_engine = task_engine
+        self.event_bus = event_bus
+        self.turn_controller = turn_controller
+        self.instance_id = instance_id
+        self._engine_fn = engine_fn
+        self._call_unlocked = call_unlocked_fn
+        self._suppress_auto_continue = suppress_auto_continue_fn
+        self._acp_client_fn = acp_client_fn
+
     @property
-    def _outbox(self) -> Any:
-        return self._runtime._outbox
+    def engine(self) -> Any:
+        return self._engine_fn()
 
     @property
     def acp_client(self) -> Any:
-        return getattr(self._runtime, "acp_client", None)
-
-    @property
-    def _subagent(self) -> Any:
-        return self._runtime._subagent
-
-    @property
-    def instance_id(self) -> str:
-        return self._runtime.instance_id
-
-    @property
-    def turn_controller(self) -> Any:
-        return self._runtime.turn_controller
-
-    @property
-    def event_bus(self) -> Any:
-        return self._runtime.event_bus
+        return self._acp_client_fn()
 
     def _continuity_status(self, chat_id: str, record: Any) -> dict[str, Any]:
         """Return ACP continuity status for the active session."""
         continuity: dict[str, Any] = {
-            "resume_enabled": self._runtime.config.engine.acp_resume_enabled,
+            "resume_enabled": self.config.engine.acp_resume_enabled,
             "current_session_id": record.session_id,
             "state": "unknown",
             "state_reason": None,
@@ -67,17 +103,17 @@ class RuntimeActions(RuntimeComponent):
             "restart_count_in_window": 0,
             "resume_metrics": {},
         }
-        if self._runtime.lifecycle_log is None:
+        if self._lifecycle_log is None:
             return continuity
 
-        events = self._runtime.lifecycle_log.recent_events_for(
+        events = self._lifecycle_log.recent_events_for(
             chat_id,
             limit=500,
         )
         if not events:
             return continuity
 
-        window = self._runtime.config.engine.acp_restart_backoff_window
+        window = self.config.engine.acp_restart_backoff_window
         now = time.time()
         restart_events = [
             e
@@ -151,30 +187,30 @@ class RuntimeActions(RuntimeComponent):
         }
 
         # Last wake-relevant event for the chat.
-        continuity["last_wake_event"] = self._runtime.lifecycle_log.last_wake_event_for(chat_id)
+        continuity["last_wake_event"] = self._lifecycle_log.last_wake_event_for(chat_id)
 
         return continuity
 
     def status(self, chat_id: str) -> dict[str, Any]:
         """Return the harness-recorded status for a chat."""
         with self._lock:
-            record = self._runtime._active_record(chat_id)
+            record = self._chat_store._active_record(chat_id)
             if not record:
                 return {"chat_id": chat_id, "active": False}
 
         memory_stats: dict[str, Any] = {}
         try:
-            memory_stats = self._runtime._memory_manager(chat_id).stats()
+            memory_stats = self._memory_manager(chat_id).stats()
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to load memory stats for %s: %s", chat_id, exc)
 
-        context_usage = self._runtime._runtime_metrics._context_usage(record)
-        background_tasks = self._runtime.subagent_status(chat_id)
+        context_usage = self._runtime_metrics._context_usage(record)
+        background_tasks = self._subagent.subagent_status(chat_id)
 
-        active_turn = self._runtime.turn_status(chat_id, wait=0.0)
+        active_turn = self.turn_controller.turn_status(chat_id, wait=0.0)
 
         with self._lock:
-            record = self._runtime._active_record(chat_id)
+            record = self._chat_store._active_record(chat_id)
             if not record:
                 return {"chat_id": chat_id, "active": False}
 
@@ -207,8 +243,8 @@ class RuntimeActions(RuntimeComponent):
     def list_sessions(self, chat_id: str) -> dict[str, Any]:
         """Return all non-pruned sessions for a chat, with the active one marked."""
         with self._lock:
-            state = self._runtime._chat_state(chat_id)
-            active = self._runtime._active_record(chat_id)
+            state = self._chat_store._chat_state(chat_id)
+            active = self._chat_store._active_record(chat_id)
             sessions = []
             for record in sorted(state.sessions.values(), key=lambda r: r.session_number):
                 sessions.append(
@@ -232,20 +268,20 @@ class RuntimeActions(RuntimeComponent):
     @_actions_locked
     def memory(self, chat_id: str) -> str:
         """Return the per-chat memory content."""
-        return self._runtime._memory_manager(chat_id).memory_content()
+        return self._memory_manager(chat_id).memory_content()
 
     @_actions_locked
     def summarize(self, chat_id: str) -> ChatResult:
         """Trigger a manual summarization for a chat."""
-        record = self._runtime._active_record(chat_id)
-        model = self._runtime._prompts._model(record)
-        mgr = self._runtime._memory_manager(chat_id)
-        self._runtime._call_unlocked(mgr._summarize, model)
+        record = self._chat_store._active_record(chat_id)
+        model = self._prompts._model(record)
+        mgr = self._memory_manager(chat_id)
+        self._call_unlocked(mgr._summarize, model)
 
         notice = None
         if record:
-            notice = self._runtime._prompts._check_chat_memory_transition(chat_id, record)
-            self._runtime._append_record(record)
+            notice = self._prompts._check_chat_memory_transition(chat_id, record)
+            self._chat_store._append_record(record)
 
         return ChatResult(reply="Summarization complete.", notice=notice)
 
@@ -259,7 +295,7 @@ class RuntimeActions(RuntimeComponent):
     ) -> ChatResult:
         """Recall relevant memories for a query."""
         max_tokens = max_tokens or self.config.harness.memory.hindsight.max_recall_tokens
-        reply = self._runtime._memory_manager(chat_id).backend.recall(
+        reply = self._memory_manager(chat_id).backend.recall(
             query,
             tags=tags,
             max_tokens=max_tokens,
@@ -284,7 +320,7 @@ class RuntimeActions(RuntimeComponent):
                 context=context,
             ),
         )
-        self._runtime._memory_manager(chat_id).retain(
+        self._memory_manager(chat_id).retain(
             ctx.content, tags=ctx.tags, context=ctx.context
         )
         self._plugins.after_retain(chat_id, ctx)
@@ -293,16 +329,16 @@ class RuntimeActions(RuntimeComponent):
     @_actions_locked
     def promote(self, chat_id: str, fact: str) -> ChatResult:
         """Promote a fact to the chat's curated memory pocket."""
-        record = self._runtime._active_record(chat_id)
+        record = self._chat_store._active_record(chat_id)
         ctx = self._plugins.before_promote(
             chat_id,
             PromoteContext(chat_id=chat_id, fact=fact, record=record),
         )
-        self._runtime._memory_manager(chat_id).promote(ctx.fact)
+        self._memory_manager(chat_id).promote(ctx.fact)
 
-        record = self._runtime._active_record(chat_id)
+        record = self._chat_store._active_record(chat_id)
         if record:
-            self._runtime._append_record(record)
+            self._chat_store._append_record(record)
             self._plugins.after_promote(
                 chat_id,
                 PromoteContext(chat_id=chat_id, fact=ctx.fact, record=record),
@@ -321,7 +357,7 @@ class RuntimeActions(RuntimeComponent):
         mesh_payload: dict[str, Any],
     ) -> ChatResult:
         """Persist a terminal mesh message (e.g. a DSN) without running a turn."""
-        record = self._runtime._active_record(chat_id)
+        record = self._chat_store._active_record(chat_id)
 
         event = WakeEvent(
             id=f"mesh:{mesh_payload.get('message_id', 'unknown')}",
@@ -335,7 +371,7 @@ class RuntimeActions(RuntimeComponent):
         )
         self._plugins.on_waking(chat_id, record, time.time(), wake_event=event)
 
-        self._runtime._memory_manager(chat_id).append_mesh_note(display_text)
+        self._memory_manager(chat_id).append_mesh_note(display_text)
 
         return ChatResult(reply="", notice=None)
 
@@ -351,17 +387,17 @@ class RuntimeActions(RuntimeComponent):
             service = f"{self.config.persona.name}.service"
         now = time.time()
         if (
-            now - self._runtime._last_service_restart_at
-            < self._runtime._service_restart_cooldown_seconds
+            now - self._state.last_service_restart_at
+            < self._state.service_restart_cooldown_seconds
         ):
             return ChatResult(
                 reply=f"A restart for {service} is already scheduled.",
                 notice="Please wait for it to complete.",
             )
-        self._runtime._last_service_restart_at = now
+        self._state.last_service_restart_at = now
 
         # Suppress auto-continue for this chat and cancel pending wakes.
-        self._runtime.suppress_auto_continue(chat_id=chat_id, seconds=300)
+        self._suppress_auto_continue(chat_id=chat_id, seconds=300)
         if self.wake_queue is not None:
             try:
                 self.wake_queue.cancel(chat_id=chat_id, reason="auto_continue")
@@ -380,8 +416,8 @@ class RuntimeActions(RuntimeComponent):
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Failed to record restart incident for %s: %s", chat_id, exc)
 
-        if not self._runtime._schedule_draining_restart(service, chat_id=chat_id, reason=reason):
-            self._runtime._last_service_restart_at = 0.0
+        if not self._restart._schedule_draining_restart(service, chat_id=chat_id, reason=reason):
+            self._state.last_service_restart_at = 0.0
             return ChatResult(
                 reply=f"Could not restart {service}: no such systemd user unit.",
                 notice="Check the service name and try again.",
