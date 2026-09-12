@@ -7,19 +7,19 @@ memory-flag rules as the original harness methods.
 
 from __future__ import annotations
 
-import logging
-import re
 import time
 from collections.abc import Callable
-from datetime import datetime
 from pathlib import Path
 from typing import Any, ClassVar
 
 from diploid_agent.acp_client.lifecycle import AcpLifecycleLog
 from diploid_agent.config import Config
+from diploid_agent.context.anchors import PromptAnchors
+from diploid_agent.context.pressure import ContextPressure
 from diploid_agent.context.reply_quote import ReplyQuoteFormatter
 from diploid_agent.context.token_estimator import TokenEstimator
-from diploid_agent.dispatch import Dispatch, DispatchStatus
+from diploid_agent.context.wake_context import WakeContext
+from diploid_agent.dispatch import Dispatch
 from diploid_agent.memory import MemoryManager, RecallResult
 from diploid_agent.models import PartialTurn, SessionRecord, WakeEvent
 from diploid_agent.persona_composer import (
@@ -35,9 +35,6 @@ from diploid_agent.plugins.contexts import (
     RehydrationReason,
 )
 from diploid_agent.skills import SkillManager
-from diploid_agent.text import compact_duration, human_duration
-
-logger = logging.getLogger(__name__)
 
 
 class ContextBuilder:
@@ -159,8 +156,13 @@ class ContextBuilder:
         self._last_file_mtimes: dict[str, dict[str, float]] = {}
         self._last_prompt_time: dict[str, float] = {}
         # Last turn number at which we injected a full soul, used for the turn
-        # budget fallback when the model's context window is unknown.
+        # budget fallback when the model's context window is unknown.  The dict
+        # is shared with ContextPressure, which reads it from _soul_mode.
         self._last_full_soul_turn: dict[str, int] = {}
+        # Extracted collaborators: wake narration, context pressure, anchors.
+        self._wake_context = WakeContext(config, lambda: self.lifecycle_log)
+        self._pressure = ContextPressure(config, self._token_estimator, self._last_full_soul_turn)
+        self._anchors = PromptAnchors(config)
 
     # ---------------------------------------------------------------- helpers
 
@@ -204,75 +206,7 @@ class ContextBuilder:
         record: SessionRecord | None = None,
     ) -> str:
         """Render a continuity note from a lifecycle event and the prior record."""
-        if event is None:
-            return ""
-        ev = event.get("event", "")
-        reason = event.get("reason") or ""
-        session_id = event.get("session_id")
-        notes: list[str] = []
-
-        if ev == "transport.restart" and reason == "mcp_change":
-            notes.append("I restarted a moment ago so a new tool could load.")
-        elif ev == "rehydrate.transport_restart_failure" or ("restart" in ev and "failure" in ev):
-            notes.append("I had trouble restarting the ACP transport and rebuilt from files.")
-        elif "restart" in ev:
-            notes.append("I restarted a moment ago; the thread is intact.")
-        elif ev in (
-            "session.resume.success",
-            "session.load.success",
-            "rehydrate.resume.success",
-        ):
-            notes.append("I resumed the previous session; the thread continues.")
-        elif ev == "rehydrate.session_alive.success":
-            notes.append("The previous session was still alive; I picked up where we left off.")
-        elif ev == "rehydrate.timeout" or reason == "timeout":
-            notes.append("I am waking up after a hard timeout.")
-        elif ev == "rehydrate.start":
-            notes.append("I am waking up and rehydrating my state.")
-        elif ev in ("session.new", "session.new.success", "rehydrate.new_session.success"):
-            notes.append("I woke in a fresh session; earlier memory is loaded.")
-        else:
-            return ""
-
-        # Add how long we were silent, using the prior record's last update.
-        ts = event.get("timestamp")
-        if ts and record is not None and record.updated_at:
-            try:
-                wake_ts = datetime.fromisoformat(ts).timestamp()
-                silent = wake_ts - record.updated_at
-                if silent > 1:
-                    notes.append(f"I was silent for {compact_duration(silent)}.")
-            except (ValueError, OSError, TypeError):
-                pass
-
-        # Mention the stop reason from the prior record if it adds useful colour.
-        stop = record.last_stop_reason if record is not None else None
-        if stop and stop not in ("completed", "new_session"):
-            if stop == "timeout" and any("hard timeout" in note for note in notes):
-                pass
-            elif not any(stop in note for note in notes):
-                notes.append(f"The previous turn stopped with reason: {stop}.")
-
-        if session_id:
-            notes.append(f"Session: {session_id}.")
-
-        return " ".join(notes)
-
-    def _last_wake_event(self, chat_id: str) -> dict[str, Any] | None:
-        """Return the last wake-relevant lifecycle event for this chat."""
-        if self.lifecycle_log is None:
-            return None
-        return self.lifecycle_log.last_wake_event_for(chat_id)
-
-    def _compact_wake_state_line(self, record: SessionRecord | None) -> str:
-        """Return a one-line wake state for compact prompts."""
-        parts: list[str] = []
-        if record is not None:
-            stop = record.last_stop_reason or "completed"
-            session = record.session_number or 0
-            turn = record.turn_number or 0
-            parts.append(f"Last turn: session {session}, turn {turn}, {stop}.")
-        return " ".join(parts)
+        return self._wake_context._wake_narrative(chat_id, event, record)
 
     def _format_system_notice(self, parts: list[str], compact: bool) -> str | None:
         """Render a system notice, one-line in compact mode or a section otherwise."""
@@ -282,11 +216,8 @@ class ContextBuilder:
             return " ".join(parts)
         return "## System notice\n\n" + "\n\n".join(parts)
 
-    def _context_window_for(self, model: str | None) -> int | None:
-        return self._token_estimator.context_window_for(model)
-
     def _context_pressure(self, record: SessionRecord | None) -> dict[str, Any]:
-        return self._token_estimator.context_pressure(record)
+        return self._pressure._context_pressure(record)
 
     def _estimate_next_prompt_tokens(
         self,
@@ -294,7 +225,7 @@ class ContextBuilder:
         record: SessionRecord,
         formatted_message: str,
     ) -> dict[str, int]:
-        return self._token_estimator.estimate_next_prompt_tokens(record, formatted_message)
+        return self._pressure._estimate_next_prompt_tokens(chat_id, record, formatted_message)
 
     def _wants_memory_recall(self, message: str) -> bool:
         """Return True if a fresh-mode message is asking about remembered facts."""
@@ -382,82 +313,7 @@ class ContextBuilder:
         True when the context window is so full that we should start a fresh
         ACP subprocess.
         """
-        if record is None:
-            return "normal", False
-        if rehydrated:
-            return "full", False
-
-        pressure = self._context_pressure(record)
-        context_window = pressure["context_window"]
-        input_ratio = pressure["input_ratio"]
-
-        thresholds = self.config.harness
-        estimated_ratio = 0.0
-
-        # Proactive sizing: estimate the next prompt and trigger a compact fresh
-        # session before the prompt overflows the ACP child context window.
-        if context_window:
-            estimate = self._estimate_next_prompt_tokens(chat_id, record, formatted_message)
-            estimated_ratio = estimate["total"] / context_window
-            logger.debug(
-                "Proactive prompt estimate for %s: %s (ratio %.3f)",
-                chat_id,
-                estimate,
-                estimated_ratio,
-            )
-            if estimated_ratio > thresholds.proactive_new_session_threshold:
-                return "fresh", True
-
-        # Context pressure must reflect the *current* session's occupancy.
-        # `input_ratio` (last turn's input tokens / window) is that signal: the
-        # ACP child reports the full prompt it consumed, including accumulated
-        # history.  `cumulative_ratio` is lifetime chat usage and never resets,
-        # so it must not drive fresh-session decisions.
-        if input_ratio > thresholds.reinject_soul_full_threshold:
-            return "fresh", True
-
-        last_full = self._last_full_soul_turn.get(chat_id, 0)
-        turn_number = record.turn_number or 0
-        turns_since = turn_number - last_full
-
-        if context_window and (
-            estimated_ratio > thresholds.reinject_soul_threshold
-            or input_ratio > thresholds.reinject_soul_input_threshold
-        ):
-            return "small", False
-
-        if not context_window and turns_since > thresholds.reinject_soul_turns:
-            return "small", False
-
-        return "normal", False
-
-    @staticmethod
-    def _rehydration_notice(reason: RehydrationReason) -> str:
-        """Return the system-notice text to explain why a session was re-created."""
-        notices = {
-            RehydrationReason.NONE: "",
-            RehydrationReason.RESUMED: ("Resumed ACP session. The conversation history is intact."),
-            RehydrationReason.STALE: (
-                "This ACP session was rehydrated. Full persona memory and "
-                "long-term chat memory have been re-injected into the prompt."
-            ),
-            RehydrationReason.TIMEOUT: (
-                "The previous turn stopped due to a hard timeout. "
-                "A fresh ACP session is being used."
-            ),
-            RehydrationReason.TRANSPORT_ERROR: (
-                "The ACP transport was restarted due to an error. "
-                "A fresh ACP session is being used."
-            ),
-            RehydrationReason.RESTART: (
-                "The ACP transport was restarted. A fresh ACP session is being used."
-            ),
-            RehydrationReason.FRESH: (
-                "Fresh ACP session for context pressure. "
-                "Persona memory is compacted and long-term recall is skipped."
-            ),
-        }
-        return notices[reason]
+        return self._pressure._soul_mode(chat_id, record, rehydrated, formatted_message)
 
     def interrupted_turn_anchor(
         self,
@@ -469,70 +325,11 @@ class ContextBuilder:
         The new ACP session can use this to pick up where the previous session left
         off without re-doing work that was already in progress.
         """
+        # The None check lives here as well so the unbound call
+        # ``ContextBuilder.interrupted_turn_anchor(None, None)`` still works.
         if partial is None:
             return None
-
-        current_intent = (partial.current_intent or "").strip()
-        if not current_intent and partial.user_message:
-            current_intent = (partial.user_message or "").strip().splitlines()[0][:120]
-
-        if (
-            not current_intent
-            and not partial.last_side_effect
-            and not partial.message_text
-            and not partial.thought_text
-            and not partial.side_effects
-        ):
-            return None
-
-        header = "The current assistant turn was interrupted"
-        if reason is not None and reason != RehydrationReason.NONE:
-            header += f" ({reason.value})"
-        header += "."
-
-        parts: list[str] = [header]
-        if current_intent:
-            parts.append(f"Current intent: {current_intent}")
-
-        last_side_effect = (partial.last_side_effect or "").strip()
-        if last_side_effect:
-            age = ""
-            if partial.last_side_effect_at:
-                age = compact_duration(time.time() - partial.last_side_effect_at)
-            if age:
-                parts.append(f"Last activity: {last_side_effect} ({age} ago)")
-            else:
-                parts.append(f"Last activity: {last_side_effect}")
-
-        if partial.side_effects:
-            lines: list[str] = []
-            for eff in partial.side_effects[-8:]:
-                title = str(eff.get("title") or "tool")
-                status = str(eff.get("status") or "running")
-                at = eff.get("at") or 0.0
-                age = ""
-                if at:
-                    age = compact_duration(time.time() - at)
-                lines.append(f"- {title} ({status})" + (f" ({age} ago)" if age else ""))
-            parts.append("Tool trace before interruption:\n" + "\n".join(lines))
-
-        message_text = (partial.message_text or "").strip()
-        if message_text:
-            cap = self.config.harness.interrupted_turn_message_cap
-            trimmed = _trim_to_section(message_text, cap)
-            if len(trimmed) < len(message_text):
-                trimmed += "\n\n[... truncated ...]"
-            parts.append(f"Partial reply produced so far:\n\n{trimmed}")
-
-        thought_text = (partial.thought_text or "").strip()
-        if thought_text:
-            cap = self.config.harness.interrupted_turn_thought_cap
-            trimmed = _trim_to_section(thought_text, cap)
-            if len(trimmed) < len(thought_text):
-                trimmed += "\n\n[... truncated ...]"
-            parts.append(f"Partial thought so far:\n\n{trimmed}")
-
-        return "\n\n".join(parts)
+        return self._anchors.interrupted_turn_anchor(partial, reason)
 
     def generate_label(self, chat_id: str, user_message: str) -> str:
         """Auto-generate a short label from the first user message."""
@@ -573,7 +370,7 @@ class ContextBuilder:
         not lifetime cumulative usage — the latter only grows and is not a
         measure of how full the context window is.
         """
-        pressure = self._context_pressure(record)
+        pressure = self._pressure._context_pressure(record)
         context_window = pressure.get("context_window") or 0
         if not context_window:
             return f"[Context mode: {soul_mode}; window unknown]"
@@ -671,22 +468,6 @@ class ContextBuilder:
             return None, f"## Chat memory\n\n{chat_mem_part}"
 
         return "## Chat memory\n\n" + "\n\n".join(recall_parts), chat_mem_part
-
-    def _wake_context_budget_line(
-        self,
-        record: SessionRecord | None,
-        soul_mode: str,
-        estimated_tokens: int,
-    ) -> str | None:
-        """Return a one-line wake-context budget/pressure indicator, or None if disabled."""
-        budget = self.config.harness.wake_context_token_budget
-        if not budget:
-            return None
-        ratio = min(estimated_tokens / budget, 9.99) if budget else 0.0
-        return (
-            f"[Wake context budget: {estimated_tokens}/{budget} tokens "
-            f"({ratio * 100:.1f}%); mode: {soul_mode}]"
-        )
 
     def _trim_slots_to_budget(
         self,
@@ -854,93 +635,15 @@ class ContextBuilder:
 
     def is_continuation_message(self, user_message: str) -> bool:
         """Return True if the user message is a continuation trigger."""
-        normalized = re.sub(r"[^\w\s]", "", user_message).strip().lower()
-        if not normalized:
-            return False
-        return normalized in {t.strip().lower() for t in self.config.engine.continuation_triggers}
+        return self._anchors.is_continuation_message(user_message)
 
     def continuation_anchor(self, record: SessionRecord | None, user_message: str) -> str | None:
         """Return a prompt anchor when resuming an interrupted turn."""
-        if record is None or record.last_stop_reason is None:
-            return None
-        if not self.is_continuation_message(user_message):
-            return None
-        if record.last_stop_reason == "timeout":
-            return (
-                "The previous assistant turn was interrupted by the hard time limit "
-                'and did not produce a final response. The user has sent "Continue". '
-                "Resume the task from the conversation context above. If the context "
-                "is insufficient, ask the user for the missing piece."
-            )
-        if record.last_stop_reason == "cancelled":
-            return (
-                "The previous assistant turn was interrupted (cancelled or soft timeout). "
-                'The user has sent "Continue". Pick up the task from the partial '
-                "result above and continue where you left off."
-            )
-        if record.last_stop_reason == "stopped":
-            return (
-                "The previous assistant turn was stopped by the user. "
-                'The user has sent "Continue". If they want you to resume, '
-                "pick up the task from the partial result above and continue where you left off."
-            )
-        return None
-
-    def _subagent_result_path(self, chat_id: str, dispatch_id: str) -> Path:
-        """Return the absolute path where a subagent full result should live."""
-        safe = chat_id.replace("/", "_")
-        return (
-            Path(self.config.harness.sessions_root).expanduser()
-            / safe
-            / "subagent-results"
-            / f"subagent-{dispatch_id}.md"
-        )
-
-    def _dispatch_status_name(self, dispatch: Dispatch) -> str:
-        """Derive a display status from the dispatch and its stop reason."""
-        if dispatch.status in (DispatchStatus.TIMEOUT, DispatchStatus.CANCELLED):
-            return dispatch.status.value
-        if dispatch.stop_reason in ("timeout", "cancelled", "failed"):
-            return dispatch.stop_reason
-        if dispatch.status == DispatchStatus.PENDING:
-            if dispatch.result or dispatch.finished_at is not None:
-                return "completed"
-            return "running"
-        return dispatch.status.value
+        return self._anchors.continuation_anchor(record, user_message)
 
     def build_dispatch_continuation(self, dispatch: Dispatch) -> str:
         """Build a clean, structured continuation anchor for a background dispatch."""
-        status = self._dispatch_status_name(dispatch)
-        start = dispatch.started_at or 0.0
-        end = dispatch.finished_at or time.time()
-        duration = human_duration(max(0.0, end - start))
-        summary = dispatch.summary or "(no summary)"
-        result_path = dispatch.full_result_path or str(
-            self._subagent_result_path(dispatch.chat_id or "unknown", dispatch.id)
-        )
-
-        lines: list[str] = [
-            "## Subagent result",
-            "",
-            f"- **status:** {status}",
-            f"- **duration:** {duration}",
-            f"- **summary:** {summary}",
-            f"- **full_result_path:** {result_path}",
-        ]
-        if dispatch.context:
-            lines.append(f"- **context:** {dispatch.context}")
-
-        if status in ("timeout", "cancelled"):
-            reason = "it ran out of time" if status == "timeout" else "it was cancelled"
-            lines.extend(
-                [
-                    "",
-                    f"The subagent stopped because {reason}. The summary below is partial.",
-                ]
-            )
-
-        lines.extend(["", "Please continue and present the result to the user."])
-        return "\n".join(lines)
+        return self._anchors.build_dispatch_continuation(dispatch)
 
     # ---------------------------------------------------------------- prompt builders
 
@@ -1061,7 +764,9 @@ class ContextBuilder:
 
         if wake_budget is not None and is_compact:
             estimated = self._estimate_prompt_tokens(prompt, record)
-            wake_budget_line = self._wake_context_budget_line(record, soul_mode, estimated)
+            wake_budget_line = self._wake_context._wake_context_budget_line(
+                record, soul_mode, estimated
+            )
             if wake_budget_line:
                 # Add the wake budget/pressure line and re-render.
                 system_parts.append(wake_budget_line)
@@ -1072,7 +777,9 @@ class ContextBuilder:
             if self._estimate_prompt_tokens(prompt, record) > wake_budget:
                 slots, prompt = self._trim_slots_to_budget(slots, record, wake_budget)
                 estimated = self._estimate_prompt_tokens(prompt, record)
-                wake_budget_line = self._wake_context_budget_line(record, soul_mode, estimated)
+                wake_budget_line = self._wake_context._wake_context_budget_line(
+                    record, soul_mode, estimated
+                )
                 if wake_budget_line and system_parts:
                     if system_parts[-1].startswith("[Wake context budget:"):
                         system_parts[-1] = wake_budget_line
@@ -1204,11 +911,11 @@ class ContextBuilder:
                 )
             )
 
-        rehydration_notice = self._rehydration_notice(build_ctx.rehydration_reason)
+        rehydration_notice = self._anchors._rehydration_notice(build_ctx.rehydration_reason)
         wake_narrative = ""
         if rehydrated or (record is not None and self.lifecycle_log is not None):
-            wake_narrative = self._wake_narrative(
-                chat_id, self._last_wake_event(chat_id), record=record
+            wake_narrative = self._wake_context._wake_narrative(
+                chat_id, self._wake_context._last_wake_event(chat_id), record=record
             )
 
         system_parts = [p for p in [rehydration_notice, wake_narrative, notice] if p]
@@ -1274,7 +981,9 @@ class ContextBuilder:
             reply_to_message_id,
             chat_id,
         )
-        soul_mode, force_new_session = self._soul_mode(chat_id, record, rehydrated, formatted)
+        soul_mode, force_new_session = self._pressure._soul_mode(
+            chat_id, record, rehydrated, formatted
+        )
         resolved_reason = (
             rehydration_reason
             if rehydration_reason is not None
@@ -1369,13 +1078,13 @@ class ContextBuilder:
         else:
             chat_mem = None
 
-        rehydration_notice = self._rehydration_notice(build_ctx.rehydration_reason)
+        rehydration_notice = self._anchors._rehydration_notice(build_ctx.rehydration_reason)
 
         soul_notice = ""
         if force_new_session:
             if soul_mode == "fresh":
-                wake_narrative = self._wake_narrative(
-                    chat_id, self._last_wake_event(chat_id), record=record
+                wake_narrative = self._wake_context._wake_narrative(
+                    chat_id, self._wake_context._last_wake_event(chat_id), record=record
                 )
                 soul_notice = (
                     "Fresh ACP session for context pressure. "
