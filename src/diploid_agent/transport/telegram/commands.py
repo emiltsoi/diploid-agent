@@ -56,7 +56,7 @@ class TelegramCommandMixin:
         raw = self.command_handler.call(**kwargs)
         if isinstance(raw, str):
             return raw
-        if not isinstance(raw, dict) or "error" in raw:
+        if raw is None or (isinstance(raw, dict) and "error" in raw):
             return sorry
         return _coerce_chat_result(raw).reply
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from diploid_agent.models import ChatResult
 from diploid_agent.transport.telegram.commands import TelegramCommandMixin
 from diploid_agent.transport.telegram.sender import TelegramSenderMixin
 from diploid_agent.transport.telegram.state import TelegramStateMixin
@@ -46,3 +47,28 @@ def test_harness_help_returns_string() -> None:
     help_text = commands._harness_help(123)
     assert isinstance(help_text, str)
     assert "/help" in help_text
+
+
+class _StubHandler:
+    """Stands in for CommandHandler in embedded mode: returns raw values."""
+
+    def __init__(self, result):
+        self._result = result
+
+    def call(self, **_kwargs):
+        return self._result
+
+
+def test_harness_call_reply_coerces_chat_result() -> None:
+    """Embedded-mode calls can return ChatResult — not a sorry message."""
+    commands = _Commands()
+    commands.command_handler = _StubHandler(ChatResult(reply="reloaded ok"))
+    reply = commands._harness_call_reply(sorry="Sorry, I could not reload x.")
+    assert reply == "reloaded ok"
+
+
+def test_harness_call_reply_error_dict_returns_sorry() -> None:
+    commands = _Commands()
+    commands.command_handler = _StubHandler({"error": "boom"})
+    reply = commands._harness_call_reply(sorry="Sorry, I could not reload x.")
+    assert reply == "Sorry, I could not reload x."
