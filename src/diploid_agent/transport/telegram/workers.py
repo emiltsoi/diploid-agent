@@ -12,17 +12,8 @@ from typing import TYPE_CHECKING, Any
 from diploid_agent.models import ChatResult
 from diploid_agent.runtime.outbox import _is_telegram_chat_id
 from diploid_agent.transport.command_handler import _coerce_chat_result
-from diploid_agent.transport.interactive import (
-    extract_ask_block,
-)
-from diploid_agent.transport.telegram.formatting import (
-    _HEARTBEAT_INTERVAL,
-    _REPLY_PLACEHOLDER,
-    _THINKING_PREFIX,
-    _build_heartbeat_text,
-    _format_thought,
-)
 from diploid_agent.transport.telegram.models import ChatInput
+from diploid_agent.transport.telegram.stream_display import StreamDisplay
 
 if TYPE_CHECKING:
     from diploid_agent.transport.telegram.poller import TelegramPoller
@@ -34,9 +25,6 @@ logger = logging.getLogger("telegram_poll")
 # response comes back immediately (idle, stopped, error), this floor is the
 # only thing preventing a hot poll loop.
 _MIN_POLL_INTERVAL = 0.5
-# How long a user-stopped worker waits for the in-flight /chat request to
-# unwind before reporting the partial reply it already streamed.
-_STOP_RESULT_WAIT = 15.0
 
 
 class TurnWorker(threading.Thread):
@@ -173,66 +161,16 @@ class TurnWorker(threading.Thread):
         placeholder is started below it. This makes tool-call gaps readable as
         separate Telegram messages instead of one confusing, edited block.
         """
-        last_text_sent = ""
-        last_thought = ""
-        last_thought_sent = ""
-        text = ""
-        display_text = ""
-        tail_text = ""
-        visible = ""
-        committed_text = ""
-        committed_display = ""
-        committed_message_id = None
-        committed_raw_ok = True
-        last_growth_at = turn_start_at = time.monotonic()
-        last_edit_at = turn_start_at
-        config = self.poller._live_telegram_config
-
-        def _uncommitted_tail(full: str) -> str:
-            if not full:
-                return ""
-            if committed_display and full.startswith(committed_display):
-                return full[len(committed_display) :]
-            # The model somehow backtracked; restart the commit baseline.
-            return full
-
-        def _should_commit(tail: str, idle: float) -> bool:
-            if not config.intermediate_messages:
-                return False
-            if idle < config.intermediate_idle:
-                return False
-            if len(tail) < config.intermediate_min_chars:
-                return False
-            stripped = tail.rstrip()
-            if not stripped:
-                return False
-            return stripped[-1] in ".!?\n"
-
+        display = StreamDisplay(
+            poller=self.poller,
+            chat_id=self.chat_id,
+            reply_to_message_id=self.chat_input.message_id,
+            config=self.poller._live_telegram_config,
+            message_id=message_id,
+            thought_id=thought_id,
+        )
         while not chat_future.done() and not self._should_stop.is_set():
-            now = time.monotonic()
-            remaining = _HEARTBEAT_INTERVAL - (now - last_edit_at)
-            idle = now - last_growth_at
-            # If the current uncommitted tail is a candidate for an
-            # intermediate-message split, wake at the configured idle deadline
-            # (not just at the heartbeat). This prevents two separate answer
-            # blocks separated by a tool-call gap from being glued into one
-            # Telegram message.
-            tail = _uncommitted_tail(display_text)
-            if _should_commit(tail, idle):
-                # Tail is already idle enough; poll very soon to commit it.
-                commit_wait = 0.0
-            elif (
-                config.intermediate_messages
-                and len(tail) >= config.intermediate_min_chars
-                and (tail.rstrip() and tail.rstrip()[-1] in ".!?\n")
-            ):
-                commit_wait = max(0.0, config.intermediate_idle - idle)
-            else:
-                commit_wait = float("inf")
-            # Wake for the earlier of the heartbeat deadline and the commit
-            # deadline. A 0.5 s floor prevents a tight busy loop when no
-            # placeholder can be edited, while still letting us react quickly.
-            wait = min(25.0, max(0.5, min(remaining, commit_wait)))
+            wait = display.next_wait()
             poll_started = time.monotonic()
             status = self._harness_turn_status(wait=wait)
             # `wait` is only a server-side long-poll hint: when the harness
@@ -242,249 +180,10 @@ class TurnWorker(threading.Thread):
             poll_elapsed = time.monotonic() - poll_started
             if poll_elapsed < _MIN_POLL_INTERVAL:
                 time.sleep(_MIN_POLL_INTERVAL - poll_elapsed)
-            now = time.monotonic()
-            running = status.get("status") == "running"
-            if running:
-                text = status.get("message_text", "")
-                display_text, _ = extract_ask_block(text or "")
-                display_text = display_text.strip()
-                # Only the not-yet-committed tail belongs in the live
-                # placeholder; earlier chunks already went out as their own
-                # committed messages. _uncommitted_tail falls back to the full
-                # text when the rolling window dropped the committed prefix.
-                tail_text = _uncommitted_tail(display_text)
-                # Drop the paragraph seam so the new message does not open with
-                # blank lines; committed_display still tracks the raw slice.
-                visible = tail_text[:4096].lstrip("\n")
-            else:
-                text = ""
-                display_text = ""
-                tail_text = ""
-                visible = ""
-            edited = False
+            display.update(status)
 
-            # Start a reply placeholder the moment text starts arriving, even
-            # when thought streaming is still active.
-            if message_id is None and display_text:
-                message_id = self._send_placeholder(_REPLY_PLACEHOLDER)
-                if message_id is not None:
-                    self.poller._save_placeholder_state(self.chat_id, message_id, thought_id)
-                last_text_sent = _REPLY_PLACEHOLDER
-
-            if message_id is not None and display_text:
-                # If the visible text changed, the model is still writing.
-                if visible and visible != last_text_sent:
-                    self.poller._edit_message_text(self.chat_id, message_id, visible)
-                    last_text_sent = visible
-                    last_growth_at = now
-                    edited = True
-                elif visible:
-                    # No new text: check whether the visible tail we already
-                    # showed has been sitting idle long enough to be its own
-                    # message. We use the displayed text (not the raw text with
-                    # hidden ask blocks) so a trailing ask block does not cause
-                    # a duplicate commit of the same visible content.
-                    if _should_commit(tail_text, now - last_growth_at):
-                        # Freeze the current placeholder as a sent message and
-                        # start a fresh one so the rest of the reply can stream
-                        # below it. committed_display accumulates every shown
-                        # chunk so later tails stay suffixes of display_text.
-                        shown = tail_text[:4096]
-                        committed_display = (
-                            committed_display + shown
-                            if committed_display and display_text.startswith(committed_display)
-                            else shown
-                        )
-                        if committed_raw_ok and len(tail_text) <= 4096:
-                            committed_text = text
-                        else:
-                            # The displayed commit hit the 4096 cap (or a prior
-                            # commit did), so the raw prefix no longer maps to
-                            # what was shown; finalization strips by display.
-                            committed_text = ""
-                            committed_raw_ok = False
-                        committed_message_id = message_id
-                        last_text_sent = _REPLY_PLACEHOLDER
-                        last_growth_at = now
-                        message_id = self._send_placeholder(_REPLY_PLACEHOLDER)
-                        if message_id is not None:
-                            self.poller._save_placeholder_state(
-                                self.chat_id, message_id, thought_id
-                            )
-                        edited = True
-
-            if thought_id is not None:
-                thought = status.get("thought_text", "")
-                if thought:
-                    visible = _format_thought(thought)
-                    if visible and visible != last_thought_sent:
-                        self.poller._edit_message_text(self.chat_id, thought_id, visible)
-                        last_thought_sent = visible
-                        edited = True
-                    last_thought = thought
-            if edited:
-                last_edit_at = now
-            elif now - last_edit_at >= _HEARTBEAT_INTERVAL:
-                # Nothing new from the model; nudge the placeholder so the user
-                # knows the harness is still alive.
-                elapsed = now - turn_start_at
-                if message_id is not None:
-                    base = tail_text[:4096].lstrip("\n") or _REPLY_PLACEHOLDER
-                    heartbeat = _build_heartbeat_text(base, elapsed)
-                    if heartbeat != last_text_sent:
-                        self.poller._edit_message_text(self.chat_id, message_id, heartbeat)
-                        last_text_sent = heartbeat
-                        edited = True
-                if thought_id is not None:
-                    base = _format_thought(last_thought) if last_thought else _THINKING_PREFIX
-                    heartbeat = _build_heartbeat_text(base, elapsed)
-                    if heartbeat != last_thought_sent:
-                        self.poller._edit_message_text(self.chat_id, thought_id, heartbeat)
-                        last_thought_sent = heartbeat
-                        edited = True
-                # Reset the timer even if we had no placeholder to update, so a
-                # failed sendMessage cannot turn this loop into a tight poll.
-                last_edit_at = now
-
-        try:
-            if self._should_stop.is_set() and not chat_future.done():
-                # The user asked to stop; give the harness a short window to
-                # unwind the turn, then fall back to whatever we streamed.
-                result = chat_future.result(timeout=_STOP_RESULT_WAIT)
-            else:
-                result = chat_future.result()
-        except TimeoutError:
-            result = {
-                "reply": display_text or text,
-                "notice": "Turn stopped by user; the harness did not return a final reply.",
-            }
-        except Exception:
-            logger.exception("Turn failed")
-            result = {
-                "reply": "Sorry, the harness is having trouble. Try again in a moment.",
-                "notice": None,
-            }
-
-        continuation = result.get("continuation", False)
-
-        if not continuation:
-            thought = last_thought if thought_id is not None else ""
-            reply = result.get("reply", "")
-
-            if thought:
-                # A thought was streamed. Delete the live-edited placeholder(s) and
-                # any committed intermediate reply, then send the full thought as
-                # multi-part Telegram messages, then the full final reply below it.
-                # This keeps the reasoning block above the answer and avoids both
-                # interleaving and duplicating committed text.
-                if thought_id is not None:
-                    self.poller._delete_message(self.chat_id, thought_id)
-                    thought_id = None
-                if message_id is not None:
-                    self.poller._delete_message(self.chat_id, message_id)
-                    message_id = None
-                if committed_message_id is not None:
-                    self.poller._delete_message(self.chat_id, committed_message_id)
-                    committed_message_id = None
-                    committed_text = ""
-                    committed_display = ""
-
-                self.poller._send_text(
-                    self.chat_id,
-                    f"{_THINKING_PREFIX}\n{thought}",
-                    reply_to_message_id=self.chat_input.message_id,
-                )
-
-                sent: list[int] = []
-                if reply and reply.strip():
-                    sent = self.poller._send_text(
-                        self.chat_id,
-                        reply,
-                        reply_to_message_id=self.chat_input.message_id,
-                    )
-
-                session_number = result.get("session_number")
-                turn_number = result.get("turn_number")
-                if sent and session_number is not None and turn_number is not None:
-                    self.poller._register_message_ids(
-                        self.chat_id, sent, session_number, turn_number, reply, kind="reply"
-                    )
-
-                notice = result.get("notice")
-                if notice:
-                    self.poller._send_text(
-                        self.chat_id,
-                        f"System: {notice}",
-                        reply_to_message_id=self.chat_input.message_id,
-                    )
-            else:
-                # No thought stream. Use the original placeholder-based finalisation
-                # so intermediate-message commits are preserved and only the suffix
-                # of the final reply is sent.
-                if thought_id is not None:
-                    self.poller._delete_message(self.chat_id, thought_id)
-                    thought_id = None
-
-                # The final placeholder is only created after thinking completes, so it
-                # is always below the thought block.
-                if message_id is None:
-                    message_id = self._send_placeholder("...")
-                    if message_id is not None:
-                        self.poller._save_placeholder_state(self.chat_id, message_id, thought_id)
-
-                # Replace the placeholder with the final reply. If we already committed
-                # an earlier chunk as its own message, send only the uncommitted suffix
-                # so the user does not see the same text twice.
-                display_reply, _ = extract_ask_block(reply)
-                display_reply = display_reply.strip()
-                if committed_text and reply.startswith(committed_text):
-                    # The raw final reply still contains the already-committed text;
-                    # strip the raw prefix so the suffix (which may include a trailing
-                    # ask block for the keyboard) is sent below the committed message.
-                    reply = reply[len(committed_text) :].lstrip("\n")
-                elif committed_display and display_reply.startswith(committed_display):
-                    # The visible prefix was already committed, but the raw reply was
-                    # transformed (e.g. the ask block was stripped). Send only the
-                    # visible suffix so the committed message is not duplicated.
-                    reply = display_reply[len(committed_display) :].lstrip("\n")
-                if not reply or not reply.strip():
-                    # If the turn produced no final text, do not leave the placeholder
-                    # hanging. Delete it and send the notice (if any) as a fresh message.
-                    if message_id is not None:
-                        self.poller._delete_message(self.chat_id, message_id)
-                    sent = []
-                elif message_id is not None:
-                    sent = self.poller._send_text(
-                        self.chat_id,
-                        reply,
-                        first_message_id=message_id,
-                        reply_to_message_id=self.chat_input.message_id,
-                    )
-                else:
-                    sent = self.poller._send_text(
-                        self.chat_id,
-                        reply,
-                        reply_to_message_id=self.chat_input.message_id,
-                    )
-
-                session_number = result.get("session_number")
-                turn_number = result.get("turn_number")
-                if sent and session_number is not None and turn_number is not None:
-                    self.poller._register_message_ids(
-                        self.chat_id, sent, session_number, turn_number, reply, kind="reply"
-                    )
-
-                notice = result.get("notice")
-                if notice:
-                    self.poller._send_text(
-                        self.chat_id,
-                        f"System: {notice}",
-                        reply_to_message_id=self.chat_input.message_id,
-                    )
-        else:
-            if committed_message_id is not None and committed_message_id != message_id:
-                self.poller._delete_message(self.chat_id, committed_message_id)
-
+        result = display.await_result(chat_future, stopped=self._should_stop.is_set())
+        display.finalize(result)
         return result
 
     def _run_turn(self, chat_input: ChatInput) -> dict[str, Any]:
