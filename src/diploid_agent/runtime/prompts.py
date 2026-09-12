@@ -12,51 +12,14 @@ from diploid_agent.memory import RecallResult
 from diploid_agent.models import SessionRecord
 from diploid_agent.persona_composer import PersonaPrompt
 from diploid_agent.plugins.contexts import MemoryTransitionContext
+from diploid_agent.runtime.component import RuntimeComponent
 
 logger = logging.getLogger(__name__)
 
 
-class RuntimePrompts:
+class RuntimePrompts(RuntimeComponent):
     """First/follow-up prompt building, continuation, reply quoting, and model resolution."""
 
-    def __init__(self, runtime: Any) -> None:
-        self._runtime = runtime
-
-    @property
-    def config(self) -> Any:
-        return self._runtime.config
-
-    @property
-    def _lock(self) -> Any:
-        return self._runtime._lock
-
-    @property
-    def _chat_store(self) -> Any:
-        return self._runtime._chat_store
-
-    @property
-    def _mcp_skills(self) -> Any:
-        return self._runtime._mcp_skills
-
-    @property
-    def skills(self) -> Any:
-        return self._runtime.skills
-
-    @property
-    def context_builder(self) -> Any:
-        return self._runtime.context_builder
-
-    @property
-    def engine(self) -> Any:
-        return self._runtime.engine
-
-    @property
-    def _plugins(self) -> Any:
-        return self._runtime._plugins
-
-    @property
-    def _active_record(self) -> Any:
-        return self._runtime._active_record
 
     @property
     def _memory_manager(self) -> Any:

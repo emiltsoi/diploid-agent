@@ -11,40 +11,22 @@ from diploid_agent.dispatch import Dispatch, DispatchStatus, DispatchStore
 from diploid_agent.locking import locked
 from diploid_agent.models import ChatResult, WakeEvent
 from diploid_agent.plan.models import Task, TaskStatus, TaskType
+from diploid_agent.runtime.component import RuntimeComponent
 from diploid_agent.text import human_duration
 
 logger = logging.getLogger(__name__)
 
 
-class RuntimeSubagent:
+class RuntimeSubagent(RuntimeComponent):
     """Background subagent start, completion, and status."""
-
-    def __init__(self, runtime: Any) -> None:
-        self._runtime = runtime
-
-    @property
-    def config(self) -> Any:
-        return self._runtime.config
-
-    @property
-    def _lock(self) -> Any:
-        return self._runtime._lock
-
-    @property
-    def dispatch_store(self) -> DispatchStore:
-        return self._runtime.dispatch_store
-
-    @property
-    def engine(self) -> Any:
-        return self._runtime.engine
 
     @property
     def _outbox(self) -> Any:
         return self._runtime._outbox
 
     @property
-    def _prompts(self) -> Any:
-        return self._runtime._prompts
+    def dispatch_store(self) -> DispatchStore:
+        return self._runtime.dispatch_store
 
     @property
     def acp_client(self) -> Any:
@@ -53,22 +35,6 @@ class RuntimeSubagent:
     @property
     def mcp(self) -> Any:
         return self._runtime.mcp
-
-    @property
-    def skills(self) -> Any:
-        return self._runtime.skills
-
-    @property
-    def _mcp_skills(self) -> Any:
-        return self._runtime._mcp_skills
-
-    @property
-    def _chat_store(self) -> Any:
-        return self._runtime._chat_store
-
-    @property
-    def _runtime_plugins(self) -> Any:
-        return self._runtime._runtime_plugins
 
     @locked
     def subagent_start(

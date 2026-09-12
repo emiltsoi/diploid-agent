@@ -8,6 +8,7 @@ import time
 from typing import TYPE_CHECKING
 
 from diploid_agent.config import TimerConfig
+from diploid_agent.runtime.component import RuntimeComponent
 from diploid_agent.runtime.event_bus import Event
 
 if TYPE_CHECKING:
@@ -16,7 +17,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class TimerService:
+class TimerService(RuntimeComponent):
     """Background thread that polls the wake queue and fires due chat events."""
 
     def __init__(
@@ -24,7 +25,7 @@ class TimerService:
         runtime: AgentRuntime,
         config: TimerConfig,
     ) -> None:
-        self._runtime = runtime
+        super().__init__(runtime)
         self._config = config
         self._thread: threading.Thread | None = None
         self._running = False

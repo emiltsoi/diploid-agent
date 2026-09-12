@@ -11,45 +11,12 @@ from typing import Any
 from diploid_agent.config import PluginConfig
 from diploid_agent.locking import locked
 from diploid_agent.models import ChatResult
+from diploid_agent.runtime.component import RuntimeComponent
 
 
-class RuntimePlugins:
+class RuntimePlugins(RuntimeComponent):
     """Plugin lifecycle, sandbox, and incident helpers for AgentRuntime."""
 
-    def __init__(self, runtime: Any) -> None:
-        self._runtime = runtime
-
-    @property
-    def config(self) -> Any:
-        return self._runtime.config
-
-    @property
-    def _lock(self) -> Any:
-        return self._runtime._lock
-
-    @property
-    def _plugins(self) -> Any:
-        return self._runtime._plugins
-
-    @property
-    def _incidents(self) -> Any:
-        return self._runtime._incidents
-
-    @property
-    def _mcp_skills(self) -> Any:
-        return self._runtime._mcp_skills
-
-    @property
-    def _chat_store(self) -> Any:
-        return self._runtime._chat_store
-
-    @property
-    def _config_manager(self) -> Any:
-        return self._runtime._config_manager
-
-    @property
-    def _runtime_metrics(self) -> Any:
-        return self._runtime._runtime_metrics
 
     @property
     def _plugin_mcp_server_names(self) -> set[str]:
@@ -58,10 +25,6 @@ class RuntimePlugins:
     @_plugin_mcp_server_names.setter
     def _plugin_mcp_server_names(self, value: set[str]) -> None:
         self._runtime._plugin_mcp_server_names = value
-
-    @property
-    def context_builder(self) -> Any:
-        return self._runtime.context_builder
 
     def _register_plugin_mcp_servers(self) -> None:
         """Append plugin MCP server configs to the harness config before McpManager sees it."""

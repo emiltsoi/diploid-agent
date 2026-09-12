@@ -13,7 +13,6 @@ import yaml
 from pydantic import BaseModel
 
 from diploid_agent.config import (
-    Config,
     ConfigPersistenceError,
     NotificationsConfig,
     PluginConfig,
@@ -24,46 +23,23 @@ from diploid_agent.config import (
 )
 from diploid_agent.models import RuntimeStatus
 from diploid_agent.plan.models import PlanStatus
+from diploid_agent.runtime.component import RuntimeComponent
 
 logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T", bound=BaseModel)
 
 
-class RuntimeConfigManager:
+class RuntimeConfigManager(RuntimeComponent):
     """Live runtime configuration loading, updating, and persistence."""
 
     def __init__(self, runtime: Any) -> None:
-        self._runtime = runtime
+        super().__init__(runtime)
         self._runtime_overrides_path = (
             Path(runtime.config.harness.session_store_path).expanduser().parent
             / "runtime-overrides.yaml"
         )
         self._loaded_overrides: dict[str, Any] | None = None
-
-    @property
-    def config(self) -> Config:
-        return self._runtime.config
-
-    @property
-    def _lock(self):
-        return self._runtime._lock
-
-    @property
-    def store_path(self) -> Path:
-        return self._runtime.store_path
-
-    @property
-    def _plugins(self):
-        return self._runtime._plugins
-
-    @property
-    def _runtime_metrics(self):
-        return self._runtime._runtime_metrics
-
-    @property
-    def _chat_store(self):
-        return self._runtime._chat_store
 
     def get_status(self) -> RuntimeStatus:
         """Return the current runtime daemon status."""

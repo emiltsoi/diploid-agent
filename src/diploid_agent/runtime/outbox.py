@@ -10,6 +10,7 @@ from typing import Any
 
 from diploid_agent.models import ChatResult
 from diploid_agent.notifier import NoopNotifier, Notifier, TelegramNotifier, WebhookNotifier
+from diploid_agent.runtime.component import RuntimeComponent
 
 logger = logging.getLogger(__name__)
 
@@ -20,25 +21,13 @@ def _is_telegram_chat_id(chat_id: str) -> bool:
     return stripped.isdigit()
 
 
-class RuntimeOutbox:
+class RuntimeOutbox(RuntimeComponent):
     """Per-chat outbox queue and notification delivery."""
 
     def __init__(self, runtime: Any) -> None:
-        self._runtime = runtime
+        super().__init__(runtime)
         self._outbox: deque[tuple[str, ChatResult]] = deque()
         self._outbox_condition = threading.Condition()
-
-    @property
-    def _lock(self) -> threading.RLock:
-        return self._runtime._lock
-
-    @property
-    def config(self) -> Any:
-        return self._runtime.config
-
-    @property
-    def notifier(self) -> Notifier | None:
-        return self._runtime.notifier
 
     def _create_notifier(self) -> Notifier:
         if self.config.harness.notifications.outbox_delivery:

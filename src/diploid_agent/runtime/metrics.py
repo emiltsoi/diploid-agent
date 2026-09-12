@@ -8,15 +8,16 @@ from collections import deque
 from typing import Any
 
 from diploid_agent.models import SessionRecord
+from diploid_agent.runtime.component import RuntimeComponent
 
 logger = logging.getLogger(__name__)
 
 
-class RuntimeMetrics:
+class RuntimeMetrics(RuntimeComponent):
     """Owns per-chat and global metrics, health probes, and prometheus formatting."""
 
     def __init__(self, runtime: Any) -> None:
-        self._runtime = runtime
+        super().__init__(runtime)
         self._per_chat_metrics: dict[str, dict[str, Any]] = {}
         self._global_metrics: dict[str, Any] = {
             "turns": 0,
@@ -31,40 +32,12 @@ class RuntimeMetrics:
         )
 
     @property
-    def config(self) -> Any:
-        return self._runtime.config
-
-    @property
-    def _lock(self) -> Any:
-        return self._runtime._lock
-
-    @property
     def _store(self) -> dict[str, Any]:
         return self._runtime._store
 
     @property
     def metrics(self) -> Any:
         return self._runtime.metrics
-
-    @property
-    def context_builder(self) -> Any:
-        return self._runtime.context_builder
-
-    @property
-    def engine(self) -> Any:
-        return self._runtime.engine
-
-    @property
-    def notifier(self) -> Any:
-        return self._runtime.notifier
-
-    @property
-    def _plugins(self) -> Any:
-        return self._runtime._plugins
-
-    @property
-    def instance_started_at(self) -> float:
-        return self._runtime.instance_started_at
 
     def _rehydrate_metrics(self) -> None:
         """Seed per-chat and global metrics from the on-disk session store."""

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from diploid_agent.models import ChatState, SessionRecord
+from diploid_agent.runtime.component import RuntimeComponent
 
 logger = logging.getLogger(__name__)
 
@@ -44,36 +45,16 @@ def load_message_registry(path: Path) -> dict[int, dict[str, Any]]:
     return entries
 
 
-class ChatSessionStore:
+class ChatSessionStore(RuntimeComponent):
     """Persistence for the chat registry, session archive, and chat state."""
 
     def __init__(self, runtime: Any) -> None:
-        self._runtime = runtime
+        super().__init__(runtime)
         self._store: dict[str, ChatState] = {}
-
-    @property
-    def _lock(self):
-        return self._runtime._lock
-
-    @property
-    def config(self):
-        return self._runtime.config
-
-    @property
-    def store_path(self) -> Path:
-        return self._runtime.store_path
 
     @property
     def sessions_root(self) -> Path:
         return self._runtime.sessions_root
-
-    @property
-    def _plugins(self):
-        return self._runtime._plugins
-
-    @property
-    def context_builder(self):
-        return self._runtime.context_builder
 
     # ---------------------------------------------------------------- load/save
 

@@ -11,6 +11,7 @@ from typing import Any
 from diploid_agent.models import ChatResult, WakeEvent
 from diploid_agent.plan.models import Plan, Task, TaskStatus
 from diploid_agent.plugins.contexts import PromoteContext, RetainContext
+from diploid_agent.runtime.component import RuntimeComponent
 from diploid_agent.runtime.event_bus import Event
 
 logger = logging.getLogger(__name__)
@@ -27,95 +28,32 @@ def _actions_locked(method: Any) -> Any:
     return wrapper
 
 
-class RuntimeActions:
+class RuntimeActions(RuntimeComponent):
     """Public, non-turn runtime actions backed by an AgentRuntime."""
-
-    def __init__(self, runtime: Any) -> None:
-        self._runtime = runtime
-
-    @property
-    def config(self) -> Any:
-        return self._runtime.config
-
-    @property
-    def _lock(self) -> Any:
-        return self._runtime._lock
-
-    @property
-    def acp_client(self) -> Any:
-        return getattr(self._runtime, "acp_client", None)
-
-    @property
-    def _chat_store(self) -> Any:
-        return self._runtime._chat_store
-
-    @property
-    def _mcp_skills(self) -> Any:
-        return self._runtime._mcp_skills
-
-    @property
-    def _prompts(self) -> Any:
-        return self._runtime._prompts
 
     @property
     def _outbox(self) -> Any:
         return self._runtime._outbox
 
     @property
-    def _runtime_metrics(self) -> Any:
-        return self._runtime._runtime_metrics
-
-    @property
-    def _config_manager(self) -> Any:
-        return self._runtime._config_manager
+    def acp_client(self) -> Any:
+        return getattr(self._runtime, "acp_client", None)
 
     @property
     def _subagent(self) -> Any:
         return self._runtime._subagent
 
     @property
-    def _runtime_plugins(self) -> Any:
-        return self._runtime._runtime_plugins
-
-    @property
-    def _plugins(self) -> Any:
-        return self._runtime._plugins
-
-    @property
-    def _incidents(self) -> Any:
-        return self._runtime._incidents
-
-    @property
-    def wake_queue(self) -> Any:
-        return self._runtime.wake_queue
-
-    @property
     def instance_id(self) -> str:
         return self._runtime.instance_id
-
-    @property
-    def instance_started_at(self) -> float:
-        return self._runtime.instance_started_at
 
     @property
     def turn_controller(self) -> Any:
         return self._runtime.turn_controller
 
     @property
-    def plan_manager(self) -> Any:
-        return self._runtime.plan_manager
-
-    @property
-    def task_engine(self) -> Any:
-        return self._runtime.task_engine
-
-    @property
     def event_bus(self) -> Any:
         return self._runtime.event_bus
-
-    @property
-    def engine(self) -> Any:
-        return self._runtime.engine
 
     def _continuity_status(self, chat_id: str, record: Any) -> dict[str, Any]:
         """Return ACP continuity status for the active session."""

@@ -9,47 +9,19 @@ from typing import Any
 from diploid_agent.dispatch import Dispatch
 from diploid_agent.models import WakeEvent
 from diploid_agent.plan.models import Plan, PlanStatus, Task, TaskStatus
+from diploid_agent.runtime.component import RuntimeComponent
 
 logger = logging.getLogger(__name__)
 
 
-class RuntimePlanning:
+class RuntimePlanning(RuntimeComponent):
     """Plan task wakes, plan conclusions, and continuation anchors."""
 
-    def __init__(self, runtime: Any) -> None:
-        self._runtime = runtime
 
-    @property
-    def config(self) -> Any:
-        return self._runtime.config
-
-    @property
-    def _lock(self) -> Any:
-        return self._runtime._lock
-
-    @property
-    def wake_queue(self) -> Any:
-        return self._runtime.wake_queue
-
-    @property
-    def plan_manager(self) -> Any:
-        return self._runtime.plan_manager
-
-    @property
-    def task_engine(self) -> Any:
-        return self._runtime.task_engine
 
     @property
     def _outbox(self) -> Any:
         return self._runtime._outbox
-
-    @property
-    def _prompts(self) -> Any:
-        return self._runtime._prompts
-
-    @property
-    def context_builder(self) -> Any:
-        return self._runtime.context_builder
 
     def _enqueue_plan_task_wake(self, plan: Plan, task: Task) -> None:
         """Enqueue a non-silent wake that reports one task's completion or failure."""

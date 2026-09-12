@@ -4,21 +4,17 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from diploid_agent.plugins.contexts import ShutdownContext
-
-if TYPE_CHECKING:
-    from diploid_agent.runtime.agent_runtime import AgentRuntime
+from diploid_agent.runtime.component import RuntimeComponent
 
 logger = logging.getLogger(__name__)
 
 
-class RuntimeLifecycle:
+class RuntimeLifecycle(RuntimeComponent):
     """Start and stop the runtime's background services."""
 
-    def __init__(self, runtime: AgentRuntime) -> None:
-        self._runtime = runtime
 
     def _load_mesh_ingress(self) -> None:
         """Load the configured mesh ingress handler if mesh is enabled."""

@@ -6,23 +6,14 @@ import logging
 from typing import Any
 
 from diploid_agent.plugins.contexts import McpCommandContext, SkillCommandContext
+from diploid_agent.runtime.component import RuntimeComponent
 
 logger = logging.getLogger(__name__)
 
 
-class RuntimeMcpSkills:
+class RuntimeMcpSkills(RuntimeComponent):
     """MCP/skill enablement and per-chat active-set resolution."""
 
-    def __init__(self, runtime: Any) -> None:
-        self._runtime = runtime
-
-    @property
-    def config(self) -> Any:
-        return self._runtime.config
-
-    @property
-    def _lock(self) -> Any:
-        return self._runtime._lock
 
     @property
     def mcp(self) -> Any:
@@ -39,10 +30,6 @@ class RuntimeMcpSkills:
     @property
     def _chat_store(self) -> Any:
         return getattr(self._runtime, "_chat_store", None)
-
-    @property
-    def _active_record(self) -> Any:
-        return self._runtime._active_record
 
     @property
     def _store(self) -> Any:

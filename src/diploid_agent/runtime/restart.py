@@ -6,14 +6,14 @@ import logging
 import subprocess
 import threading
 import time
-from typing import Any
 
 from diploid_agent.plugins.contexts import ShutdownContext
+from diploid_agent.runtime.component import RuntimeComponent
 
 logger = logging.getLogger(__name__)
 
 
-class RuntimeRestart:
+class RuntimeRestart(RuntimeComponent):
     """Schedule and supervise graceful service restarts requested by the ACP child.
 
     The runtime handles two related but distinct lifecycle events: a *shutdown*
@@ -22,8 +22,6 @@ class RuntimeRestart:
     have to carry the scheduling, watchdog, and drain logic directly.
     """
 
-    def __init__(self, runtime: Any) -> None:
-        self._runtime = runtime
 
     def _on_service_restart(self, service: str, reason: str) -> None:
         """Handle a service restart request from the ACP subprocess.
