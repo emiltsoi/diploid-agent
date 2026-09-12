@@ -94,9 +94,7 @@ class TurnPipeline(TurnComponent):
                 EngineCallContext(
                     chat_id=chat_id,
                     request=request,
-                    session_id=(
-                        None if is_new or force_new_session else old_record.session_id
-                    ),
+                    session_id=(None if is_new or force_new_session else old_record.session_id),
                     record=record,
                     on_chunk=stream.on_chunk,
                     on_update=stream.on_update,
@@ -285,9 +283,7 @@ class TurnPipeline(TurnComponent):
             partial = self.runtime._prompts._partial_notice(result, continue_word=continue_word)
             notice = partial if notice is None else f"{notice}\n\n{partial}"
         if rehydrate_notice:
-            notice = (
-                rehydrate_notice if notice is None else f"{rehydrate_notice}\n\n{notice}"
-            )
+            notice = rehydrate_notice if notice is None else f"{rehydrate_notice}\n\n{notice}"
 
         latency = time.perf_counter() - turn_start
         turn_metrics = self.runtime._runtime_metrics._record_turn_metrics(
@@ -319,9 +315,7 @@ class TurnPipeline(TurnComponent):
                     label=(
                         label
                         if label is not None
-                        else self.runtime.context_builder.generate_label(
-                            chat_id, user_message
-                        )
+                        else self.runtime.context_builder.generate_label(chat_id, user_message)
                     ),
                 )
                 record.pending_turn_number = turn_number
@@ -342,10 +336,7 @@ class TurnPipeline(TurnComponent):
             ].get("cumulative", {})
             if not result.partial:
                 record.last_stop_reason = "completed"
-            elif (
-                (active := self.runtime._active_turns.get(chat_id)) is not None
-                and active.stopped
-            ):
+            elif (active := self.runtime._active_turns.get(chat_id)) is not None and active.stopped:
                 record.last_stop_reason = "stopped"
             elif result.cancelled:
                 record.last_stop_reason = "cancelled"
@@ -396,9 +387,7 @@ class TurnPipeline(TurnComponent):
                 turn_partial = None
 
             # Collect plugin memory items since the previous turn.
-            extra_items = self.runtime._plugins.memory_items(
-                chat_id, since=previous_updated_at
-            )
+            extra_items = self.runtime._plugins.memory_items(chat_id, since=previous_updated_at)
 
             assistant_notice = join_notices(turn_notice, turn_partial)
             self.runtime._memory_manager(chat_id).record_turn(

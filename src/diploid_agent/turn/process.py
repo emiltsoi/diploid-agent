@@ -21,6 +21,7 @@ from diploid_agent.turn.stream import TurnStream
 
 logger = logging.getLogger(__name__)
 
+
 class TurnProcess(TurnPipeline):
     """Main per-turn ACP loop for a single chat."""
 

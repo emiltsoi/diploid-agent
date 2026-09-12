@@ -156,8 +156,10 @@ class TurnSession(TurnComponent):
             chat_id,
             prompt,
             use_model,
-            mcp_servers=start_ctx.mcp_servers or self.runtime._mcp_skills._active_mcp_servers(chat_id),
-            skill_names=start_ctx.skill_names or set(self.runtime._mcp_skills._active_skill_names(chat_id)),
+            mcp_servers=start_ctx.mcp_servers
+            or self.runtime._mcp_skills._active_mcp_servers(chat_id),
+            skill_names=start_ctx.skill_names
+            or set(self.runtime._mcp_skills._active_skill_names(chat_id)),
         )
         reply = result.reply
 

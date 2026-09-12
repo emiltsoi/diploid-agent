@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 class RuntimeLifecycle(RuntimeComponent):
     """Start and stop the runtime's background services."""
 
-
     def _load_mesh_ingress(self) -> None:
         """Load the configured mesh ingress handler if mesh is enabled."""
         from diploid_agent.transport.ingress import load_ingress_handler
@@ -27,9 +26,7 @@ class RuntimeLifecycle(RuntimeComponent):
             handler = load_ingress_handler(mesh.ingress_module, runtime=self._runtime)
             self._runtime.register_ingress_handler("mesh", handler)
         except Exception:
-            logger.exception(
-                "Failed to load mesh ingress handler: %s", mesh.ingress_module
-            )
+            logger.exception("Failed to load mesh ingress handler: %s", mesh.ingress_module)
 
     def start(self) -> None:
         """Start background services. Idempotent."""

@@ -144,8 +144,7 @@ class PromotedMemory:
         key = self.normalize_line(content)
         if path.exists():
             existing = {
-                self.normalize_line(line)
-                for line in path.read_text(encoding="utf-8").splitlines()
+                self.normalize_line(line) for line in path.read_text(encoding="utf-8").splitlines()
             }
             if key in existing:
                 return

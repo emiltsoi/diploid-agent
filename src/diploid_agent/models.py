@@ -334,9 +334,7 @@ class PartialTurn:
     side_effects: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
-    def from_active(
-        cls, active: ActiveTurn, record: SessionRecord | None
-    ) -> PartialTurn:
+    def from_active(cls, active: ActiveTurn, record: SessionRecord | None) -> PartialTurn:
         """Snapshot the in-flight turn's streaming state for hook contexts."""
         return cls(
             chat_id=active.chat_id,

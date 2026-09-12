@@ -1237,11 +1237,7 @@ class ContextBuilder:
             chat_memory_path=mgr.chat_memory_path,
             notice=notice,
             metrics_compact=is_compact,
-            wake_budget=(
-                self.config.harness.wake_context_token_budget
-                if tiered_compact
-                else None
-            ),
+            wake_budget=(self.config.harness.wake_context_token_budget if tiered_compact else None),
         )
         return self.plugin_manager.after_first_prompt_built(chat_id, pctx)
 

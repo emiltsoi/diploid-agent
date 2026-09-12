@@ -227,7 +227,6 @@ class AgentRuntime(RuntimeAPI):
             self.config.harness.plugins = self._plugins._plugins
             self._config_manager._save_runtime_overrides()
 
-
         # Ingress handlers for pluggable transport protocols (e.g. mesh).
         self._ingress_handlers: dict[str, Any] = {}
 

@@ -177,7 +177,11 @@ class PromptWatchdog:
             return observed_proc is not None and observed_proc.returncode is not None
         if trigger == "inflight_deadline":
             inflight = self._state._inflight_future
-            return inflight is not None and not inflight.done() and now > self._state._inflight_deadline
+            return (
+                inflight is not None
+                and not inflight.done()
+                and now > self._state._inflight_deadline
+            )
         if trigger == "control_deadline":
             if not self._state._pending or self._state._active_prompts:
                 return False

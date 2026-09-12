@@ -149,9 +149,7 @@ class StreamDisplay:
         if self.message_id is None and self.display_text:
             self.message_id = self._send_placeholder(_REPLY_PLACEHOLDER)
             if self.message_id is not None:
-                self.poller._save_placeholder_state(
-                    self.chat_id, self.message_id, self.thought_id
-                )
+                self.poller._save_placeholder_state(self.chat_id, self.message_id, self.thought_id)
             self.last_text_sent = _REPLY_PLACEHOLDER
 
         if self.message_id is not None and self.display_text:
@@ -220,11 +218,7 @@ class StreamDisplay:
                     self.last_text_sent = heartbeat
                     edited = True
             if self.thought_id is not None:
-                base = (
-                    _format_thought(self.last_thought)
-                    if self.last_thought
-                    else _THINKING_PREFIX
-                )
+                base = _format_thought(self.last_thought) if self.last_thought else _THINKING_PREFIX
                 heartbeat = _build_heartbeat_text(base, elapsed)
                 if heartbeat != self.last_thought_sent:
                     self.poller._edit_message_text(self.chat_id, self.thought_id, heartbeat)
@@ -287,9 +281,7 @@ class StreamDisplay:
         else:
             self._finalize_placeholder(reply, result)
 
-    def _finalize_with_thought(
-        self, thought: str, reply: str, result: dict[str, Any]
-    ) -> None:
+    def _finalize_with_thought(self, thought: str, reply: str, result: dict[str, Any]) -> None:
         # A thought was streamed. Delete the live-edited placeholder(s) and
         # any committed intermediate reply, then send the full thought as
         # multi-part Telegram messages, then the full final reply below it.
@@ -335,9 +327,7 @@ class StreamDisplay:
         if self.message_id is None:
             self.message_id = self._send_placeholder("...")
             if self.message_id is not None:
-                self.poller._save_placeholder_state(
-                    self.chat_id, self.message_id, self.thought_id
-                )
+                self.poller._save_placeholder_state(self.chat_id, self.message_id, self.thought_id)
 
         # Replace the placeholder with the final reply. If we already committed
         # an earlier chunk as its own message, send only the uncommitted suffix

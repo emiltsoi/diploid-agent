@@ -569,9 +569,7 @@ class TelegramCommandMixin:
     def _harness_help(self, chat_id: int) -> str:
         return _TELEGRAM_HELP
 
-    def _handle_command(
-        self, chat_input: ChatInput, command: str, arg: str
-    ) -> bool:
+    def _handle_command(self, chat_input: ChatInput, command: str, arg: str) -> bool:
         """Dispatch a ``/`` command. Returns True when the input was a command."""
         chat_id = chat_input.chat_id
         if command == "/status":

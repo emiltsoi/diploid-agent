@@ -23,6 +23,7 @@ from diploid_agent.turn.stream import TurnStream
 
 logger = logging.getLogger(__name__)
 
+
 class TurnDispatch(TurnPipeline):
     """Background dispatch / continue-turn logic for a single chat."""
 

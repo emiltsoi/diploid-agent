@@ -22,7 +22,6 @@ class RuntimeRestart(RuntimeComponent):
     have to carry the scheduling, watchdog, and drain logic directly.
     """
 
-
     def _on_service_restart(self, service: str, reason: str) -> None:
         """Handle a service restart request from the ACP subprocess.
 

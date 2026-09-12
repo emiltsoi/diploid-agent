@@ -75,12 +75,8 @@ class AcpSessionOps:
             duration_ms = round((time.perf_counter() - start) * 1000, 2)
             used_method = method() if callable(method) else method
             if self._client.metrics is not None:
-                self._client.metrics.inc(
-                    "acp_resume_total", result="failure", method=used_method
-                )
-                self._client.metrics.set(
-                    "acp_resume_latency_ms", duration_ms, result="failure"
-                )
+                self._client.metrics.inc("acp_resume_total", result="failure", method=used_method)
+                self._client.metrics.set("acp_resume_latency_ms", duration_ms, result="failure")
             if self._client._lifecycle_log is not None:
                 self._client._lifecycle_log.write(
                     f"{event}.failure",
@@ -96,12 +92,8 @@ class AcpSessionOps:
         duration_ms = round((time.perf_counter() - start) * 1000, 2)
         used_method = method() if callable(method) else method
         if self._client.metrics is not None:
-            self._client.metrics.inc(
-                "acp_resume_total", result="success", method=used_method
-            )
-            self._client.metrics.set(
-                "acp_resume_latency_ms", duration_ms, result="success"
-            )
+            self._client.metrics.inc("acp_resume_total", result="success", method=used_method)
+            self._client.metrics.set("acp_resume_latency_ms", duration_ms, result="success")
         if self._client._lifecycle_log is not None:
             self._client._lifecycle_log.write(
                 f"{event}.success",
