@@ -304,25 +304,9 @@ class TurnProcess:
             if a is None:
                 return
             record = self.runtime._active_record(chat_id)
-            turn_number = record.next_turn_number() if record else 1
             self.runtime._plugins.on_partial(
                 chat_id,
-                PartialTurn(
-                    chat_id=chat_id,
-                    session_number=record.session_number if record else 0,
-                    turn_number=turn_number,
-                    user_message=user_message,
-                    message_text=a.message_text,
-                    thought_text=a.thought_text,
-                    thought_prefix=a.thought_prefix,
-                    thought_total=a.thought_total,
-                    full_text_offset=a.full_text_offset,
-                    updated_at=time.time(),
-                    current_intent=a.current_intent,
-                    last_side_effect=a.last_side_effect,
-                    last_side_effect_at=a.last_side_effect_at,
-                    side_effects=a.side_effects,
-                ),
+                PartialTurn.from_active(a, record),
             )
 
         def _on_chunk(text: str) -> None:

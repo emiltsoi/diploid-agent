@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 
@@ -331,6 +332,69 @@ class PartialTurn:
     last_side_effect: str = ""
     last_side_effect_at: float = 0.0
     side_effects: list[dict[str, Any]] = field(default_factory=list)
+
+    @classmethod
+    def from_active(
+        cls, active: ActiveTurn, record: SessionRecord | None
+    ) -> PartialTurn:
+        """Snapshot the in-flight turn's streaming state for hook contexts."""
+        return cls(
+            chat_id=active.chat_id,
+            session_number=record.session_number if record else 0,
+            turn_number=record.next_turn_number() if record else 1,
+            user_message=active.user_message,
+            message_text=active.message_text,
+            thought_text=active.thought_text,
+            thought_prefix=active.thought_prefix,
+            thought_total=active.thought_total,
+            full_text_offset=active.full_text_offset,
+            updated_at=time.time(),
+            current_intent=active.current_intent,
+            last_side_effect=active.last_side_effect,
+            last_side_effect_at=active.last_side_effect_at,
+            side_effects=active.side_effects,
+        )
+
+    @classmethod
+    def from_persisted(
+        cls, chat_id: str, data: dict[str, Any], user_message: str
+    ) -> PartialTurn | None:
+        """Rebuild a PartialTurn from a persisted interrupted-turn snapshot.
+
+        Returns None unless the snapshot's user_message matches the message
+        being re-driven and all fields pass type validation.
+        """
+        persisted_message = data.get("user_message")
+        if not isinstance(persisted_message, str):
+            return None
+        if persisted_message.strip() != (user_message or "").strip():
+            return None
+        text_fields = {
+            key: data.get(key)
+            for key in ("message_text", "thought_text", "current_intent", "last_side_effect")
+        }
+        if any(v is not None and not isinstance(v, str) for v in text_fields.values()):
+            return None
+        side_effects = data.get("side_effects") or []
+        if not isinstance(side_effects, list):
+            side_effects = []
+        try:
+            return cls(
+                chat_id=chat_id,
+                session_number=int(data.get("session_number") or 0),
+                turn_number=int(data.get("turn_number") or 0),
+                user_message=persisted_message,
+                message_text=text_fields["message_text"] or "",
+                thought_text=text_fields["thought_text"] or "",
+                updated_at=float(data.get("updated_at") or 0.0),
+                current_intent=text_fields["current_intent"] or "",
+                last_side_effect=text_fields["last_side_effect"] or "",
+                last_side_effect_at=float(data.get("last_side_effect_at") or 0.0),
+                side_effects=side_effects,
+            )
+        except (TypeError, ValueError):
+            return None
+
 
 class RuntimeStatus(BaseModel):
     instance_id: str

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -66,22 +65,7 @@ class TurnRehydrate:
         if active is None:
             return None
         record = self.runtime._active_record(chat_id)
-        return PartialTurn(
-            chat_id=chat_id,
-            session_number=record.session_number if record else 0,
-            turn_number=record.next_turn_number() if record else 1,
-            user_message=active.user_message,
-            message_text=active.message_text,
-            thought_text=active.thought_text,
-            thought_prefix=active.thought_prefix,
-            thought_total=active.thought_total,
-            full_text_offset=active.full_text_offset,
-            updated_at=time.time(),
-            current_intent=active.current_intent,
-            last_side_effect=active.last_side_effect,
-            last_side_effect_at=active.last_side_effect_at,
-            side_effects=active.side_effects,
-        )
+        return PartialTurn.from_active(active, record)
 
     def _persisted_partial(self, chat_id: str, user_message: str) -> PartialTurn | None:
         """Load a persisted interrupted-turn snapshot for the same user message.
@@ -100,41 +84,9 @@ class TurnRehydrate:
                 continue
             if not isinstance(data, dict):
                 continue
-            persisted_message = data.get("user_message")
-            if not isinstance(persisted_message, str):
-                continue
-            if persisted_message.strip() != (user_message or "").strip():
-                continue
-            text_fields = {
-                key: data.get(key)
-                for key in (
-                    "message_text",
-                    "thought_text",
-                    "current_intent",
-                    "last_side_effect",
-                )
-            }
-            if any(v is not None and not isinstance(v, str) for v in text_fields.values()):
-                continue
-            side_effects = data.get("side_effects") or []
-            if not isinstance(side_effects, list):
-                side_effects = []
-            try:
-                return PartialTurn(
-                    chat_id=chat_id,
-                    session_number=int(data.get("session_number") or 0),
-                    turn_number=int(data.get("turn_number") or 0),
-                    user_message=persisted_message,
-                    message_text=text_fields["message_text"] or "",
-                    thought_text=text_fields["thought_text"] or "",
-                    updated_at=float(data.get("updated_at") or 0.0),
-                    current_intent=text_fields["current_intent"] or "",
-                    last_side_effect=text_fields["last_side_effect"] or "",
-                    last_side_effect_at=float(data.get("last_side_effect_at") or 0.0),
-                    side_effects=side_effects,
-                )
-            except (TypeError, ValueError):
-                continue
+            partial = PartialTurn.from_persisted(chat_id, data, user_message)
+            if partial is not None:
+                return partial
         return None
 
     def _interrupted_turn_anchor(
