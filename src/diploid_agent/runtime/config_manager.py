@@ -23,39 +23,106 @@ from diploid_agent.config import (
 )
 from diploid_agent.models import RuntimeStatus
 from diploid_agent.plan.models import PlanStatus
-from diploid_agent.runtime.component import RuntimeComponent
 
 logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T", bound=BaseModel)
 
 
-class RuntimeConfigManager(RuntimeComponent):
-    """Live runtime configuration loading, updating, and persistence."""
+class RuntimeConfigManager:
+    """Live runtime configuration loading, updating, and persistence.
 
-    def __init__(self, runtime: Any) -> None:
-        super().__init__(runtime)
+    Constructed early in ``AgentRuntime.__init__`` because
+    ``_load_runtime_overrides`` must run before ``PluginManager`` and the
+    service components read ``config.harness.*``; service deps therefore
+    arrive as late-bound ``*_fn`` callables.
+    """
+
+    def __init__(
+        self,
+        *,
+        config: Any,
+        lock: Any,
+        active_turns: dict[str, Any],
+        instance_id: str,
+        instance_started_at: float,
+        plan_manager_fn: Callable[[], Any],
+        event_bus_fn: Callable[[], Any],
+        timer_service_fn: Callable[[], Any],
+        task_engine_fn: Callable[[], Any],
+        wake_queue_fn: Callable[[], Any],
+        plugins_fn: Callable[[], Any],
+        runtime_plugins_fn: Callable[[], Any],
+        context_builder_fn: Callable[[], Any],
+        recreate_notifier_fn: Callable[[], None],
+    ) -> None:
+        self.config = config
+        self._lock = lock
+        self._active_turns = active_turns
+        self._instance_id = instance_id
+        self._instance_started_at = instance_started_at
+        self._plan_manager_fn = plan_manager_fn
+        self._event_bus_fn = event_bus_fn
+        self._timer_service_fn = timer_service_fn
+        self._task_engine_fn = task_engine_fn
+        self._wake_queue_fn = wake_queue_fn
+        self._plugins_fn = plugins_fn
+        self._runtime_plugins_fn = runtime_plugins_fn
+        self._context_builder_fn = context_builder_fn
+        self._recreate_notifier_fn = recreate_notifier_fn
         self._runtime_overrides_path = (
-            Path(runtime.config.harness.session_store_path).expanduser().parent
+            Path(config.harness.session_store_path).expanduser().parent
             / "runtime-overrides.yaml"
         )
         self._loaded_overrides: dict[str, Any] | None = None
 
+    @property
+    def _plan_manager(self) -> Any:
+        return self._plan_manager_fn()
+
+    @property
+    def _event_bus(self) -> Any:
+        return self._event_bus_fn()
+
+    @property
+    def _timer_service(self) -> Any:
+        return self._timer_service_fn()
+
+    @property
+    def _task_engine(self) -> Any:
+        return self._task_engine_fn()
+
+    @property
+    def _wake_queue(self) -> Any:
+        return self._wake_queue_fn()
+
+    @property
+    def _plugins(self) -> Any:
+        return self._plugins_fn()
+
+    @property
+    def _runtime_plugins(self) -> Any:
+        return self._runtime_plugins_fn()
+
+    @property
+    def _context_builder(self) -> Any:
+        return self._context_builder_fn()
+
     def get_status(self) -> RuntimeStatus:
         """Return the current runtime daemon status."""
         now = time.time()
-        plans = self._runtime.plan_manager.list_plans()
+        plans = self._plan_manager.list_plans()
         active_plans = [p.name for p in plans if p.status == PlanStatus.ACTIVE]
         return RuntimeStatus(
-            instance_id=self._runtime.instance_id,
-            started_at=self._runtime.instance_started_at,
-            uptime_seconds=now - self._runtime.instance_started_at,
-            event_bus_running=self._runtime.event_bus.running,
-            timer_running=self._runtime.timer_service.running,
-            task_engine_active=self._runtime.task_engine.is_running(),
+            instance_id=self._instance_id,
+            started_at=self._instance_started_at,
+            uptime_seconds=now - self._instance_started_at,
+            event_bus_running=self._event_bus.running,
+            timer_running=self._timer_service.running,
+            task_engine_active=self._task_engine.is_running(),
             plan_count=len(plans),
-            pending_wake_count=self._runtime.wake_queue.due_count(now=now),
-            active_chat_count=len(self._runtime._active_turns),
+            pending_wake_count=self._wake_queue.due_count(now=now),
+            active_chat_count=len(self._active_turns),
             plan_active=bool(active_plans),
             active_plans=active_plans,
         )
@@ -79,7 +146,7 @@ class RuntimeConfigManager(RuntimeComponent):
                 setattr(current, field, getattr(new, field))
             if post is not None:
                 post()
-            if not self._runtime._save_runtime_overrides():
+            if not self._save_runtime_overrides():
                 raise ConfigPersistenceError(error)
             return success
 
@@ -100,7 +167,7 @@ class RuntimeConfigManager(RuntimeComponent):
             self.config.harness.task,
             task_config,
             success="Task config updated",
-            post=self._runtime.task_engine.reconfigure,
+            post=self._task_engine.reconfigure,
             error="Task config updated in memory but persistence failed",
         )
 
@@ -223,7 +290,7 @@ class RuntimeConfigManager(RuntimeComponent):
             self.config.harness.notifications,
             notifications_config,
             success="Notifications config updated",
-            post=lambda: setattr(self._runtime, "notifier", self._runtime._create_notifier()),
+            post=self._recreate_notifier_fn,
             error="Notifications config updated in memory but persistence failed",
         )
 
@@ -288,7 +355,7 @@ class RuntimeConfigManager(RuntimeComponent):
             self.config.harness.telegram,
             telegram_config,
             success="Telegram config updated",
-            post=lambda: setattr(self._runtime, "notifier", self._runtime._create_notifier()),
+            post=self._recreate_notifier_fn,
             error="Telegram config updated in memory but persistence failed",
         )
 
@@ -319,9 +386,9 @@ class RuntimeConfigManager(RuntimeComponent):
             merged = list(by_name.values())
             self.config.harness.plugins = merged
             self._plugins.reconfigure(merged)
-            self._runtime._runtime_plugins._register_plugin_mcp_servers()
-            self._runtime.context_builder.plugin_manager = self._runtime._plugins
-            if not self._runtime._save_runtime_overrides():
+            self._runtime_plugins._register_plugin_mcp_servers()
+            self._context_builder.plugin_manager = self._plugins
+            if not self._save_runtime_overrides():
                 raise ConfigPersistenceError(
                     "Plugins config updated in memory but persistence failed"
                 )

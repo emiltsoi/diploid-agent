@@ -103,7 +103,25 @@ class AgentRuntime(RuntimeAPI):
         self._state = RuntimeState()
         self.instance_id = f"harness-{uuid.uuid4().hex[:12]}"
         self.instance_started_at = time.time()
-        self._config_manager = RuntimeConfigManager(self)
+        self._active_turns: dict[str, ActiveTurn] = {}
+        self._config_manager = RuntimeConfigManager(
+            config=config,
+            lock=self._lock,
+            active_turns=self._active_turns,
+            instance_id=self.instance_id,
+            instance_started_at=self.instance_started_at,
+            plan_manager_fn=lambda: self.plan_manager,
+            event_bus_fn=lambda: self.event_bus,
+            timer_service_fn=lambda: self.timer_service,
+            task_engine_fn=lambda: self.task_engine,
+            wake_queue_fn=lambda: self.wake_queue,
+            plugins_fn=lambda: self._plugins,
+            runtime_plugins_fn=lambda: self._runtime_plugins,
+            context_builder_fn=lambda: self.context_builder,
+            recreate_notifier_fn=lambda: setattr(
+                self, "notifier", self._create_notifier()
+            ),
+        )
         self._chat_store = ChatSessionStore(
             sessions_root=self.sessions_root,
             store_path=self.store_path,
@@ -113,7 +131,6 @@ class AgentRuntime(RuntimeAPI):
             context_builder_fn=lambda: self.context_builder,
         )
         self._store = self._chat_store._store
-        self._active_turns: dict[str, ActiveTurn] = {}
         self._active_chat_skills: dict[str, set[str]] = {}
         self._runtime_metrics = RuntimeMetrics(
             metrics=self.metrics,
