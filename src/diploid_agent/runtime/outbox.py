@@ -10,7 +10,6 @@ from typing import Any
 
 from diploid_agent.models import ChatResult
 from diploid_agent.notifier import NoopNotifier, Notifier, TelegramNotifier, WebhookNotifier
-from diploid_agent.runtime.component import RuntimeComponent
 
 logger = logging.getLogger(__name__)
 
@@ -21,13 +20,30 @@ def _is_telegram_chat_id(chat_id: str) -> bool:
     return stripped.isdigit()
 
 
-class RuntimeOutbox(RuntimeComponent):
+class RuntimeOutbox:
     """Per-chat outbox queue and notification delivery."""
 
-    def __init__(self, runtime: Any) -> None:
-        super().__init__(runtime)
+    def __init__(
+        self,
+        *,
+        config: Any,
+        metrics: Any,
+        store: dict[str, Any],
+        lock: Any,
+        notifier_fn: Any,
+    ) -> None:
+        self.config = config
+        self._metrics = metrics
+        self._store = store
+        self._lock = lock
+        # Late-bound: the notifier is created after this component.
+        self._notifier_fn = notifier_fn
         self._outbox: deque[tuple[str, ChatResult]] = deque()
         self._outbox_condition = threading.Condition()
+
+    @property
+    def notifier(self) -> Any:
+        return self._notifier_fn()
 
     def _create_notifier(self) -> Notifier:
         if self.config.harness.notifications.outbox_delivery:
@@ -39,7 +55,7 @@ class RuntimeOutbox(RuntimeComponent):
             return WebhookNotifier(self.config.harness.notifications.webhook_url)
         token = self.config.harness.telegram.token
         if token:
-            return TelegramNotifier(token, metrics=self._runtime.metrics)
+            return TelegramNotifier(token, metrics=self._metrics)
         return NoopNotifier()
 
     @property
@@ -143,7 +159,7 @@ class RuntimeOutbox(RuntimeComponent):
             return WebhookNotifier(self.config.harness.notifications.webhook_url)
         token = self.config.harness.telegram.token
         if token:
-            return TelegramNotifier(token, metrics=self._runtime.metrics)
+            return TelegramNotifier(token, metrics=self._metrics)
         return NoopNotifier()
 
     def _send_restart_notices(self) -> None:
@@ -159,7 +175,7 @@ class RuntimeOutbox(RuntimeComponent):
         recent_cutoff = time.time() - 86400.0
         chat_ids: list[str] = []
         with self._lock:
-            for chat_id, state in self._runtime._store.items():
+            for chat_id, state in self._store.items():
                 if not _is_telegram_chat_id(chat_id):
                     continue
                 if not state.sessions:

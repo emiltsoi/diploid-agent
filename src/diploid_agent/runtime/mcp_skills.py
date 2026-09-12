@@ -6,38 +6,31 @@ import logging
 from typing import Any
 
 from diploid_agent.plugins.contexts import McpCommandContext, SkillCommandContext
-from diploid_agent.runtime.component import RuntimeComponent
 
 logger = logging.getLogger(__name__)
 
 
-class RuntimeMcpSkills(RuntimeComponent):
+class RuntimeMcpSkills:
     """MCP/skill enablement and per-chat active-set resolution."""
 
-
-    @property
-    def mcp(self) -> Any:
-        return getattr(self._runtime, "mcp", None)
-
-    @property
-    def skills(self) -> Any:
-        return getattr(self._runtime, "skills", None)
-
-    @property
-    def _plugins(self) -> Any:
-        return getattr(self._runtime, "_plugins", None)
-
-    @property
-    def _chat_store(self) -> Any:
-        return getattr(self._runtime, "_chat_store", None)
-
-    @property
-    def _store(self) -> Any:
-        return self._runtime._store
-
-    @property
-    def _active_chat_skills(self) -> Any:
-        return self._runtime._active_chat_skills
+    def __init__(
+        self,
+        *,
+        mcp: Any,
+        skills: Any,
+        plugins: Any,
+        chat_store: Any,
+        active_chat_skills: dict[str, set[str]],
+        lock: Any,
+        config: Any,
+    ) -> None:
+        self.mcp = mcp
+        self.skills = skills
+        self._plugins = plugins
+        self._chat_store = chat_store
+        self._active_chat_skills = active_chat_skills
+        self._lock = lock
+        self.config = config
 
     def mcp_list(self, chat_id: str) -> str:
         with self._lock:
@@ -51,7 +44,7 @@ class RuntimeMcpSkills(RuntimeComponent):
 
     def mcp_enable(self, chat_id: str, name: str) -> str:
         with self._lock:
-            record = self._active_record(chat_id)
+            record = self._chat_store._active_record(chat_id)
             if record is None:
                 return "No active session. Start one with /new first."
             ctx = self._plugins.before_mcp_enabled(
@@ -71,7 +64,7 @@ class RuntimeMcpSkills(RuntimeComponent):
 
     def mcp_disable(self, chat_id: str, name: str) -> str:
         with self._lock:
-            record = self._active_record(chat_id)
+            record = self._chat_store._active_record(chat_id)
             if record is None:
                 return "No active session. Start one with /new first."
             ctx = self._plugins.before_mcp_disabled(
@@ -103,7 +96,7 @@ class RuntimeMcpSkills(RuntimeComponent):
 
     def skill_enable(self, chat_id: str, name: str) -> str:
         with self._lock:
-            record = self._active_record(chat_id)
+            record = self._chat_store._active_record(chat_id)
             if record is None:
                 return "No active session. Start one with /new first."
             ctx = self._plugins.before_skill_enabled(
@@ -124,7 +117,7 @@ class RuntimeMcpSkills(RuntimeComponent):
 
     def skill_disable(self, chat_id: str, name: str) -> str:
         with self._lock:
-            record = self._active_record(chat_id)
+            record = self._chat_store._active_record(chat_id)
             if record is None:
                 return "No active session. Start one with /new first."
             ctx = self._plugins.before_skill_disabled(
@@ -153,7 +146,7 @@ class RuntimeMcpSkills(RuntimeComponent):
     def _active_mcp_server_names(self, chat_id: str) -> list[str]:
         if self._plugins is None or self.mcp is None:
             return []
-        record = self._active_record(chat_id)
+        record = self._chat_store._active_record(chat_id)
         # Merge the chat record with the current default set so new default
         # servers (e.g. diploid-mesh) become available in older sessions.
         names: set[str] = set(self.mcp.default_enabled_names()) | set(
@@ -178,7 +171,7 @@ class RuntimeMcpSkills(RuntimeComponent):
         return set(self.config.harness.skills.default_enabled) | plugin_skills
 
     def _active_skill_names(self, chat_id: str) -> set[str]:
-        record = self._active_record(chat_id)
+        record = self._chat_store._active_record(chat_id)
         if record and record.enabled_skills is not None:
             base = set(record.enabled_skills)
         else:
@@ -192,7 +185,7 @@ class RuntimeMcpSkills(RuntimeComponent):
         enabling is still tracked in ``record.enabled_skills``.
         """
         with self._lock:
-            record = self._active_record(chat_id)
+            record = self._chat_store._active_record(chat_id)
             all_skills = {s.name for s in self.skills.list_skills(chat_id)}
             disabled = set(record.disabled_skills or []) if record else set()
             matched = self.skills.match_skills(

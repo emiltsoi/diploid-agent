@@ -11,20 +11,33 @@ from typing import Any
 from diploid_agent.config import PluginConfig
 from diploid_agent.locking import locked
 from diploid_agent.models import ChatResult
-from diploid_agent.runtime.component import RuntimeComponent
 
 
-class RuntimePlugins(RuntimeComponent):
+class RuntimePlugins:
     """Plugin lifecycle, sandbox, and incident helpers for AgentRuntime."""
 
+    def __init__(
+        self,
+        *,
+        plugins: Any,
+        incidents: Any,
+        config_manager: Any,
+        lock: Any,
+        config: Any,
+        context_builder_fn: Any,
+    ) -> None:
+        self._plugins = plugins
+        self._incidents = incidents
+        self._config_manager = config_manager
+        self._lock = lock
+        self.config = config
+        # Late-bound: ContextBuilder is constructed after this component.
+        self._context_builder_fn = context_builder_fn
+        self._plugin_mcp_server_names: set[str] = set()
 
     @property
-    def _plugin_mcp_server_names(self) -> set[str]:
-        return self._runtime._plugin_mcp_server_names
-
-    @_plugin_mcp_server_names.setter
-    def _plugin_mcp_server_names(self, value: set[str]) -> None:
-        self._runtime._plugin_mcp_server_names = value
+    def context_builder(self) -> Any:
+        return self._context_builder_fn()
 
     def _register_plugin_mcp_servers(self) -> None:
         """Append plugin MCP server configs to the harness config before McpManager sees it."""
@@ -90,7 +103,7 @@ class RuntimePlugins(RuntimeComponent):
         self.config.harness.plugins = self._plugins._plugins
         self._register_plugin_mcp_servers()
         self.context_builder.plugin_manager = self._plugins
-        self._runtime._save_runtime_overrides()
+        self._config_manager._save_runtime_overrides()
         return ChatResult(reply=result)
 
     @locked
@@ -99,7 +112,7 @@ class RuntimePlugins(RuntimeComponent):
         self.config.harness.plugins = self._plugins._plugins
         self._register_plugin_mcp_servers()
         self.context_builder.plugin_manager = self._plugins
-        self._runtime._save_runtime_overrides()
+        self._config_manager._save_runtime_overrides()
         return ChatResult(reply=result)
 
     @locked
@@ -111,7 +124,7 @@ class RuntimePlugins(RuntimeComponent):
             self.config.harness.plugins = self._plugins._plugins
             self._register_plugin_mcp_servers()
             self.context_builder.plugin_manager = self._plugins
-            self._runtime._save_runtime_overrides()
+            self._config_manager._save_runtime_overrides()
         return ChatResult(reply=result)
 
     @locked
@@ -120,7 +133,7 @@ class RuntimePlugins(RuntimeComponent):
         self.config.harness.plugins = self._plugins._plugins
         self._register_plugin_mcp_servers()
         self.context_builder.plugin_manager = self._plugins
-        self._runtime._save_runtime_overrides()
+        self._config_manager._save_runtime_overrides()
         return ChatResult(reply=result)
 
     @locked

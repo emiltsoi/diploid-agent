@@ -11,30 +11,38 @@ from diploid_agent.dispatch import Dispatch, DispatchStatus, DispatchStore
 from diploid_agent.locking import locked
 from diploid_agent.models import ChatResult, WakeEvent
 from diploid_agent.plan.models import Task, TaskStatus, TaskType
-from diploid_agent.runtime.component import RuntimeComponent
 from diploid_agent.text import human_duration
 
 logger = logging.getLogger(__name__)
 
 
-class RuntimeSubagent(RuntimeComponent):
+class RuntimeSubagent:
     """Background subagent start, completion, and status."""
 
-    @property
-    def _outbox(self) -> Any:
-        return self._runtime._outbox
-
-    @property
-    def dispatch_store(self) -> DispatchStore:
-        return self._runtime.dispatch_store
-
-    @property
-    def acp_client(self) -> Any:
-        return getattr(self._runtime, "acp_client", None)
-
-    @property
-    def mcp(self) -> Any:
-        return self._runtime.mcp
+    def __init__(
+        self,
+        *,
+        wake_queue: Any,
+        plan_manager: Any,
+        chat_store: Any,
+        task_engine: Any,
+        prompts: Any,
+        outbox: Any,
+        mcp: Any,
+        dispatch_store: DispatchStore,
+        mcp_skills: Any,
+        lock: Any,
+    ) -> None:
+        self.wake_queue = wake_queue
+        self.plan_manager = plan_manager
+        self._chat_store = chat_store
+        self.task_engine = task_engine
+        self._prompts = prompts
+        self._outbox = outbox
+        self.mcp = mcp
+        self.dispatch_store = dispatch_store
+        self._mcp_skills = mcp_skills
+        self._lock = lock
 
     @locked
     def subagent_start(
@@ -53,11 +61,11 @@ class RuntimeSubagent(RuntimeComponent):
         being stopped or killed. When it completes, the harness starts a new
         turn for the chat via the existing dispatch/continue flow.
         """
-        record = self._runtime._active_record(chat_id)
+        record = self._chat_store._active_record(chat_id)
         if record is None:
             return ChatResult(reply="No active session for this chat.")
 
-        use_model = model or self._runtime._prompts._model(record)
+        use_model = model or self._prompts._model(record)
         started_at = time.time()
         dispatch = self.dispatch_store.add(
             chat_id,
@@ -78,9 +86,9 @@ class RuntimeSubagent(RuntimeComponent):
                 self._mcp_skills._active_mcp_server_names(chat_id),
             ),
             dispatch_id=dispatch.id,
-            cwd=cwd or self._runtime._chat_dir(chat_id),
+            cwd=cwd or self._chat_store._chat_dir(chat_id),
         )
-        plan = self._runtime.plan_manager.create_plan(
+        plan = self.plan_manager.create_plan(
             f"subagent-{dispatch.id[:8]}",
             description="Background subagent task",
             chat_id=chat_id,
@@ -88,7 +96,7 @@ class RuntimeSubagent(RuntimeComponent):
         )
 
         wake_id = f"wake-{dispatch.id}"
-        self._runtime.wake_queue.enqueue(
+        self.wake_queue.enqueue(
             WakeEvent(
                 id=wake_id,
                 chat_id=chat_id,
@@ -102,7 +110,7 @@ class RuntimeSubagent(RuntimeComponent):
             )
         )
 
-        self._runtime.task_engine.start_task(plan.id, task.id)
+        self.task_engine.start_task(plan.id, task.id)
         return ChatResult(
             reply="Subagent started. I'll report back when it finishes.",
             dispatch_id=dispatch.id,
@@ -114,7 +122,7 @@ class RuntimeSubagent(RuntimeComponent):
         Returns the path to the written file, or ``None`` on write failure.
         """
         chat_id = dispatch.chat_id
-        chat_dir = self._runtime._chat_dir(chat_id)
+        chat_dir = self._chat_store._chat_dir(chat_id)
         result_dir = chat_dir / "subagent-results"
         result_dir.mkdir(parents=True, exist_ok=True)
         result_path = result_dir / f"subagent-{dispatch.id}.md"
@@ -182,12 +190,44 @@ class RuntimeSubagent(RuntimeComponent):
 
         wake_id = f"wake-{task.dispatch_id}"
         try:
-            wake = self._runtime.wake_queue.get(wake_id)
+            wake = self.wake_queue.get(wake_id)
             if wake is not None and wake.payload is not None:
                 wake.payload["result"] = result
-            self._runtime.wake_queue.ready(wake_id, now=time.time())
+            self.wake_queue.ready(wake_id, now=time.time())
         except Exception:
             logger.exception("Failed to mark subagent wake %s ready", wake_id)
+
+    @staticmethod
+    def _subagent_status_name(task: Task, dispatch: Dispatch | None) -> str:
+        """Map a subagent task/dispatch to a simple status string."""
+        if task.timed_out or (dispatch is not None and dispatch.status == DispatchStatus.TIMEOUT):
+            return "timeout"
+        if task.cancelled or (dispatch is not None and dispatch.status == DispatchStatus.CANCELLED):
+            return "cancelled"
+        if task.status == TaskStatus.RUNNING:
+            return "running"
+        if (
+            dispatch is not None
+            and dispatch.status == DispatchStatus.PENDING
+            and dispatch.finished_at is None
+        ):
+            return "running"
+        if task.status == TaskStatus.DONE:
+            return "completed"
+        if task.status == TaskStatus.FAILED:
+            return "failed"
+        if task.status in (TaskStatus.PENDING, TaskStatus.READY, TaskStatus.BLOCKED):
+            return "pending"
+        return "unknown"
+
+    def _subagent_summary(self, task: Task, dispatch: Dispatch | None) -> str | None:
+        """Return the best available summary for a subagent task."""
+        if dispatch and dispatch.summary:
+            return dispatch.summary
+        text = task.log if task.status == TaskStatus.FAILED else task.result
+        if text:
+            return self._extract_summary(text, max_chars=240)
+        return None
 
     @staticmethod
     def _extract_summary(text: str, max_chars: int = 240) -> str:
@@ -288,15 +328,15 @@ class RuntimeSubagent(RuntimeComponent):
 
     def subagent_status(self, chat_id: str) -> dict[str, Any]:
         """Return the status of all background subagents for a chat."""
-        plans = self._runtime.plan_manager.list_plans(chat_id=chat_id)
+        plans = self.plan_manager.list_plans(chat_id=chat_id)
         subagents: list[dict[str, Any]] = []
         for plan in plans:
             for task in plan.tasks:
                 if task.type != TaskType.SUBAGENT:
                     continue
                 dispatch = self.dispatch_store.get(task.dispatch_id) if task.dispatch_id else None
-                status = self._runtime._subagent_status_name(task, dispatch)
-                summary = self._runtime._subagent_summary(task, dispatch)
+                status = self._subagent_status_name(task, dispatch)
+                summary = self._subagent_summary(task, dispatch)
                 started_at = task.started_at or (dispatch.started_at if dispatch else None)
                 finished_at = task.completed_at or (dispatch.finished_at if dispatch else None)
                 subagents.append(

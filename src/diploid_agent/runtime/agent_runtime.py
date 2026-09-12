@@ -43,7 +43,7 @@ from diploid_agent.models import (
     WakeEvent,
 )
 from diploid_agent.plan.manager import PlanManager
-from diploid_agent.plan.models import Plan, Task, TaskStatus, TaskType
+from diploid_agent.plan.models import Plan, Task, TaskType
 from diploid_agent.plugin_incidents import PluginIncidentStore
 from diploid_agent.plugins import PluginManager
 from diploid_agent.runtime.actions import RuntimeActions
@@ -99,20 +99,37 @@ class AgentRuntime(RuntimeAPI):
         self.metrics = MetricsCollector()
         self.engine = self._create_engine(metrics=self.metrics)
         self._lock = threading.RLock()
+        self.instance_id = f"harness-{uuid.uuid4().hex[:12]}"
+        self.instance_started_at = time.time()
         self._restart = RuntimeRestart(self)
         self._config_manager = RuntimeConfigManager(self)
-        self._chat_store = ChatSessionStore(self)
+        self._chat_store = ChatSessionStore(
+            sessions_root=self.sessions_root,
+            store_path=self.store_path,
+            lock=self._lock,
+            config=config,
+            plugins_fn=lambda: self._plugins,
+            context_builder_fn=lambda: self.context_builder,
+        )
         self._store = self._chat_store._store
         self._active_turns: dict[str, ActiveTurn] = {}
         self._active_chat_skills: dict[str, set[str]] = {}
         # Set once a graceful restart begins draining: no new turns may start so
         # a stream of queued messages cannot keep the process alive until the cap.
         self._restart_draining = threading.Event()
-        self._runtime_metrics = RuntimeMetrics(self)
+        self._runtime_metrics = RuntimeMetrics(
+            metrics=self.metrics,
+            store=self._store,
+            lock=self._lock,
+            config=config,
+            engine_fn=lambda: self.engine,
+            instance_started_at=self.instance_started_at,
+            plugins_fn=lambda: self._plugins,
+            context_builder_fn=lambda: self.context_builder,
+            notifier_fn=lambda: self.notifier,
+        )
         self._memory_managers: dict[str, MemoryManager] = {}
         self._last_restart_memory_written: dict[str, float] = {}
-        self.instance_id = f"harness-{uuid.uuid4().hex[:12]}"
-        self.instance_started_at = time.time()
         self._router = ModelRouter(config)
 
         # Load external plugin search paths before PluginManager imports anything.
@@ -146,7 +163,8 @@ class AgentRuntime(RuntimeAPI):
         )
 
         self.timer_service = TimerService(
-            self,
+            self.wake_queue,
+            self.event_bus,
             config=self.config.harness.timer,
         )
 
@@ -158,7 +176,13 @@ class AgentRuntime(RuntimeAPI):
         self._plan_conclusion_enqueued: set[str] = set()
         self._started = False
 
-        self._outbox = RuntimeOutbox(self)
+        self._outbox = RuntimeOutbox(
+            config=config,
+            metrics=self.metrics,
+            store=self._store,
+            lock=self._lock,
+            notifier_fn=lambda: self.notifier,
+        )
 
         self.instance_manager = InstanceManager(
             self.sessions_root,
@@ -202,7 +226,7 @@ class AgentRuntime(RuntimeAPI):
             self._plugins.disable_plugins(set(failed))
             self.config.harness.plugins = self._plugins._plugins
             self._config_manager._save_runtime_overrides()
-        self._plugin_mcp_server_names: set[str] = set()
+
 
         # Ingress handlers for pluggable transport protocols (e.g. mesh).
         self._ingress_handlers: dict[str, Any] = {}
@@ -215,8 +239,23 @@ class AgentRuntime(RuntimeAPI):
             active_persona=self.config.persona.name,
             persona_profile_root=self.config.persona.profile_root,
         )
-        self._mcp_skills = RuntimeMcpSkills(self)
-        self._runtime_plugins = RuntimePlugins(self)
+        self._mcp_skills = RuntimeMcpSkills(
+            mcp=self.mcp,
+            skills=self.skills,
+            plugins=self._plugins,
+            chat_store=self._chat_store,
+            active_chat_skills=self._active_chat_skills,
+            lock=self._lock,
+            config=config,
+        )
+        self._runtime_plugins = RuntimePlugins(
+            plugins=self._plugins,
+            incidents=self._incidents,
+            config_manager=self._config_manager,
+            lock=self._lock,
+            config=config,
+            context_builder_fn=lambda: self.context_builder,
+        )
         self._runtime_plugins._register_plugin_mcp_servers()
 
         # Prompt assembly is delegated to a dedicated builder.
@@ -232,9 +271,36 @@ class AgentRuntime(RuntimeAPI):
         )
         self.context_builder.metrics = self._runtime_metrics._per_chat_metrics
 
-        self._prompts = RuntimePrompts(self)
-        self._planning = RuntimePlanning(self)
-        self._subagent = RuntimeSubagent(self)
+        self._prompts = RuntimePrompts(
+            config=config,
+            lock=self._lock,
+            chat_store=self._chat_store,
+            context_builder=self.context_builder,
+            mcp_skills=self._mcp_skills,
+            plugins=self._plugins,
+            skills=self.skills,
+            engine_fn=lambda: self.engine,
+            router=self._router,
+            runtime_metrics=self._runtime_metrics,
+            memory_manager=self._memory_manager,
+        )
+        self._planning = RuntimePlanning(
+            wake_queue=self.wake_queue,
+            plan_conclusion_enqueued=self._plan_conclusion_enqueued,
+            context_builder=self.context_builder,
+        )
+        self._subagent = RuntimeSubagent(
+            wake_queue=self.wake_queue,
+            plan_manager=self.plan_manager,
+            chat_store=self._chat_store,
+            task_engine=self.task_engine,
+            prompts=self._prompts,
+            outbox=self._outbox,
+            mcp=self.mcp,
+            dispatch_store=self.dispatch_store,
+            mcp_skills=self._mcp_skills,
+            lock=self._lock,
+        )
         self._actions = RuntimeActions(self)
 
         self.turn_controller = TurnController(self)
@@ -1223,17 +1289,8 @@ class AgentRuntime(RuntimeAPI):
         self._subagent._complete_subagent_task(task)
 
     @staticmethod
-    def _extract_summary(text: str, max_chars: int = 240) -> str:
-        return RuntimeSubagent._extract_summary(text, max_chars=max_chars)
-
-    @staticmethod
     def _human_duration(seconds: float) -> str:
         return human_duration(seconds)
-
-    def _subagent_terminal_state(
-        self, task: Task
-    ) -> tuple[DispatchStatus | None, str | None, bool, bool, bool]:
-        return self._subagent._subagent_terminal_state(task)
 
     def _notify_subagent_timeout(
         self,
@@ -1247,37 +1304,6 @@ class AgentRuntime(RuntimeAPI):
         self._subagent._notify_subagent_timeout(
             task, chat_id, dispatch_id, dispatch, summary, is_timeout
         )
-
-    def _subagent_status_name(self, task: Task, dispatch: Dispatch | None) -> str:
-        """Map a subagent task/dispatch to a simple status string."""
-        if task.timed_out or (dispatch is not None and dispatch.status == DispatchStatus.TIMEOUT):
-            return "timeout"
-        if task.cancelled or (dispatch is not None and dispatch.status == DispatchStatus.CANCELLED):
-            return "cancelled"
-        if task.status == TaskStatus.RUNNING:
-            return "running"
-        if (
-            dispatch is not None
-            and dispatch.status == DispatchStatus.PENDING
-            and dispatch.finished_at is None
-        ):
-            return "running"
-        if task.status == TaskStatus.DONE:
-            return "completed"
-        if task.status == TaskStatus.FAILED:
-            return "failed"
-        if task.status in (TaskStatus.PENDING, TaskStatus.READY, TaskStatus.BLOCKED):
-            return "pending"
-        return "unknown"
-
-    def _subagent_summary(self, task: Task, dispatch: Dispatch | None) -> str | None:
-        """Return the best available summary for a subagent task."""
-        if dispatch and dispatch.summary:
-            return dispatch.summary
-        text = task.log if task.status == TaskStatus.FAILED else task.result
-        if text:
-            return self._extract_summary(text, max_chars=240)
-        return None
 
     def subagent_status(self, chat_id: str) -> dict[str, Any]:
         return self._subagent.subagent_status(chat_id)

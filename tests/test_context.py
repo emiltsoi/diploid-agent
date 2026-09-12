@@ -1256,21 +1256,25 @@ def test_proactive_sizing_uses_calibrated_chars_per_token(tmp_path: Path) -> Non
 def test_prompt_chars_recorded_in_turn_metrics(tmp_path: Path) -> None:
     """Turn metrics include the length of the prompt sent to the engine."""
     import threading
-    from types import SimpleNamespace
 
     from diploid_agent.config import Config, DiploidConfig, PersonaConfig
     from diploid_agent.metrics import MetricsCollector
     from diploid_agent.runtime.metrics import RuntimeMetrics
 
-    runtime = SimpleNamespace(
+    metrics = RuntimeMetrics(
+        metrics=MetricsCollector(),
+        store={},
+        lock=threading.RLock(),
         config=Config(
             diploid=DiploidConfig(bin="/bin/echo"),
             persona=PersonaConfig(name="test", profile_root=tmp_path),
         ),
-        metrics=MetricsCollector(),
-        _lock=threading.RLock(),
+        engine_fn=lambda: None,
+        instance_started_at=0.0,
+        plugins_fn=lambda: None,
+        context_builder_fn=lambda: None,
+        notifier_fn=lambda: None,
     )
-    metrics = RuntimeMetrics(runtime)
     result = metrics._record_turn_metrics(
         "chat-1", 1, "swe-1-7", {"input_tokens": 100}, 0.5, prompt_chars=350
     )

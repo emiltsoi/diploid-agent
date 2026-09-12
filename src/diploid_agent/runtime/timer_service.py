@@ -5,27 +5,25 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import TYPE_CHECKING
+from typing import Any
 
 from diploid_agent.config import TimerConfig
-from diploid_agent.runtime.component import RuntimeComponent
 from diploid_agent.runtime.event_bus import Event
-
-if TYPE_CHECKING:
-    from diploid_agent.runtime.agent_runtime import AgentRuntime
 
 logger = logging.getLogger(__name__)
 
 
-class TimerService(RuntimeComponent):
+class TimerService:
     """Background thread that polls the wake queue and fires due chat events."""
 
     def __init__(
         self,
-        runtime: AgentRuntime,
+        wake_queue: Any,
+        event_bus: Any,
         config: TimerConfig,
     ) -> None:
-        super().__init__(runtime)
+        self._wake_queue = wake_queue
+        self._event_bus = event_bus
         self._config = config
         self._thread: threading.Thread | None = None
         self._running = False
@@ -61,11 +59,11 @@ class TimerService(RuntimeComponent):
         if not self._config.enabled:
             return
         now = time.time()
-        for event in self._runtime.wake_queue.pop_due(
+        for event in self._wake_queue.pop_due(
             now=now,
             lease_seconds=self._config.lease_seconds,
         ):
-            self._runtime.event_bus.post(
+            self._event_bus.post(
                 Event(
                     type="timer.fired",
                     payload={

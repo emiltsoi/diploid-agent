@@ -12,26 +12,49 @@ from diploid_agent.memory import RecallResult
 from diploid_agent.models import SessionRecord
 from diploid_agent.persona_composer import PersonaPrompt
 from diploid_agent.plugins.contexts import MemoryTransitionContext
-from diploid_agent.runtime.component import RuntimeComponent
 
 logger = logging.getLogger(__name__)
 
 
-class RuntimePrompts(RuntimeComponent):
+class RuntimePrompts:
     """First/follow-up prompt building, continuation, reply quoting, and model resolution."""
 
+    def __init__(
+        self,
+        *,
+        config: Any,
+        lock: Any,
+        chat_store: Any,
+        context_builder: Any,
+        mcp_skills: Any,
+        plugins: Any,
+        skills: Any,
+        engine_fn: Any,
+        router: Any,
+        runtime_metrics: Any,
+        memory_manager: Any,
+    ) -> None:
+        self.config = config
+        self._lock = lock
+        self._chat_store = chat_store
+        self.context_builder = context_builder
+        self._mcp_skills = mcp_skills
+        self._plugins = plugins
+        self.skills = skills
+        # Late-bound: the engine can be swapped post-construction (runtime.client
+        # setter), so it is resolved lazily.
+        self._engine_fn = engine_fn
+        self._router = router
+        self._runtime_metrics = runtime_metrics
+        self._memory_manager = memory_manager
 
     @property
-    def _memory_manager(self) -> Any:
-        return self._runtime._memory_manager
+    def engine(self) -> Any:
+        return self._engine_fn()
 
     @property
     def _per_chat_metrics(self) -> dict[str, Any]:
-        return self._runtime._runtime_metrics._per_chat_metrics
-
-    @property
-    def _router(self) -> Any:
-        return self._runtime._router
+        return self._runtime_metrics._per_chat_metrics
 
     def _build_system_notice(
         self,
@@ -79,7 +102,7 @@ class RuntimePrompts(RuntimeComponent):
         continuation_anchor: str | None = None,
     ) -> tuple[str, str | None, dict[str, bool]]:
         """Build a first-turn prompt and any memory truncation notice."""
-        record = self._active_record(chat_id)
+        record = self._chat_store._active_record(chat_id)
         pctx = self.context_builder.build_first(
             chat_id,
             user_message,
@@ -103,7 +126,7 @@ class RuntimePrompts(RuntimeComponent):
         continuation_anchor: str | None = None,
     ) -> str:
         """Build a follow-up prompt for an existing session."""
-        record = self._active_record(chat_id)
+        record = self._chat_store._active_record(chat_id)
         pctx = self.context_builder.build_follow_up(
             chat_id,
             user_message,
@@ -340,4 +363,4 @@ class RuntimePrompts(RuntimeComponent):
     def get_model(self, chat_id: str) -> str:
         """Return the model currently used for a chat, or the default."""
         with self._lock:
-            return self._model(self._active_record(chat_id))
+            return self._model(self._chat_store._active_record(chat_id))

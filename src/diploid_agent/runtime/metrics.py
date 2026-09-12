@@ -8,16 +8,38 @@ from collections import deque
 from typing import Any
 
 from diploid_agent.models import SessionRecord
-from diploid_agent.runtime.component import RuntimeComponent
 
 logger = logging.getLogger(__name__)
 
 
-class RuntimeMetrics(RuntimeComponent):
+class RuntimeMetrics:
     """Owns per-chat and global metrics, health probes, and prometheus formatting."""
 
-    def __init__(self, runtime: Any) -> None:
-        super().__init__(runtime)
+    def __init__(
+        self,
+        *,
+        metrics: Any,
+        store: dict[str, Any],
+        lock: Any,
+        config: Any,
+        engine_fn: Any,
+        instance_started_at: float,
+        plugins_fn: Any,
+        context_builder_fn: Any,
+        notifier_fn: Any,
+    ) -> None:
+        self.metrics = metrics
+        self._store = store
+        self._lock = lock
+        self.config = config
+        self.instance_started_at = instance_started_at
+        # Late-bound: the engine can be swapped post-construction (runtime.client
+        # setter), and PluginManager, ContextBuilder, and the notifier are
+        # constructed after this component, so they are resolved lazily.
+        self._engine_fn = engine_fn
+        self._plugins_fn = plugins_fn
+        self._context_builder_fn = context_builder_fn
+        self._notifier_fn = notifier_fn
         self._per_chat_metrics: dict[str, dict[str, Any]] = {}
         self._global_metrics: dict[str, Any] = {
             "turns": 0,
@@ -28,16 +50,24 @@ class RuntimeMetrics(RuntimeComponent):
             "latency_seconds": 0.0,
         }
         self._recent_turns: deque[dict[str, Any]] = deque(
-            maxlen=runtime.config.harness.metrics.max_recent_turns
+            maxlen=config.harness.metrics.max_recent_turns
         )
 
     @property
-    def _store(self) -> dict[str, Any]:
-        return self._runtime._store
+    def engine(self) -> Any:
+        return self._engine_fn()
 
     @property
-    def metrics(self) -> Any:
-        return self._runtime.metrics
+    def _plugins(self) -> Any:
+        return self._plugins_fn()
+
+    @property
+    def context_builder(self) -> Any:
+        return self._context_builder_fn()
+
+    @property
+    def notifier(self) -> Any:
+        return self._notifier_fn()
 
     def _rehydrate_metrics(self) -> None:
         """Seed per-chat and global metrics from the on-disk session store."""

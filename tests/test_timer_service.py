@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 from diploid_agent.config import (
@@ -44,19 +43,12 @@ def _make_config(tmp_path: Path) -> Config:
     )
 
 
-@dataclass
-class FakeRuntime:
-    wake_queue: WakeQueue
-    event_bus: EventBus
-
-
 def test_timer_service_posts_timer_fired_event(tmp_path: Path) -> None:
     bus = EventBus()
     bus.start()
     wake_path = tmp_path / "wake.jsonl"
-    runtime = FakeRuntime(wake_queue=WakeQueue(wake_path), event_bus=bus)
     config = TimerConfig(enabled=True, interval_seconds=0.05, lease_seconds=60.0)
-    service = TimerService(runtime, config)
+    service = TimerService(WakeQueue(wake_path), bus, config)
 
     captured: list[Event] = []
     bus.subscribe(lambda event: captured.append(event))
@@ -70,7 +62,7 @@ def test_timer_service_posts_timer_fired_event(tmp_path: Path) -> None:
         created_at=time.time(),
         ready=True,
     )
-    runtime.wake_queue.enqueue(event)
+    service._wake_queue.enqueue(event)
 
     service.start()
     try:

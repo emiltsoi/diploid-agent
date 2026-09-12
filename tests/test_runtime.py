@@ -688,7 +688,7 @@ def test_complete_subagent_task_timeout_notifies_and_marks_status(tmp_path: Path
         wake = runtime.wake_queue.get(f"wake-{dispatch.id}")
         assert wake is not None
         assert wake.ready
-        assert runtime._subagent_status_name(task, dispatch) == "timeout"
+        assert runtime._subagent._subagent_status_name(task, dispatch) == "timeout"
     finally:
         runtime.shutdown()
 
