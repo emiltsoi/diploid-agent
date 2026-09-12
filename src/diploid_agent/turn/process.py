@@ -5,31 +5,23 @@ from __future__ import annotations
 import logging
 import time
 
-from diploid_agent.engine import TurnRequest, TurnResult
 from diploid_agent.models import (
     ActiveTurn,
     ChatResult,
     SessionRecord,
     WakeEvent,
-    final_segment_reply,
 )
-from diploid_agent.plugins.base import TurnInfo
 from diploid_agent.plugins.contexts import (
-    EngineCallContext,
-    EngineResultContext,
-    RecordTurnContext,
     RehydrationReason,
-    TurnErrorContext,
     TurnStartContext,
 )
-from diploid_agent.turn.base import TurnComponent
 from diploid_agent.turn.notifier import _NotifyStream, _OutboxHeartbeat
+from diploid_agent.turn.pipeline import TurnPipeline
 from diploid_agent.turn.stream import TurnStream
-from diploid_agent.turn.utils import join_notices
 
 logger = logging.getLogger(__name__)
 
-class TurnProcess(TurnComponent):
+class TurnProcess(TurnPipeline):
     """Main per-turn ACP loop for a single chat."""
 
     def _has_pending_continuation(self, chat_id: str, wake_event: WakeEvent | None = None) -> bool:
@@ -110,7 +102,6 @@ class TurnProcess(TurnComponent):
             active_skill_names = self.runtime._mcp_skills._active_skill_names(chat_id)
 
             notice: str | None = None
-            partial: str | None = None
             memory_flags: dict[str, bool] = {}
             continuation_anchor = self.runtime.context_builder.continuation_anchor(
                 record, user_message
@@ -223,8 +214,6 @@ class TurnProcess(TurnComponent):
                 turn_number = record.reserve_turn_number()
                 self.runtime._append_record(record)
 
-        rehydrate_notice: str | None = None
-
         telegram_config = self.runtime.config.harness.telegram
         notifier_stream = _NotifyStream(
             self.controller,
@@ -245,346 +234,58 @@ class TurnProcess(TurnComponent):
 
         turn_start = time.perf_counter()
 
-        rehydrate_notice: str | None = None
-
         try:
-            try:
-                request = TurnRequest(
-                    prompt=prompt,
-                    cwd=self.runtime._chat_dir(chat_id),
-                    model=use_model,
-                    mcp_servers=(
-                        self.runtime._mcp_skills._active_mcp_servers(chat_id)
-                        if is_new or force_new_session
-                        else None
-                    ),
-                    soft_timeout=self.runtime.config.engine.soft_timeout,
-                    timeout=self.runtime.config.engine.timeout,
-                    chat_id=chat_id,
-                )
-                call_ctx = self.runtime._plugins.before_engine_call(
-                    chat_id,
-                    EngineCallContext(
-                        chat_id=chat_id,
-                        request=request,
-                        session_id=(None if is_new or force_new_session else old_record.session_id),
-                        record=record,
-                        on_chunk=stream.on_chunk,
-                        on_update=stream.on_update,
-                    ),
-                )
-                if isinstance(call_ctx, ChatResult):
-                    result = TurnResult(
-                        reply=call_ctx.reply,
-                        session_id=call_ctx.session_id,
-                        stop_reason=None,
-                        usage=None,
-                        cancelled=False,
-                        partial=False,
-                    )
-                    is_short_circuit = True
-                else:
-                    is_short_circuit = False
-                    if is_new or force_new_session:
-                        result = self.runtime.call_engine_unlocked(
-                            self.runtime.engine.prompt,
-                            call_ctx.request,
-                            on_chunk=call_ctx.on_chunk,
-                            on_update=call_ctx.on_update,
-                        )
-                        active.session_id = result.session_id
-                        session_id = result.session_id
-                    else:
-                        result = self.runtime.call_engine_unlocked(
-                            self.runtime.engine.prompt,
-                            call_ctx.request,
-                            session_id=call_ctx.session_id or old_record.session_id,
-                            on_chunk=call_ctx.on_chunk,
-                            on_update=call_ctx.on_update,
-                        )
-                        session_id = result.session_id or old_record.session_id
-                    reply = result.reply
-
-                result_ctx = self.runtime._plugins.after_engine_call(
-                    chat_id,
-                    EngineResultContext(
-                        chat_id=chat_id,
-                        record=record,
-                        result=result,
-                        reply=result.reply,
-                        usage=result.usage,
-                        stop_reason=result.stop_reason,
-                    ),
-                )
-                if is_short_circuit:
-                    result = result_ctx.result
-                    session_id = result_ctx.result.session_id or session_id
-                else:
-                    result = result_ctx.result
-                    result.reply = result_ctx.reply
-                    result.usage = result_ctx.usage
-                    result.stop_reason = result_ctx.stop_reason
-                    session_id = result.session_id or session_id
-                reply = result.reply
-            except (RuntimeError, TimeoutError) as exc:
-                if isinstance(exc, TimeoutError) or self.runtime.engine.is_transport_error(exc):
-                    log_prefix = "ACP transport unresponsive"
-                    restart_first = True
-                elif self.runtime.engine.is_stale_session_error(exc):
-                    stale_id = old_record.session_id if old_record else "unknown"
-                    logger.warning("ACP session %s stale; rehydrating for %s", stale_id, chat_id)
-                    log_prefix = "ACP session stale"
-                    restart_first = False
-                elif self.runtime.engine.is_acp_error(exc):
-                    logger.exception("Unrecoverable ACP error for %s", chat_id)
-                    if record is not None:
-                        record.last_stop_reason = "error"
-                    return ChatResult(
-                        reply=f"Could not continue: {exc}",
-                        notice="An ACP error prevented the turn from completing.",
-                    )
-                else:
-                    logger.exception("Unexpected RuntimeError during ACP call for %s", chat_id)
-                    return ChatResult(
-                        reply=f"Unexpected error: {exc}",
-                        notice="The turn stopped due to an unexpected error.",
-                    )
-
-                ret = self.rehydrate._rehydrate(
-                    chat_id,
-                    user_message,
-                    old_record,
-                    use_model,
-                    reply_to=reply_to,
-                    reply_to_is_bot=reply_to_is_bot,
-                    reply_to_message_id=reply_to_message_id,
-                    continuation_anchor=continuation_anchor,
-                    wake_event=wake_event,
-                    other_instance_running=other_instance_running,
-                    on_chunk=stream.on_chunk,
-                    on_update=stream.on_update,
-                    restart_first=restart_first,
-                    log_prefix=log_prefix,
-                )
-                if isinstance(ret, ChatResult):
-                    return ret
-                result, session_id, pctx = ret
-                rehydrate_notice = pctx.notice
-                memory_flags = pctx.memory_flags
-                use_model = pctx.model or use_model
-                is_new = session_id != (old_record.session_id if old_record else None)
-                active.session_id = result.session_id
-                reply = active.final_reply_text(result.reply)
-
-            # If a prompt came back with a genuinely empty reply,
-            # the ACP session is almost certainly stale. Rehydrate once.
-            # Use the raw ACP reply so a thought-only prefix does not look empty.
-            if not result.reply and not result.partial:
-                empty_id = session_id or (old_record.session_id if old_record else "unknown")
-                logger.warning(
-                    "ACP session %s returned an empty reply; rehydrating for %s",
-                    empty_id,
-                    chat_id,
-                )
-                ret = self.rehydrate._rehydrate(
-                    chat_id,
-                    user_message,
-                    old_record,
-                    use_model,
-                    reply_to=reply_to,
-                    reply_to_is_bot=reply_to_is_bot,
-                    reply_to_message_id=reply_to_message_id,
-                    continuation_anchor=continuation_anchor,
-                    wake_event=wake_event,
-                    other_instance_running=other_instance_running,
-                    on_chunk=stream.on_chunk,
-                    on_update=stream.on_update,
-                    restart_first=False,
-                    log_prefix="ACP empty-reply rehydration",
-                )
-                if isinstance(ret, ChatResult):
-                    return ret
-                result, session_id, pctx = ret
-                rehydrate_notice = join_notices(rehydrate_notice, pctx.notice)
-                memory_flags = pctx.memory_flags
-                use_model = pctx.model or use_model
-                is_new = session_id != (old_record.session_id if old_record else None)
-                active.session_id = result.session_id
-                reply = active.final_reply_text(result.reply)
-
-            if result.partial:
-                partial = self.runtime._prompts._partial_notice(result, continue_word=continue_word)
-                notice = partial if notice is None else f"{notice}\n\n{partial}"
-            if rehydrate_notice:
-                notice = rehydrate_notice if notice is None else f"{rehydrate_notice}\n\n{notice}"
-
-            latency = time.perf_counter() - turn_start
-            turn_metrics = self.runtime._runtime_metrics._record_turn_metrics(
-                chat_id,
-                turn_number,
-                use_model,
-                result.usage,
-                latency,
-                prompt_chars=len(request.prompt) if request.prompt else 0,
+            outcome = self._call_engine(
+                chat_id=chat_id,
+                user_message=user_message,
+                prompt=prompt,
+                use_model=use_model,
+                record=record,
+                old_record=old_record,
+                is_new=is_new,
+                force_new_session=force_new_session,
+                active=active,
+                stream=stream,
+                memory_flags=memory_flags,
+                request_timeout=self.runtime.config.engine.timeout,
+                rehydrate_kwargs={
+                    "reply_to": reply_to,
+                    "reply_to_is_bot": reply_to_is_bot,
+                    "reply_to_message_id": reply_to_message_id,
+                    "continuation_anchor": continuation_anchor,
+                    "wake_event": wake_event,
+                    "other_instance_running": other_instance_running,
+                },
             )
+            if isinstance(outcome, ChatResult):
+                return outcome
 
-            mcp_names = self.runtime._mcp_skills._active_mcp_server_names(chat_id)
-            skill_names = self.runtime._mcp_skills._active_skill_names(chat_id)
-            with self.runtime._lock:
-                # `force_new_session` (context-pressure fresh mode) also crosses
-                # an ACP session boundary even though it took the follow-up
-                # prompt path — give it a new record so session_number tracks
-                # real ACP sessions instead of mutating the old record's
-                # session_id in place.
-                record_is_new = is_new or force_new_session
-                if record_is_new:
-                    if not is_new:
-                        session_number = self.runtime._next_session_number(chat_id)
-                    record = self.runtime._prompts._create_record(
-                        chat_id,
-                        session_number,
-                        session_id,
-                        use_model,
-                        reply,
-                        memory_flags,
-                        label=self.runtime.context_builder.generate_label(chat_id, user_message),
-                    )
-                    record.pending_turn_number = turn_number
-                    record.enabled_mcp_servers = mcp_names
-                    record.enabled_skills = sorted(skill_names)
-                    self.runtime._chat_state(chat_id).sessions[record.session_number] = record
-                else:
-                    record = old_record
-                    record.enabled_mcp_servers = mcp_names
-                    record.enabled_skills = sorted(skill_names)
-                    record.session_id = session_id
-                    record.model = use_model
+            def _set_continuation(cr: ChatResult, _record: SessionRecord) -> None:
+                cr.continuation = self._has_pending_continuation(chat_id, wake_event)
 
-                record.consume_turn_number()
-                record.updated_at = time.time()
-                record.cumulative_metrics = self.runtime._runtime_metrics._per_chat_metrics[chat_id].get(
-                    "cumulative", {}
-                )
-                if not result.partial:
-                    record.last_stop_reason = "completed"
-                elif active.stopped:
-                    record.last_stop_reason = "stopped"
-                elif result.cancelled:
-                    record.last_stop_reason = "cancelled"
-                elif result.stop_reason:
-                    record.last_stop_reason = result.stop_reason
-                else:
-                    record.last_stop_reason = "timeout"
-
-                record_ctx = self.runtime._plugins.before_record_turn(
-                    chat_id,
-                    RecordTurnContext(
-                        chat_id=chat_id,
-                        record=record,
-                        turn_number=record.turn_number,
-                        reply=reply,
-                        notice=notice,
-                        memory_flags=memory_flags,
-                        metrics=turn_metrics,
-                    ),
-                )
-                record.turn_number = record_ctx.turn_number
-                record.last_turn_metrics = (
-                    record_ctx.metrics if record_ctx.metrics is not None else turn_metrics
-                )
-                # The first turn on a new ACP session is the cleanest
-                # prompt_chars/input_tokens sample — later turns accumulate
-                # history in input_tokens and the ratio collapses.
-                if record_is_new and record.first_turn_metrics is None and record.last_turn_metrics:
-                    record.first_turn_metrics = dict(record.last_turn_metrics)
-                record.persona_memory_exceeded = (record_ctx.memory_flags or {}).get(
-                    "persona_memory_exceeded", False
-                )
-                record.chat_memory_exceeded = (record_ctx.memory_flags or {}).get(
-                    "chat_memory_exceeded", False
-                )
-                reply = record_ctx.reply
-
-                # Preserve the split between rehydrate/transition notices (non-deferred)
-                # and the partial/timeout notice (deferred by auto-continue). If a plugin
-                # explicitly rewrote the combined notice, treat the whole thing as
-                # non-deferred and let the plugin own it.
-                turn_notice = rehydrate_notice
-                turn_partial = partial
-                combined = join_notices(rehydrate_notice, partial)
-                if record_ctx.notice is not None and record_ctx.notice != combined:
-                    turn_notice = record_ctx.notice
-                    turn_partial = None
-
-                # Collect plugin memory items since the previous turn.
-                extra_items = self.runtime._plugins.memory_items(chat_id, since=previous_updated_at)
-
-                assistant_notice = join_notices(turn_notice, turn_partial)
-                self.runtime._memory_manager(chat_id).record_turn(
-                    user_message=user_message,
-                    reply=reply,
-                    model=use_model,
-                    session_number=record.session_number,
-                    turn_number=record.turn_number,
-                    extra_items=extra_items,
-                    notice=assistant_notice,
-                    system_note=resend_system_note,
-                    final_segment=final_segment_reply(result, reply),
-                )
-
-                turn = TurnInfo(
-                    chat_id=chat_id,
-                    session_id=record.session_id,
-                    session_number=record.session_number,
-                    turn_number=record.turn_number,
-                    updated_at=record.updated_at,
-                    last_stop_reason=record.last_stop_reason,
-                    user_message=user_message,
-                    reply=reply,
-                    notice=turn_notice,
-                    partial_notice=turn_partial,
-                )
-                self.runtime._plugins.on_turn_end(chat_id, turn)
-
-                transition = self.runtime._prompts._check_chat_memory_transition(chat_id, record)
-                if transition:
-                    turn.notice = join_notices(turn.notice, transition)
-
-                self.runtime._append_record(record)
-                turn.reply = reply
-                turn.turn_number = record.turn_number
-                self.runtime._plugins.after_turn(chat_id, turn)
-                chat_result = ChatResult(
-                    reply=reply,
-                    notice=join_notices(budget_notice, turn.notice, turn.partial_notice),
-                    session_id=record.session_id,
-                    session_number=record.session_number,
-                    turn_number=record.turn_number,
-                    metrics=record.last_turn_metrics,
-                )
-                chat_result.continuation = self._has_pending_continuation(chat_id, wake_event)
+            chat_result, record = self._finalize_turn(
+                chat_id=chat_id,
+                user_message=user_message,
+                old_record=old_record,
+                outcome=outcome,
+                turn_number=turn_number,
+                session_number=session_number,
+                previous_updated_at=previous_updated_at,
+                continue_word=continue_word,
+                turn_start=turn_start,
+                force_new_session=force_new_session,
+                system_note=resend_system_note,
+                budget_notice=budget_notice,
+                notice=notice,
+                after_result=_set_continuation,
+            )
         except Exception as exc:
-            self.runtime._plugins.on_turn_error(
-                chat_id,
-                TurnErrorContext(
-                    chat_id=chat_id,
-                    record=record,
-                    user_message=user_message,
-                    exception=exc,
-                    now=time.time(),
-                ),
-            )
+            self._emit_turn_error(chat_id, record, user_message, exc)
             raise
         finally:
             if outbox_heartbeat is not None:
                 outbox_heartbeat.stop()
-            with self.runtime._lock:
-                active = self.runtime._active_turns.get(chat_id)
-                self.runtime._active_turns.pop(chat_id, None)
-                self.runtime._plugins.on_sleeping(chat_id, record, reason="turn_end")
-            if active is not None:
-                with active._condition:
-                    active._condition.notify_all()
+            self._cleanup_turn(chat_id, record)
             if notifier_stream is not None:
                 if "chat_result" in vars():
                     notifier_stream.finish(chat_result)
