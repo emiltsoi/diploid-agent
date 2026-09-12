@@ -6,16 +6,13 @@ models live in `memory_models`. This module remains the public import site.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
-import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from diploid_agent.engine import TurnRequest
 from diploid_agent.memory_backends import (
     FileMemoryBackend,
     HindsightMemoryBackend,
@@ -24,6 +21,9 @@ from diploid_agent.memory_backends import (
     _trim_to_section,
 )
 from diploid_agent.memory_models import MemoryItem, RecallResult
+from diploid_agent.memory_promoted import PromotedMemory
+from diploid_agent.memory_retention import TurnRetainBuffer
+from diploid_agent.memory_short_term import ShortTermMemory, summary_request
 
 logger = logging.getLogger(__name__)
 
@@ -82,9 +82,38 @@ class MemoryManager:
                 max_chat_memory_chars=config.max_chat_memory_chars,
             )
 
-        self._turn_buffer: list[dict[str, Any]] = []
+        self._retain_buffer = TurnRetainBuffer(
+            self._transcript_path.parent / "turn-retain-buffer.jsonl",
+            self._retain_items,
+            bundle_turns=config.retain_bundle_turns,
+            chat_id=chat_id,
+            persona_name=persona.name,
+        )
+        self._promoted = PromotedMemory(
+            config,
+            persona,
+            self.sessions_root,
+            chat_id,
+            backend_fn=lambda: self.backend,
+        )
+        self._short_term = ShortTermMemory(
+            config,
+            chat_id,
+            self.sessions_root,
+            load_transcript=self._load_transcript,
+            devin_client=devin_client,
+            retain=self.retain,
+        )
         self._maybe_migrate_legacy_files()
-        self._load_turn_buffer()
+        self._retain_buffer.load()
+
+    @property
+    def _turn_buffer(self) -> list[dict[str, Any]]:
+        return self._retain_buffer.entries
+
+    def _retain_items(self, items: list[MemoryItem]) -> None:
+        """Retain items via the *current* backend (tests swap ``manager.backend``)."""
+        self.backend.retain(items)
 
     def _maybe_migrate_legacy_files(self) -> None:
         """Rename legacy transcript/memory files and move short-term summary cache into .cache/."""
@@ -97,32 +126,8 @@ class MemoryManager:
             legacy_memory = fb._memory_path.with_name("MEMORY.md")
             if legacy_memory.exists() and not fb._memory_path.exists():
                 legacy_memory.rename(fb._memory_path)
-        self._migrate_short_term_summary_cache()
-        self._prune_short_term_summary_cache()
-
-    def _migrate_short_term_summary_cache(self) -> None:
-        chat_dir = self._transcript_path.parent
-        cache_dir = chat_dir / ".cache"
-        for path in chat_dir.glob(".short-term-summary-*.md"):
-            try:
-                cache_dir.mkdir(parents=True, exist_ok=True)
-                path.rename(cache_dir / path.name)
-            except OSError:
-                pass
-
-    def _prune_short_term_summary_cache(self) -> None:
-        """Remove .cache/*.md entries older than short_term_summary_cache_days."""
-        cache_dir = self._transcript_path.parent / ".cache"
-        if not cache_dir.exists():
-            return
-        max_age = self.memory_config.short_term_summary_cache_days * 86400
-        now = time.time()
-        for path in cache_dir.glob("*.md"):
-            try:
-                if now - path.stat().st_mtime > max_age:
-                    path.unlink()
-            except OSError:
-                pass
+        self._short_term.migrate_cache()
+        self._short_term.prune_cache()
 
     @property
     def _file_backend(self) -> FileMemoryBackend | None:
@@ -194,71 +199,20 @@ class MemoryManager:
     @property
     def persona_memory_path(self) -> Path:
         """Path to the persona's memory file."""
-        return self.persona.profile_root / self.persona.memory_filename
+        return self._promoted.persona_path
 
     def persona_memory(self, max_chars: int | None = None) -> dict[str, Any]:
         """Load and optionally cap the persona's MEMORY.md for the prompt."""
-        path = self.persona_memory_path
-        text = ""
-        total = 0
-        loaded = 0
-        limit = max_chars or 0
-        truncated = False
-
-        if path.exists():
-            raw = path.read_text()
-            total = len(raw)
-            if max_chars and total > max_chars:
-                text = _trim_to_section(raw, max_chars)
-                loaded = len(text)
-                truncated = True
-            else:
-                text = raw
-                loaded = total
-
-        return {
-            "text": text,
-            "path": path if total > 0 else None,
-            "truncated": truncated,
-            "limit": limit,
-            "loaded": loaded,
-            "total": total,
-        }
+        return self._promoted.persona_memory(max_chars)
 
     @property
     def promoted_memory_path(self) -> Path:
         """Path to the user-curated promoted memory file for this chat."""
-        safe = self.chat_id.replace("/", "_")
-        return self.sessions_root / safe / "chat_PROMOTED.md"
+        return self._promoted.promoted_path
 
     def promoted_memory(self, max_chars: int | None = None) -> dict[str, Any]:
         """Load the promoted memory pocket, always capped tightly."""
-        cap = max_chars or 1000
-        path = self.promoted_memory_path
-        text = ""
-        total = 0
-        loaded = 0
-        truncated = False
-
-        if path.exists():
-            raw = path.read_text()
-            total = len(raw)
-            if total > cap:
-                text = _trim_to_section(raw, cap)
-                loaded = len(text)
-                truncated = True
-            else:
-                text = raw
-                loaded = total
-
-        return {
-            "text": text,
-            "path": path if total > 0 else None,
-            "truncated": truncated,
-            "limit": cap,
-            "loaded": loaded,
-            "total": total,
-        }
+        return self._promoted.promoted_memory(max_chars)
 
     def _load_transcript(self) -> list[dict[str, Any]]:
         path = self._transcript_path
@@ -273,70 +227,8 @@ class MemoryManager:
                     continue
         return entries
 
-    def _should_precompute_short_term_summary(
-        self,
-        turn_number: int,
-        model: str | None,
-    ) -> bool:
-        """Return True when it is worth paying for a pre-computed summary."""
-        if not self.memory_config.precompute_short_term_summary:
-            return False
-        if self.memory_config.short_term_strategy != "smart":
-            return False
-        if turn_number < self.memory_config.precompute_short_term_summary_min_turns:
-            return False
-
-        recent, _, _ = self._short_term_window()
-        if not recent:
-            return False
-
-        raw_text = self._format_recent_turns(recent)
-        return len(raw_text) > self.memory_config.max_short_term_chars
-
-    @staticmethod
-    def _normalize_promoted_line(line: str) -> str:
-        """Normalize a promoted line for duplicate comparison."""
-        text = line.strip()
-        while text.startswith("-"):
-            text = text[1:].lstrip()
-        return " ".join(text.split())
-
     def _tidy_promoted_memory(self) -> None:
-        """Cap the promoted pocket and drop duplicate entries."""
-        max_lines = getattr(self.memory_config, "max_promoted_lines", 0)
-        path = self.promoted_memory_path
-        if not path.exists():
-            return
-
-        raw = path.read_text(encoding="utf-8")
-        lines = [line for line in raw.splitlines() if line.strip()]
-        seen: set[str] = set()
-        deduped: list[str] = []
-        for line in lines:
-            key = self._normalize_promoted_line(line)
-            if key and key not in seen:
-                seen.add(key)
-                deduped.append(line)
-        if max_lines and len(deduped) > max_lines:
-            deduped = deduped[-max_lines:]
-        if deduped != lines:
-            path.write_text("\n".join(deduped) + "\n", encoding="utf-8")
-
-    def _append_promoted_memory(self, content: str) -> None:
-        """Append a user-promoted fact to the curated pocket file."""
-        path = self.promoted_memory_path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        key = self._normalize_promoted_line(content)
-        if path.exists():
-            existing = {
-                self._normalize_promoted_line(line)
-                for line in path.read_text(encoding="utf-8").splitlines()
-            }
-            if key in existing:
-                return
-        with path.open("a", encoding="utf-8") as f:
-            f.write(f"- {content.strip()}\n")
-        self._tidy_promoted_memory()
+        self._promoted.tidy()
 
     def _append_transcript(
         self,
@@ -358,84 +250,8 @@ class MemoryManager:
         """Append a mesh/system note to the current chat's transcript."""
         self.backend.append_system_note(text)
 
-    def _short_term_window(
-        self,
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-        """Return (recent, fresh, older) transcript windows for short-term handling."""
-        transcript = self._load_transcript()
-        n = self.memory_config.short_term_turns * 2
-        recent = transcript[-n:] if n > 0 else transcript
-        min_pairs = max(0, self.memory_config.min_short_term_turns * 2)
-        if len(recent) <= min_pairs:
-            fresh = recent
-            older: list[dict[str, Any]] = []
-        else:
-            fresh = recent[-min_pairs:]
-            older = recent[:-min_pairs]
-        return recent, fresh, older
-
-    @staticmethod
-    def _format_recent_turns(entries: list[dict[str, Any]]) -> str:
-        lines = ["Recent conversation:"]
-        for entry in entries:
-            role = entry.get("role", "unknown").capitalize()
-            lines.append(f"{role}: {entry.get('content', '')}")
-        return "\n\n".join(lines)
-
     def _short_term_context(self, model: str | None = None) -> str:
-        if not self.memory_config.include_short_term:
-            return ""
-        recent, fresh, older = self._short_term_window()
-        if not recent:
-            return ""
-
-        raw_text = self._format_recent_turns(recent)
-
-        if self.memory_config.short_term_strategy != "smart":
-            return raw_text
-
-        max_chars = self.memory_config.max_short_term_chars
-        if len(raw_text) <= max_chars:
-            return raw_text
-
-        fresh_text = self._format_recent_turns(fresh)
-
-        # If even the minimum fresh window does not fit, truncate as a last resort.
-        if not older:
-            return (
-                _trim_to_section(raw_text, max_chars)
-                + "\n\n[... short-term context truncated because even the minimum "
-                "fresh turns exceed the budget ...]"
-            )
-
-        # If even the minimum fresh window is larger than the short-term budget,
-        # truncate it. We cannot keep any older turns at this point.
-        if len(fresh_text) >= max_chars:
-            return (
-                _trim_to_section(fresh_text, max_chars)
-                + "\n\n[... short-term context truncated because even the minimum "
-                "fresh turns exceed the budget ...]"
-            )
-
-        summary = self.summarize_and_retain_recent_turns(
-            n=self.memory_config.short_term_turns - self.memory_config.min_short_term_turns,
-            model=model,
-        )
-        if not summary:
-            # Fallback: just use the fresh turns if summarization failed.
-            return fresh_text
-
-        prefix = "Summary of earlier short-term turns:\n\n"
-        combined = f"{prefix}{summary}\n\n{fresh_text}"
-        if len(combined) <= max_chars:
-            return combined
-
-        # Trim the summary so the fresh turns remain intact.
-        summary_cap = max(0, max_chars - len(fresh_text) - len(prefix) - 2)
-        if summary_cap == 0:
-            return fresh_text
-        trimmed_summary = _trim_to_section(summary, summary_cap)
-        return f"{prefix}{trimmed_summary}\n[... older turns truncated ...]\n\n{fresh_text}"
+        return self._short_term.context(model)
 
     def summarize_and_retain_recent_turns(
         self,
@@ -447,41 +263,7 @@ class MemoryManager:
         Returns the summary text and writes it to the `.cache` short-term summary
         path so `compaction_context` can load it without running the model again.
         """
-        if not self.memory_config.include_short_term:
-            return ""
-        if self.memory_config.short_term_strategy != "smart":
-            return ""
-
-        recent, fresh, older = self._short_term_window()
-        if not older:
-            return ""
-
-        raw_text = self._format_recent_turns(recent)
-        fresh_text = self._format_recent_turns(fresh)
-        max_chars = self.memory_config.max_short_term_chars
-        if len(raw_text) <= max_chars:
-            return ""
-        if len(fresh_text) >= max_chars:
-            return ""
-
-        max_pairs = (
-            n
-            if n is not None
-            else (self.memory_config.short_term_turns - self.memory_config.min_short_term_turns)
-        )
-        max_entries = max(0, max_pairs * 2)
-        if max_entries and len(older) > max_entries:
-            older = older[:max_entries]
-
-        summary = self._load_or_summarize_short_term(older, model)
-        if not summary:
-            return ""
-
-        self.retain(
-            summary,
-            tags=["compaction", f"chat:{self.chat_id}"],
-        )
-        return summary
+        return self._short_term.summarize_and_retain(n=n, model=model)
 
     def compaction_context(self, model: str | None = None) -> str:
         """Return a short-term block for a fresh reset without triggering summarization.
@@ -490,103 +272,7 @@ class MemoryManager:
         minimum fresh turns.  If no summary has been cached yet, falls back to
         the raw recent window or the fresh window.
         """
-        if not self.memory_config.include_short_term:
-            return ""
-        recent, fresh, older = self._short_term_window()
-        if not recent:
-            return ""
-
-        raw_text = self._format_recent_turns(recent)
-        fresh_text = self._format_recent_turns(fresh)
-        max_chars = self.memory_config.max_short_term_chars
-
-        # Small enough that no summarization has happened yet.
-        if len(raw_text) <= max_chars:
-            return raw_text
-
-        # Try to load a cached summary for the current older window.
-        summary = ""
-        if older:
-            path = self._short_term_summary_path(older)
-            if path.exists():
-                summary = path.read_text()
-            else:
-                # Fall back to the most recent summary in the cache directory.
-                cache_dir = path.parent
-                if cache_dir.exists():
-                    paths = sorted(
-                        cache_dir.glob("short-term-summary-*.md"),
-                        key=lambda p: p.stat().st_mtime,
-                        reverse=True,
-                    )
-                    for p in paths:
-                        summary = p.read_text()
-                        if summary:
-                            break
-
-        if not summary:
-            return fresh_text
-
-        prefix = "Summary of earlier short-term turns:\n\n"
-        combined = f"{prefix}{summary}\n\n{fresh_text}"
-        if len(combined) <= max_chars:
-            return combined
-
-        summary_cap = max(0, max_chars - len(fresh_text) - len(prefix) - 2)
-        if summary_cap == 0:
-            return fresh_text
-        trimmed_summary = _trim_to_section(summary, summary_cap)
-        return f"{prefix}{trimmed_summary}\n[... older turns truncated ...]\n\n{fresh_text}"
-
-    def _short_term_summary_path(self, entries: list[dict[str, Any]]) -> Path:
-        safe = self.chat_id.replace("/", "_")
-        content = json.dumps(entries, sort_keys=True)
-        h = hashlib.md5(content.encode()).hexdigest()[:12]
-        return self.sessions_root / safe / ".cache" / f"short-term-summary-{h}.md"
-
-    def _load_or_summarize_short_term(
-        self,
-        entries: list[dict[str, Any]],
-        model: str | None,
-    ) -> str:
-        """Return a cached summary of the older short-term entries, or generate one."""
-        path = self._short_term_summary_path(entries)
-        if path.exists():
-            return path.read_text()
-
-        lines = []
-        for entry in entries:
-            role = entry.get("role", "unknown").capitalize()
-            lines.append(f"{role}: {entry.get('content', '')}")
-        text = "\n\n".join(lines)
-
-        prompt = (
-            "Summarize the following conversation turns into a concise, dense "
-            "bullet list of key facts, questions, and decisions. Do not add "
-            "pleasantries or invent information.\n\n"
-            f"{text}"
-        )
-
-        try:
-            safe = self.chat_id.replace("/", "_")
-            cwd = self.sessions_root / safe / ".summarize"
-            request = TurnRequest(
-                prompt=prompt,
-                cwd=cwd,
-                model=model,
-                soft_timeout=self.memory_config.summary_soft_timeout,
-                timeout=self.memory_config.summary_timeout,
-                background=True,
-            )
-            result = self.devin_client.prompt(request)
-            summary = result.reply.strip()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Short-term summary failed: %s", exc)
-            summary = _trim_to_section(text, self.memory_config.max_short_term_chars)
-
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(summary)
-        return summary
+        return self._short_term.compaction_context(model)
 
     def recall_context(
         self,
@@ -652,26 +338,6 @@ class MemoryManager:
             total=total,
         )
 
-    def _should_auto_promote(self, content: str, tags: list[str]) -> bool:
-        """Return True when a retained fact looks durable enough for the promoted pocket."""
-        if not getattr(self.memory_config, "auto_promote_enabled", True):
-            return False
-        if "promoted" in tags or "no-promote" in tags:
-            return False
-
-        lower_tags = {t.lower() for t in tags}
-        auto_tags = set(getattr(self.memory_config, "auto_promote_tags", []))
-        if lower_tags & {t.lower() for t in auto_tags}:
-            return True
-
-        lower = content.lower()
-        triggers = getattr(self.memory_config, "auto_promote_triggers", [])
-        for trigger in triggers:
-            if trigger.lower() in lower:
-                return True
-
-        return False
-
     def retain(
         self,
         content: str,
@@ -686,10 +352,10 @@ class MemoryManager:
         if "memory" not in item_tags:
             item_tags.append("memory")
 
-        if "promoted" in item_tags or self._should_auto_promote(content, item_tags):
+        if "promoted" in item_tags or self._promoted.should_auto_promote(content, item_tags):
             if "promoted" not in item_tags:
                 item_tags.append("promoted")
-            self._append_promoted_memory(content)
+            self._promoted.append(content)
 
         item = MemoryItem(
             content=content.strip(),
@@ -704,130 +370,6 @@ class MemoryManager:
             tags=item_tags,
         )
         self.backend.retain([item])
-
-    # ---------------------------------------------------------- turn retain buffer
-
-    @property
-    def _turn_buffer_path(self) -> Path:
-        return self._transcript_path.parent / "turn-retain-buffer.jsonl"
-
-    def _load_turn_buffer(self) -> None:
-        """Reload turn pairs buffered before a restart so they are not lost."""
-        path = self._turn_buffer_path
-        if not path.exists():
-            return
-        try:
-            for line in path.read_text().splitlines():
-                if not line.strip():
-                    continue
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(entry, dict) and entry.get("content"):
-                    self._turn_buffer.append(entry)
-        except OSError:
-            logger.warning("Could not read retain buffer %s", path)
-
-    def _write_turn_buffer(self) -> None:
-        """Persist the pending buffer; remove the file when it is empty."""
-        path = self._turn_buffer_path
-        try:
-            if self._turn_buffer:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("".join(json.dumps(e) + "\n" for e in self._turn_buffer))
-            elif path.exists():
-                path.unlink()
-        except OSError:
-            logger.warning("Could not persist retain buffer %s", path)
-
-    def _buffer_turn_pair(
-        self,
-        content: str,
-        *,
-        turn_number: int,
-        session_number: int,
-        model: str,
-    ) -> None:
-        """Buffer a turn pair and flush when the bundle size is reached.
-
-        Bundling several turns into one retained document gives the backend's
-        fact extraction cross-turn context and avoids emitting the same fact
-        once per turn.  A session boundary always flushes first so a bundle
-        never spans two ACP sessions.
-        """
-        if self._turn_buffer and self._turn_buffer[0]["session"] != session_number:
-            self._flush_turn_buffer()
-        self._turn_buffer.append(
-            {
-                "content": content,
-                "turn": turn_number,
-                "session": session_number,
-                "model": model,
-                "timestamp": datetime.now(UTC).isoformat(),
-            }
-        )
-        if len(self._turn_buffer) >= max(1, self.memory_config.retain_bundle_turns):
-            self._flush_turn_buffer()
-        else:
-            self._write_turn_buffer()
-
-    def _flush_turn_buffer(self) -> None:
-        """Retain buffered turn pairs, one document per same-session run.
-
-        Normally the buffer holds a single session's pairs; mixed runs can only
-        appear after a flush failure at a session boundary, and are split back
-        into per-session documents here.
-        """
-        while self._turn_buffer:
-            session = self._turn_buffer[0]["session"]
-            end = 0
-            while end < len(self._turn_buffer) and self._turn_buffer[end]["session"] == session:
-                end += 1
-            entries = self._turn_buffer[:end]
-            turns = [e["turn"] for e in entries]
-            bundled = len(entries) > 1
-            if bundled:
-                document_id = f"turns-{self.chat_id}-{session:06d}-{turns[0]:06d}-{turns[-1]:06d}"
-                role = "pair_bundle"
-            else:
-                document_id = f"turn-{self.chat_id}-{session:06d}-{turns[0]:06d}"
-                role = "pair"
-            item = MemoryItem(
-                content="\n\n---\n\n".join(e["content"] for e in entries),
-                timestamp=entries[-1].get("timestamp") or datetime.now(UTC).isoformat(),
-                document_id=document_id,
-                session_number=session,
-                metadata={
-                    "role": role,
-                    "chat_id": self.chat_id,
-                    "persona": self.persona.name,
-                    "model": entries[-1].get("model"),
-                    "turn": turns[-1],
-                    "turns": turns,
-                    "session": session,
-                },
-                tags=[
-                    "turn",
-                    f"chat:{self.chat_id}",
-                    f"session:{session}",
-                    f"persona:{self.persona.name}",
-                ],
-            )
-            try:
-                self.backend.retain([item])
-            except Exception as exc:  # noqa: BLE001
-                # Keep the buffer and its backing file so the next record_turn
-                # or a restart retries instead of dropping the turns.
-                logger.warning(
-                    "Retain flush failed; keeping %d buffered turns: %s",
-                    len(self._turn_buffer),
-                    exc,
-                )
-                self._write_turn_buffer()
-                return
-            del self._turn_buffer[:end]
-        self._write_turn_buffer()
 
     def record_turn(
         self,
@@ -854,7 +396,7 @@ class MemoryManager:
             retain_content = final_segment.lstrip("\n")
 
         pair_content = f"User: {user_message}\n\nAssistant: {retain_content}"
-        self._buffer_turn_pair(
+        self._retain_buffer.append(
             pair_content,
             turn_number=turn_number,
             session_number=session_number,
@@ -868,8 +410,8 @@ class MemoryManager:
         # so a `fresh` reset can load it without running the model synchronously.
         # Only run the model when the window is actually overflowing; otherwise
         # each turn would pay for an unnecessary summarization call.
-        if self._should_precompute_short_term_summary(turn_number, model):
-            self.summarize_and_retain_recent_turns(
+        if self._short_term.should_precompute(turn_number, model):
+            self._short_term.summarize_and_retain(
                 n=self.memory_config.short_term_turns - self.memory_config.min_short_term_turns,
                 model=model,
             )
@@ -912,14 +454,7 @@ class MemoryManager:
 
         try:
             cwd = self.sessions_root / self.chat_id.replace("/", "_") / ".summarize"
-            request = TurnRequest(
-                prompt=prompt,
-                cwd=cwd,
-                model=model,
-                soft_timeout=self.memory_config.summary_soft_timeout,
-                timeout=self.memory_config.summary_timeout,
-                background=True,
-            )
+            request = summary_request(prompt, cwd, model, self.memory_config)
             result = self.devin_client.prompt(request)
             reply = result.reply
             summary_item = MemoryItem(
@@ -965,45 +500,16 @@ class MemoryManager:
         Promoted facts are always loaded in compact/fresh mode so the user can
         curate a small "me" pocket that the compactor cannot throw away.
         """
-        self._append_promoted_memory(fact)
+        self._promoted.append(fact)
 
     def promote_to_persona(self, fact: str) -> None:
-        """Append a fact to the persona's MEMORY.md and, for Hindsight, index it.
-
-        Memory files are not mechanically pruned. The agent has agency to edit
-        them using its own file tools when the system notice says they exceed
-        the prompt budget.
-        """
-        path = self.persona_memory_path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        new_block = f"- {fact.strip()}\n"
-        with open(path, "a") as f:
-            f.write(new_block)
-
-        if isinstance(self.backend, HindsightMemoryBackend):
-            item = MemoryItem(
-                content=fact.strip(),
-                timestamp=datetime.now(UTC).isoformat(),
-                document_id=f"promote-{self.chat_id}-{uuid.uuid4().hex[:12]}",
-                metadata={
-                    "chat_id": self.chat_id,
-                    "persona": self.persona.name,
-                    "kind": "promoted",
-                },
-                tags=[
-                    "memory",
-                    "persona",
-                    "promoted",
-                    f"chat:{self.chat_id}",
-                    f"persona:{self.persona.name}",
-                ],
-            )
-            self.backend.retain([item])
+        """Append a fact to the persona's MEMORY.md and, for Hindsight, index it."""
+        self._promoted.promote_to_persona(fact)
 
     def close(self) -> None:
         """Release any resources held by the backend."""
         try:
-            self._flush_turn_buffer()
+            self._retain_buffer.flush()
         except Exception as exc:  # noqa: BLE001
             logger.warning("Retain buffer flush on close failed: %s", exc)
         self.backend.close()
