@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
-import subprocess
 import sys
 import threading
 import time
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -130,7 +128,6 @@ class AgentRuntime(RuntimeAPI):
             notifier_fn=lambda: self.notifier,
         )
         self._memory_managers: dict[str, MemoryManager] = {}
-        self._last_restart_memory_written: dict[str, float] = {}
         self._router = ModelRouter(config)
 
         # Load external plugin search paths before PluginManager imports anything.
@@ -231,6 +228,7 @@ class AgentRuntime(RuntimeAPI):
             instance_started_at=self.instance_started_at,
             suppress_auto_continue_fn=lambda *a, **k: self.suppress_auto_continue(*a, **k),
             unit_exists_fn=lambda s: self._unit_exists(s),
+            memory_manager=self._memory_manager,
         )
 
         # Ingress handlers for pluggable transport protocols (e.g. mesh).
@@ -426,26 +424,8 @@ class AgentRuntime(RuntimeAPI):
         self._restart._on_service_restart(service, reason)
 
     def _unit_exists(self, service: str) -> bool:
-        """Best-effort check that a user unit exists before draining for it.
-
-        Returns True when the check cannot be made (no systemctl, no user bus)
-        so non-systemd environments are not blocked; only a definitive
-        "no such unit" answer refuses the restart.
-        """
-        try:
-            proc = subprocess.run(
-                ["systemctl", "--user", "cat", service],
-                capture_output=True,
-                text=True,
-                timeout=10.0,
-                check=False,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return True
-        if proc.returncode == 0:
-            return True
-        output = f"{proc.stdout}\n{proc.stderr}"
-        return "No files found" not in output and "not found" not in output.lower()
+        """Best-effort check that a user unit exists before draining for it."""
+        return self._restart._systemd_unit_exists(service)
 
     def _schedule_draining_restart(
         self,
@@ -667,33 +647,8 @@ class AgentRuntime(RuntimeAPI):
         return self._memory_managers[chat_id]
 
     def _record_restart_memory(self, chat_id: str, reason: str | None = None) -> None:
-        """Record a brief ACP restart observation for memory_recall.
-
-        Deduplicates rapid restarts within a 60-second window per chat so a
-        tight restart loop only produces one memory item.
-        """
-        now = time.time()
-        with self._lock:
-            last = self._last_restart_memory_written.get(chat_id, 0)
-            if now - last < 60:
-                return
-            self._last_restart_memory_written[chat_id] = now
-
-        ts = datetime.fromtimestamp(now, tz=UTC).isoformat()
-        text = f"ACP transport restarted at {ts}."
-        if reason:
-            text += f" Reason: {reason}."
-        try:
-            self._memory_manager(chat_id).retain(
-                text,
-                tags=["system", "acp", "restart"],
-            )
-        except Exception as exc:
-            logger.warning(
-                "Failed to record restart memory for %s",
-                chat_id,
-                exc_info=exc,
-            )
+        """Record a brief ACP restart observation for memory_recall."""
+        self._restart._record_restart_memory(chat_id, reason=reason)
 
     def plugin_event(
         self,

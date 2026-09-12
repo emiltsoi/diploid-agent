@@ -7,6 +7,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 
 from diploid_agent.plugins.contexts import ShutdownContext
@@ -39,6 +40,7 @@ class RuntimeRestart:
         instance_started_at: float,
         suppress_auto_continue_fn: Callable[..., None],
         unit_exists_fn: Callable[[str], bool],
+        memory_manager: Callable[[str], Any],
     ) -> None:
         self._state = state
         self._lock = lock
@@ -52,6 +54,59 @@ class RuntimeRestart:
         self._instance_started_at = instance_started_at
         self._suppress_auto_continue = suppress_auto_continue_fn
         self._unit_exists = unit_exists_fn
+        self._memory_manager = memory_manager
+        self._last_restart_memory_written: dict[str, float] = {}
+
+    def _systemd_unit_exists(self, service: str) -> bool:
+        """Best-effort check that a user unit exists before draining for it.
+
+        Returns True when the check cannot be made (no systemctl, no user bus)
+        so non-systemd environments are not blocked; only a definitive
+        "no such unit" answer refuses the restart.
+        """
+        try:
+            proc = subprocess.run(
+                ["systemctl", "--user", "cat", service],
+                capture_output=True,
+                text=True,
+                timeout=10.0,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return True
+        if proc.returncode == 0:
+            return True
+        output = f"{proc.stdout}\n{proc.stderr}"
+        return "No files found" not in output and "not found" not in output.lower()
+
+    def _record_restart_memory(self, chat_id: str, reason: str | None = None) -> None:
+        """Record a brief ACP restart observation for memory_recall.
+
+        Deduplicates rapid restarts within a 60-second window per chat so a
+        tight restart loop only produces one memory item.
+        """
+        now = time.time()
+        with self._lock:
+            last = self._last_restart_memory_written.get(chat_id, 0)
+            if now - last < 60:
+                return
+            self._last_restart_memory_written[chat_id] = now
+
+        ts = datetime.fromtimestamp(now, tz=UTC).isoformat()
+        text = f"ACP transport restarted at {ts}."
+        if reason:
+            text += f" Reason: {reason}."
+        try:
+            self._memory_manager(chat_id).retain(
+                text,
+                tags=["system", "acp", "restart"],
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to record restart memory for %s",
+                chat_id,
+                exc_info=exc,
+            )
 
     def _on_service_restart(self, service: str, reason: str) -> None:
         """Handle a service restart request from the ACP subprocess.
