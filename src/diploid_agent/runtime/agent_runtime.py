@@ -228,6 +228,7 @@ class AgentRuntime(RuntimeAPI):
             self._mcp_skills._active_skill_names,
             context_window_fn=self.engine.model_context_window,
             lifecycle_log=self.lifecycle_log,
+            chat_store=self._chat_store,
         )
         self.context_builder.metrics = self._runtime_metrics._per_chat_metrics
 

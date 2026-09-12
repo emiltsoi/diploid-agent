@@ -589,7 +589,7 @@ def test_process_uses_telegram_message_registry_for_bot_reply(monkeypatch, tmp_p
 
     monkeypatch.setattr(harness.client, "create_session", fake_create_session)
 
-    registry_path = harness._prompts._telegram_message_registry_path("chat-reg")
+    registry_path = harness.runtime._chat_store.telegram_message_registry_path("chat-reg")
     registry_path.parent.mkdir(parents=True, exist_ok=True)
     entry = {
         "message_id": 42,

@@ -7,7 +7,6 @@ memory-flag rules as the original harness methods.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 import time
@@ -34,6 +33,7 @@ from diploid_agent.plugins.contexts import (
     RehydrationReason,
     UserMessageContext,
 )
+from diploid_agent.runtime.store import load_message_registry
 from diploid_agent.skills import SkillManager
 from diploid_agent.text import compact_duration, human_duration
 
@@ -149,6 +149,7 @@ class ContextBuilder:
         active_skill_names: Callable[[str], set[str]] | None = None,
         context_window_fn: Callable[[str], int | None] | None = None,
         lifecycle_log: AcpLifecycleLog | None = None,
+        chat_store: Any | None = None,
     ) -> None:
         self.config = config
         self.plugin_manager = plugin_manager
@@ -157,6 +158,7 @@ class ContextBuilder:
         self.active_skill_names = active_skill_names
         self.context_window_fn = context_window_fn
         self.lifecycle_log = lifecycle_log
+        self._chat_store = chat_store
         # Shared per-chat metrics store.  The harness sets this to its own dict.
         self.metrics: dict[str, dict[str, Any]] = {}
         # Per-chat cache of the last injected plugin blocks and file mtimes. This
@@ -936,21 +938,13 @@ class ContextBuilder:
         )
 
     def _load_telegram_message_registry(self, chat_id: str) -> dict[int, dict[str, Any]]:
-        path = self._telegram_message_registry_path(chat_id)
-        if not path.exists():
-            return {}
-        entries: dict[int, dict[str, Any]] = {}
-        for line in path.read_text().splitlines():
-            if not line.strip():
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            message_id = entry.get("message_id")
-            if message_id is not None:
-                entries[message_id] = entry
-        return entries
+        store = self._chat_store
+        path = (
+            store.telegram_message_registry_path(chat_id)
+            if store is not None
+            else self._telegram_message_registry_path(chat_id)
+        )
+        return load_message_registry(path)
 
     def format_user_message(
         self,

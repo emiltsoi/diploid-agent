@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
-from pathlib import Path
 from typing import Any
 
 from diploid_agent.engine import TurnRequest, TurnResult
@@ -88,26 +86,6 @@ class RuntimePrompts:
     def _trim_reply_quote(self, quote: str) -> str:
         """Trim a reply-to quote to the configured budget, with a truncation marker."""
         return self.context_builder.trim_reply_quote(quote)
-
-    def _telegram_message_registry_path(self, chat_id: str) -> Path:
-        return self._chat_store._chat_dir(chat_id) / "telegram_messages.jsonl"
-
-    def _load_telegram_message_registry(self, chat_id: str) -> dict[int, dict[str, Any]]:
-        path = self._telegram_message_registry_path(chat_id)
-        if not path.exists():
-            return {}
-        entries: dict[int, dict[str, Any]] = {}
-        for line in path.read_text().splitlines():
-            if not line.strip():
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            message_id = entry.get("message_id")
-            if message_id is not None:
-                entries[message_id] = entry
-        return entries
 
     def _format_user_message(
         self,

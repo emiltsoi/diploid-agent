@@ -26,6 +26,24 @@ _CHAT_DURABLE_FILES = {
 }
 
 
+def load_message_registry(path: Path) -> dict[int, dict[str, Any]]:
+    """Parse a ``telegram_messages.jsonl`` registry, ignoring malformed lines."""
+    if not path.exists():
+        return {}
+    entries: dict[int, dict[str, Any]] = {}
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        message_id = entry.get("message_id")
+        if message_id is not None:
+            entries[message_id] = entry
+    return entries
+
+
 class ChatSessionStore:
     """Persistence for the chat registry, session archive, and chat state."""
 
@@ -95,6 +113,12 @@ class ChatSessionStore:
     def _chat_dir(self, chat_id: str) -> Path:
         safe = chat_id.replace("/", "_")
         return self.sessions_root / safe
+
+    def telegram_message_registry_path(self, chat_id: str) -> Path:
+        return self._chat_dir(chat_id) / "telegram_messages.jsonl"
+
+    def load_telegram_message_registry(self, chat_id: str) -> dict[int, dict[str, Any]]:
+        return load_message_registry(self.telegram_message_registry_path(chat_id))
 
     def _archive_dir(self, chat_id: str, session_number: int) -> Path:
         return self._chat_dir(chat_id) / ".archive" / str(session_number)
