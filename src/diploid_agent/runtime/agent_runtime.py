@@ -300,7 +300,7 @@ class AgentRuntime(RuntimeAPI):
             self._memory_manager,
             self.skills,
             self._mcp_skills._active_skill_names,
-            context_window_fn=lambda model: self.engine.model_context_window(model),
+            context_window_fn=self._engine_context_window,
             lifecycle_log=self.lifecycle_log,
             chat_store=self._chat_store,
         )
@@ -409,6 +409,15 @@ class AgentRuntime(RuntimeAPI):
             on_service_restart=self._on_service_restart,
             lifecycle_log=self.lifecycle_log,
         )
+
+    def _engine_context_window(self, model: str) -> int | None:
+        """Context window for ``model`` from the *current* engine.
+
+        Resolved per call because ``runtime.engine`` is rebindable and some
+        test engines don't implement ``model_context_window``.
+        """
+        fn = getattr(self.engine, "model_context_window", None)
+        return fn(model) if fn is not None else None
 
     @property
     def client(self) -> AgentEngine:
