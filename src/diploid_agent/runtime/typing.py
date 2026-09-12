@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from diploid_agent.plan.models import Task
-    from diploid_agent.runtime.agent_runtime import AgentRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -16,16 +16,20 @@ logger = logging.getLogger(__name__)
 class RuntimeTyping:
     """Drive ``notifier.typing(...)`` while background tasks are running."""
 
-    def __init__(self, runtime: AgentRuntime) -> None:
-        self._runtime = runtime
+    def __init__(self, notifier_fn: Callable[[], Any]) -> None:
+        self._notifier_fn = notifier_fn
         self._counts: dict[str, int] = {}
         self._threads: dict[str, tuple[threading.Thread, threading.Event]] = {}
         self._lock = threading.Lock()
 
+    @property
+    def _notifier(self) -> Any:
+        return self._notifier_fn()
+
     def _heartbeat(self, chat_id: str, stop_event: threading.Event) -> None:
         while not stop_event.is_set():
             try:
-                self._runtime.notifier.typing(chat_id)
+                self._notifier.typing(chat_id)
             except Exception:
                 logger.exception("Typing heartbeat for %s failed", chat_id)
             if stop_event.wait(4.0):

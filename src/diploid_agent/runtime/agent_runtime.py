@@ -149,7 +149,7 @@ class AgentRuntime(RuntimeAPI):
         self.event_bus = EventBus()
         self.event_bus.start()
         self.plan_manager = PlanManager(plan_root)
-        self._typing = RuntimeTyping(self)
+        self._typing = RuntimeTyping(notifier_fn=lambda: self.notifier)
         self.task_engine = TaskEngine(
             self.plan_manager,
             self.event_bus,
