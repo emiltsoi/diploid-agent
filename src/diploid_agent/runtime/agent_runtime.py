@@ -74,6 +74,16 @@ class AgentRuntime(RuntimeAPI):
 
     def __init__(self, config: Config):
         self.config = config
+        self._init_core()
+        self._init_stores()
+        self._init_services()
+        self._init_plugins()
+        self._init_components()
+        self.notifier = self._create_notifier()
+
+    def _init_core(self) -> None:
+        """Identity, engine, lock, and shared mutable state."""
+        config = self.config
         self.sessions_root = Path(config.harness.sessions_root).expanduser()
         self.sessions_root.mkdir(parents=True, exist_ok=True)
         self.store_path = Path(config.harness.session_store_path).expanduser()
@@ -84,7 +94,18 @@ class AgentRuntime(RuntimeAPI):
         self._state = RuntimeState()
         self.instance_id = f"harness-{uuid.uuid4().hex[:12]}"
         self.instance_started_at = time.time()
+        # Shared dicts injected into components by reference.
         self._active_turns: dict[str, ActiveTurn] = {}
+        self._active_chat_skills: dict[str, set[str]] = {}
+        self._memory_managers: dict[str, MemoryManager] = {}
+        self._plan_conclusion_enqueued: set[str] = set()
+        self._router = ModelRouter(config)
+
+    def _init_stores(self) -> None:
+        """Persistence and early config: the config manager is built here so
+        runtime overrides load before plugins/services read ``config.harness``;
+        its service deps therefore arrive as late-bound ``*_fn`` callables."""
+        config = self.config
         self._config_manager = RuntimeConfigManager(
             config=config,
             lock=self._lock,
@@ -113,7 +134,6 @@ class AgentRuntime(RuntimeAPI):
             context_builder_fn=lambda: self.context_builder,
         )
         self._store = self._chat_store._store
-        self._active_chat_skills: dict[str, set[str]] = {}
         self._runtime_metrics = RuntimeMetrics(
             metrics=self.metrics,
             store=self._store,
@@ -125,8 +145,6 @@ class AgentRuntime(RuntimeAPI):
             context_builder_fn=lambda: self.context_builder,
             notifier_fn=lambda: self.notifier,
         )
-        self._memory_managers: dict[str, MemoryManager] = {}
-        self._router = ModelRouter(config)
 
         # Load external plugin search paths before PluginManager imports anything.
         for plugin_path in self.config.harness.plugin_paths:
@@ -140,9 +158,13 @@ class AgentRuntime(RuntimeAPI):
         wake_store_path = Path(config.harness.wake_store_path).expanduser()
         self.wake_queue = WakeQueue(wake_store_path)
 
+        self._config_manager._load_runtime_overrides()
+
+    def _init_services(self) -> None:
+        """Background services: event bus, plans/tasks, timers, outbox."""
+        config = self.config
         plan_root = Path(config.harness.plan.root).expanduser()
         plan_root.mkdir(parents=True, exist_ok=True)
-        self._config_manager._load_runtime_overrides()
         self.event_bus = EventBus()
         self.event_bus.start()
         self.plan_manager = PlanManager(plan_root)
@@ -163,8 +185,6 @@ class AgentRuntime(RuntimeAPI):
             self.event_bus,
             config=self.config.harness.timer,
         )
-
-        self._plan_conclusion_enqueued: set[str] = set()
 
         self._outbox = RuntimeOutbox(
             config=config,
@@ -189,7 +209,13 @@ class AgentRuntime(RuntimeAPI):
 
         self._auto_continue = RuntimeAutoContinue()
 
-        # Plugins can declare MCP servers and skills; add them before McpManager.
+    def _init_plugins(self) -> None:
+        """Plugin stack: PluginManager, restart supervisor, MCP/skill wiring.
+
+        Plugins can declare MCP servers and skills; they are added before
+        ``McpManager`` sees the config.
+        """
+        config = self.config
         plugins = list(self.config.harness.plugins)
         self._plugins = PluginManager(
             plugins=plugins,
@@ -261,6 +287,10 @@ class AgentRuntime(RuntimeAPI):
         )
         self._runtime_plugins._register_plugin_mcp_servers()
 
+    def _init_components(self) -> None:
+        """Turn-facing components: context builder, prompts, planning,
+        subagent, turn controller, actions, ingress, lifecycle."""
+        config = self.config
         # Prompt assembly is delegated to a dedicated builder.
         self.context_builder = ContextBuilder(
             self.config,
@@ -364,8 +394,6 @@ class AgentRuntime(RuntimeAPI):
             subagent=self._subagent,
             runtime_api=self,
         )
-
-        self.notifier = self._create_notifier()
 
     def _create_engine(self, metrics: MetricsCollector | None = None) -> AgentEngine:
         api_key = None
