@@ -34,6 +34,18 @@ from diploid_agent.transport.telegram.workers import TurnWorker
 
 logger = logging.getLogger("telegram_poll")
 
+# Commands whose whole handling is ``reply = self._harness_*(chat_id)`` followed
+# by a plain ``_send_text`` reply. ``_handle_command`` dispatches these through
+# this table before falling into the if/elif chain.
+_SIMPLE_COMMANDS: dict[str, str] = {
+    "/status": "_harness_status",
+    "/metrics": "_harness_metrics",
+    "/memory": "_harness_memory",
+    "/sessions": "_harness_sessions",
+    "/subagents": "_harness_subagent_status",
+    "/help": "_harness_help",
+}
+
 
 class TelegramCommandMixin:
     def _harness_reply(self, chat_id: int, message: str) -> dict[str, Any]:
@@ -572,13 +584,11 @@ class TelegramCommandMixin:
     def _handle_command(self, chat_input: ChatInput, command: str, arg: str) -> bool:
         """Dispatch a ``/`` command. Returns True when the input was a command."""
         chat_id = chat_input.chat_id
-        if command == "/status":
-            reply = self._harness_status(chat_id)
+        if command in _SIMPLE_COMMANDS:
+            reply = getattr(self, _SIMPLE_COMMANDS[command])(chat_id)
             self._send_text(chat_id, reply, reply_to_message_id=chat_input.message_id)
-        elif command == "/metrics":
-            reply = self._harness_metrics(chat_id)
-            self._send_text(chat_id, reply, reply_to_message_id=chat_input.message_id)
-        elif command == "/mcp":
+            return True
+        if command == "/mcp":
             if not arg or arg == "list":
                 reply = self._harness_mcp_list(chat_id)
             else:
@@ -634,9 +644,6 @@ class TelegramCommandMixin:
                     reply = self._harness_plugin_reload(chat_id, name)
                 else:
                     reply = "Usage: /plugin list | /plugin enable <name> | /plugin disable <name> | /plugin reload <name>"
-            self._send_text(chat_id, reply, reply_to_message_id=chat_input.message_id)
-        elif command == "/memory":
-            reply = self._harness_memory(chat_id)
             self._send_text(chat_id, reply, reply_to_message_id=chat_input.message_id)
         elif command == "/summarize":
             result = self._harness_summarize(chat_id)
@@ -697,9 +704,6 @@ class TelegramCommandMixin:
                 service = None
             result = self._harness_graceful_restart(chat_id, service)
             self._send_result(chat_id, result, reply_to_message_id=chat_input.message_id)
-        elif command == "/sessions":
-            reply = self._harness_sessions(chat_id)
-            self._send_text(chat_id, reply, reply_to_message_id=chat_input.message_id)
         elif command == "/resume":
             if not arg.isdigit():
                 reply = "Usage: /resume <number>"
@@ -714,9 +718,6 @@ class TelegramCommandMixin:
             else:
                 result = self._harness_branch(chat_id, int(arg))
                 self._send_result(chat_id, result, reply_to_message_id=chat_input.message_id)
-        elif command == "/subagents":
-            reply = self._harness_subagent_status(chat_id)
-            self._send_text(chat_id, reply, reply_to_message_id=chat_input.message_id)
         elif command == "/subagent":
             if not arg:
                 reply = "Usage: /subagent <prompt>"
@@ -724,12 +725,6 @@ class TelegramCommandMixin:
             else:
                 result = self._harness_subagent(chat_id, arg)
                 self._send_result(chat_id, result, reply_to_message_id=chat_input.message_id)
-        elif command == "/help":
-            self._send_text(
-                chat_id,
-                self._harness_help(chat_id),
-                reply_to_message_id=chat_input.message_id,
-            )
         elif command == "/stream_thoughts":
             if arg.lower() not in ("on", "off"):
                 self._send_text(
