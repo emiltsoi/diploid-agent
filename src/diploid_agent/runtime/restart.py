@@ -6,14 +6,16 @@ import logging
 import subprocess
 import threading
 import time
+from collections.abc import Callable
+from typing import Any
 
 from diploid_agent.plugins.contexts import ShutdownContext
-from diploid_agent.runtime.component import RuntimeComponent
+from diploid_agent.runtime.state import RuntimeState
 
 logger = logging.getLogger(__name__)
 
 
-class RuntimeRestart(RuntimeComponent):
+class RuntimeRestart:
     """Schedule and supervise graceful service restarts requested by the ACP child.
 
     The runtime handles two related but distinct lifecycle events: a *shutdown*
@@ -22,6 +24,35 @@ class RuntimeRestart(RuntimeComponent):
     have to carry the scheduling, watchdog, and drain logic directly.
     """
 
+    def __init__(
+        self,
+        *,
+        state: RuntimeState,
+        lock: Any,
+        wake_queue: Any,
+        incidents: Any,
+        plugins: Any,
+        chat_store: Any,
+        active_turns: dict[str, Any],
+        store: dict[str, Any],
+        instance_id: str,
+        instance_started_at: float,
+        suppress_auto_continue_fn: Callable[..., None],
+        unit_exists_fn: Callable[[str], bool],
+    ) -> None:
+        self._state = state
+        self._lock = lock
+        self._wake_queue = wake_queue
+        self._incidents = incidents
+        self._plugins = plugins
+        self._chat_store = chat_store
+        self._active_turns = active_turns
+        self._store = store
+        self._instance_id = instance_id
+        self._instance_started_at = instance_started_at
+        self._suppress_auto_continue = suppress_auto_continue_fn
+        self._unit_exists = unit_exists_fn
+
     def _on_service_restart(self, service: str, reason: str) -> None:
         """Handle a service restart request from the ACP subprocess.
 
@@ -29,18 +60,18 @@ class RuntimeRestart(RuntimeComponent):
         short-delayed ``systemd-run`` that restarts the service after the current
         turn has a chance to finish and the final reply is delivered.
         """
-        with self._runtime._lock:
+        with self._lock:
             now = time.time()
             if (
-                now - self._runtime._last_service_restart_at
-                < self._runtime._service_restart_cooldown_seconds
+                now - self._state.last_service_restart_at
+                < self._state.service_restart_cooldown_seconds
             ):
                 logger.warning(
                     "Ignoring repeat restart request for %s (cooldown active)",
                     service,
                 )
                 return
-            self._runtime._last_service_restart_at = now
+            self._state.last_service_restart_at = now
 
         logger.warning(
             "ACP subprocess requested restart of %s (reason: %s); scheduling graceful restart",
@@ -49,21 +80,21 @@ class RuntimeRestart(RuntimeComponent):
         )
 
         # Cancel any pending auto-continue wakes so the restart does not loop.
-        if self._runtime.wake_queue is not None:
+        if self._wake_queue is not None:
             try:
-                self._runtime.wake_queue.cancel(reason="auto_continue")
+                self._wake_queue.cancel(reason="auto_continue")
             except Exception as exc:
                 logger.warning(
                     "Failed to cancel auto-continue wakes before restart",
                     exc_info=exc,
                 )
 
-        self._runtime.suppress_auto_continue()
+        self._suppress_auto_continue()
 
         # Record the incident for observability.
-        if self._runtime._incidents is not None:
+        if self._incidents is not None:
             try:
-                self._runtime._incidents.record(
+                self._incidents.record(
                     plugin="self_management",
                     phase="graceful_restart",
                     error=f"ACP subprocess requested restart of {service}: {reason}",
@@ -93,13 +124,13 @@ class RuntimeRestart(RuntimeComponent):
         runs on a background thread so callers (the control-socket listener,
         HTTP/Telegram actions) never block.
         """
-        if not self._runtime._unit_exists(service):
+        if not self._unit_exists(service):
             logger.error(
                 "Refusing graceful restart: systemd user unit %s is not installed",
                 service,
             )
             return False
-        self._runtime._restart_draining.set()
+        self._state.restart_draining.set()
 
         def _drain_then_restart() -> None:
             try:
@@ -132,18 +163,18 @@ class RuntimeRestart(RuntimeComponent):
 
         def _reaper() -> None:
             time.sleep(due_in + margin)
-            if not self._runtime._started or not self._runtime._restart_draining.is_set():
+            if not self._state.started or not self._state.restart_draining.is_set():
                 # A real restart/shutdown is already underway.
                 return
-            self._runtime._restart_draining.clear()
-            self._runtime._last_service_restart_at = 0.0
+            self._state.restart_draining.clear()
+            self._state.last_service_restart_at = 0.0
             logger.error(
                 "Scheduled restart of %s never fired; cleared drain state so turns resume",
                 service,
             )
-            if self._runtime._incidents is not None:
+            if self._incidents is not None:
                 try:
-                    self._runtime._incidents.record(
+                    self._incidents.record(
                         plugin="self_management",
                         phase="graceful_restart",
                         error=f"Scheduled restart of {service} did not fire",
@@ -158,14 +189,14 @@ class RuntimeRestart(RuntimeComponent):
     def _wait_for_active_turns(self, timeout: float) -> bool:
         """Block until every ActiveTurn finishes or ``timeout`` expires.
 
-        Never holds ``self._runtime._lock`` while waiting: the turn's ``finally`` needs
+        Never holds ``self._lock`` while waiting: the turn's ``finally`` needs
         the same RLock to pop ``_active_turns`` and notify ``_condition``, so
         waiting under the lock would deadlock the drain.
         """
         deadline = time.monotonic() + timeout
         while True:
-            with self._runtime._lock:
-                turns = list(self._runtime._active_turns.values())
+            with self._lock:
+                turns = list(self._active_turns.values())
             if not turns:
                 return True
             remaining = deadline - time.monotonic()
@@ -177,19 +208,19 @@ class RuntimeRestart(RuntimeComponent):
     def _flush_plugins_for_restart(self) -> None:
         """Run shutdown/sleeping hooks on every chat so plugin state persists."""
         now = time.time()
-        for chat_id in list(self._runtime._store.keys()):
+        for chat_id in list(self._store.keys()):
             try:
-                with self._runtime._lock:
-                    record = self._runtime._active_record(chat_id)
-                self._runtime._plugins.on_shutdown(
+                with self._lock:
+                    record = self._chat_store._active_record(chat_id)
+                self._plugins.on_shutdown(
                     chat_id,
                     ShutdownContext(
                         chat_id=chat_id,
                         record=record,
                         reason="restart",
                         now=now,
-                        instance_id=self._runtime.instance_id,
-                        instance_started_at=self._runtime.instance_started_at,
+                        instance_id=self._instance_id,
+                        instance_started_at=self._instance_started_at,
                     ),
                 )
             except Exception:

@@ -103,7 +103,6 @@ class AgentRuntime(RuntimeAPI):
         self._state = RuntimeState()
         self.instance_id = f"harness-{uuid.uuid4().hex[:12]}"
         self.instance_started_at = time.time()
-        self._restart = RuntimeRestart(self)
         self._config_manager = RuntimeConfigManager(self)
         self._chat_store = ChatSessionStore(
             sessions_root=self.sessions_root,
@@ -220,6 +219,21 @@ class AgentRuntime(RuntimeAPI):
             self._plugins.disable_plugins(set(failed))
             self.config.harness.plugins = self._plugins._plugins
             self._config_manager._save_runtime_overrides()
+
+        self._restart = RuntimeRestart(
+            state=self._state,
+            lock=self._lock,
+            wake_queue=self.wake_queue,
+            incidents=self._incidents,
+            plugins=self._plugins,
+            chat_store=self._chat_store,
+            active_turns=self._active_turns,
+            store=self._store,
+            instance_id=self.instance_id,
+            instance_started_at=self.instance_started_at,
+            suppress_auto_continue_fn=lambda *a, **k: self.suppress_auto_continue(*a, **k),
+            unit_exists_fn=lambda s: self._unit_exists(s),
+        )
 
         # Ingress handlers for pluggable transport protocols (e.g. mesh).
         self._ingress_handlers: dict[str, Any] = {}
