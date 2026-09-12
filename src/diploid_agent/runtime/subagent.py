@@ -11,6 +11,7 @@ from diploid_agent.dispatch import Dispatch, DispatchStatus, DispatchStore
 from diploid_agent.locking import locked
 from diploid_agent.models import ChatResult, WakeEvent
 from diploid_agent.plan.models import Task, TaskStatus, TaskType
+from diploid_agent.text import human_duration
 
 logger = logging.getLogger(__name__)
 
@@ -240,18 +241,6 @@ class RuntimeSubagent:
             return first.lstrip("#").strip()[:max_chars]
         return text[:max_chars]
 
-    @staticmethod
-    def _human_duration(seconds: float) -> str:
-        """Return a compact, human-readable duration."""
-        seconds = max(0, int(seconds))
-        if seconds < 60:
-            return f"{seconds}s"
-        minutes, secs = divmod(seconds, 60)
-        if minutes < 60:
-            return f"{minutes}m {secs}s"
-        hours, minutes = divmod(minutes, 60)
-        return f"{hours}h {minutes}m {secs}s"
-
     def _subagent_terminal_state(
         self, task: Task
     ) -> tuple[DispatchStatus | None, str | None, bool, bool, bool]:
@@ -318,7 +307,7 @@ class RuntimeSubagent:
         if start is None or finished is None:
             duration = "unknown"
         else:
-            duration = self._human_duration(finished - start)
+            duration = human_duration(finished - start)
         reason = "timed out" if is_timeout else "was cancelled"
         text = f"Subagent {dispatch_id} {reason} after {duration}. Partial summary: {summary}"
         chat_result = ChatResult(

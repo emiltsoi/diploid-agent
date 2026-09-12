@@ -66,6 +66,7 @@ from diploid_agent.runtime.typing import RuntimeTyping
 from diploid_agent.runtime.wake_queue import WakeQueue
 from diploid_agent.skills import SkillManager
 from diploid_agent.task.engine import TaskEngine
+from diploid_agent.text import human_duration
 from diploid_agent.transport.base import RuntimeAPI
 from diploid_agent.turn import TurnController
 
@@ -1226,7 +1227,7 @@ class AgentRuntime(RuntimeAPI):
 
     @staticmethod
     def _human_duration(seconds: float) -> str:
-        return RuntimeSubagent._human_duration(seconds)
+        return human_duration(seconds)
 
     def _subagent_terminal_state(
         self, task: Task

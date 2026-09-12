@@ -7,19 +7,11 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from diploid_agent.models import ActiveTurn, ChatResult, WakeEvent
+from diploid_agent.text import elapsed_short
 
 if TYPE_CHECKING:
     from diploid_agent.runtime.agent_runtime import AgentRuntime
     from diploid_agent.turn.controller import TurnController
-
-
-def _format_elapsed_short(seconds: float) -> str:
-    """Return a short, human-readable elapsed time."""
-    total = int(seconds)
-    mins, secs = divmod(total, 60)
-    if mins > 0:
-        return f"{mins}m {secs}s"
-    return f"{secs}s"
 
 
 class _NotifyStream:
@@ -229,7 +221,7 @@ class _OutboxHeartbeat:
             # in the final message when it arrives.
             if no_visible_text:
                 elapsed = time.time() - self.active.start_time
-                elapsed_str = _format_elapsed_short(elapsed)
+                elapsed_str = elapsed_short(elapsed)
                 chat_result = ChatResult(
                     reply=f"⏳ Still thinking... ({elapsed_str})",
                     notice="Send /stop to cancel this turn if you don't want to wait.",

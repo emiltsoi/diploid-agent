@@ -35,6 +35,7 @@ from diploid_agent.plugins.contexts import (
     UserMessageContext,
 )
 from diploid_agent.skills import SkillManager
+from diploid_agent.text import compact_duration, human_duration
 
 logger = logging.getLogger(__name__)
 
@@ -227,21 +228,6 @@ class ContextBuilder:
         return 4.0
 
     @staticmethod
-    def _format_silent_duration(seconds: float) -> str:
-        """Return a short, human-readable sleep/duration string."""
-        seconds = max(seconds, 0)
-        if seconds < 60:
-            return f"{int(seconds)}s"
-        if seconds < 3600:
-            minutes, secs = divmod(int(seconds), 60)
-            return f"{minutes}m {secs}s" if secs else f"{minutes}m"
-        hours, rem = divmod(int(seconds), 3600)
-        minutes, secs = divmod(rem, 60)
-        if hours == 1:
-            return f"1h {minutes}m" if minutes else "1h"
-        return f"{hours}h {minutes}m" if minutes else f"{hours}h"
-
-    @staticmethod
     def _strip_recall_heading(text: str) -> str:
         """Remove the backend's default recall prefix so headings stay clean."""
         prefix = "Memory from previous turns:\n\n"
@@ -293,7 +279,7 @@ class ContextBuilder:
                 wake_ts = datetime.fromisoformat(ts).timestamp()
                 silent = wake_ts - record.updated_at
                 if silent > 1:
-                    notes.append(f"I was silent for {self._format_silent_duration(silent)}.")
+                    notes.append(f"I was silent for {compact_duration(silent)}.")
             except (ValueError, OSError, TypeError):
                 pass
 
@@ -610,7 +596,7 @@ class ContextBuilder:
         if last_side_effect:
             age = ""
             if partial.last_side_effect_at:
-                age = self._format_silent_duration(time.time() - partial.last_side_effect_at)
+                age = compact_duration(time.time() - partial.last_side_effect_at)
             if age:
                 parts.append(f"Last activity: {last_side_effect} ({age} ago)")
             else:
@@ -624,7 +610,7 @@ class ContextBuilder:
                 at = eff.get("at") or 0.0
                 age = ""
                 if at:
-                    age = self._format_silent_duration(time.time() - at)
+                    age = compact_duration(time.time() - at)
                 lines.append(f"- {title} ({status})" + (f" ({age} ago)" if age else ""))
             parts.append("Tool trace before interruption:\n" + "\n".join(lines))
 
@@ -1096,18 +1082,6 @@ class ContextBuilder:
             )
         return None
 
-    @staticmethod
-    def _human_duration(seconds: float) -> str:
-        """Return a compact, human-readable duration."""
-        seconds = max(0, int(seconds))
-        if seconds < 60:
-            return f"{seconds}s"
-        minutes, secs = divmod(seconds, 60)
-        if minutes < 60:
-            return f"{minutes}m {secs}s"
-        hours, minutes = divmod(minutes, 60)
-        return f"{hours}h {minutes}m {secs}s"
-
     def _subagent_result_path(self, chat_id: str, dispatch_id: str) -> Path:
         """Return the absolute path where a subagent full result should live."""
         safe = chat_id.replace("/", "_")
@@ -1135,7 +1109,7 @@ class ContextBuilder:
         status = self._dispatch_status_name(dispatch)
         start = dispatch.started_at or 0.0
         end = dispatch.finished_at or time.time()
-        duration = self._human_duration(max(0.0, end - start))
+        duration = human_duration(max(0.0, end - start))
         summary = dispatch.summary or "(no summary)"
         result_path = dispatch.full_result_path or str(
             self._subagent_result_path(dispatch.chat_id or "unknown", dispatch.id)
