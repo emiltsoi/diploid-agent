@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import functools
 import logging
 import time
 from typing import TYPE_CHECKING, Any
 
 from diploid_agent.engine import TurnRequest
+from diploid_agent.locking import locked
 from diploid_agent.models import ChatResult, SessionRecord
 from diploid_agent.plugins.contexts import (
     RehydrationReason,
@@ -21,17 +21,6 @@ if TYPE_CHECKING:
     from diploid_agent.turn.controller import TurnController
 
 logger = logging.getLogger(__name__)
-
-
-def _locked(method):
-    """Run a TurnSession method under the runtime RLock."""
-
-    @functools.wraps(method)
-    def wrapper(self, *args, **kwargs):
-        with self.runtime._lock:
-            return method(self, *args, **kwargs)
-
-    return wrapper
 
 
 class TurnSession:
@@ -250,7 +239,7 @@ class TurnSession:
             notice=notice,
         )
 
-    @_locked
+    @locked
     def switch_model(self, chat_id: str, model: str) -> ChatResult:
         """Switch the model for a chat by starting a fresh Devin session."""
         record = self.runtime._active_record(chat_id)
@@ -265,7 +254,7 @@ class TurnSession:
             old_model=current_model,
         )
 
-    @_locked
+    @locked
     def new_session(self, chat_id: str, model: str | None = None) -> ChatResult:
         """Start a fresh ACP session for a chat, clearing the active context."""
         record = self.runtime._active_record(chat_id)
@@ -281,7 +270,7 @@ class TurnSession:
             plugin_overrides=plugin_overrides,
         )
 
-    @_locked
+    @locked
     def resume_session(self, chat_id: str, session_number: int) -> ChatResult:
         """Resume an archived session as the active one."""
         state = self.runtime._chat_state(chat_id)
@@ -480,7 +469,7 @@ class TurnSession:
             f"Resumed session {session_number}.",
         )
 
-    @_locked
+    @locked
     def branch_session(self, chat_id: str, session_number: int) -> ChatResult:
         """Branch from an archived session, creating a new active session."""
         state = self.runtime._chat_state(chat_id)

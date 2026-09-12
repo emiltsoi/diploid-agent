@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import functools
 import logging
 import time
 from typing import TYPE_CHECKING, Any
 
 from diploid_agent.acp_client import AcpTransportError
+from diploid_agent.locking import locked
 from diploid_agent.models import ActiveTurn, ChatResult, WakeEvent
 from diploid_agent.turn.dispatch import TurnDispatch
 from diploid_agent.turn.process import TurnProcess
@@ -20,17 +20,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _locked(method):
-    """Run a TurnController method under the runtime RLock."""
-
-    @functools.wraps(method)
-    def wrapper(self, *args, **kwargs):
-        with self.runtime._lock:
-            return method(self, *args, **kwargs)
-
-    return wrapper
-
-
 class TurnController:
     """Per-chat turn and session orchestration."""
 
@@ -40,6 +29,10 @@ class TurnController:
         self.rehydrate = TurnRehydrate(self)
         self._dispatch = TurnDispatch(self)
         self._process = TurnProcess(self)
+
+    @property
+    def _lock(self) -> Any:
+        return self.runtime._lock
 
     def _has_pending_continuation(self, chat_id: str, wake_event: WakeEvent | None = None) -> bool:
         """Return True if another auto-continue wake is pending for this chat."""
@@ -61,7 +54,7 @@ class TurnController:
         """Send a message to the persona session and return the reply."""
         return self._process.process(*args, **kwargs)
 
-    @_locked
+    @locked
     def dispatch(
         self,
         chat_id: str,
@@ -178,7 +171,7 @@ class TurnController:
             notice="The agent will return a partial summary when it aborts.",
         )
 
-    @_locked
+    @locked
     def restart(self, chat_id: str) -> ChatResult:
         """Kill the ACP subprocess and start a fresh transport."""
         with self.runtime._lock:

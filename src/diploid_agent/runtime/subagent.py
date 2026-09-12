@@ -2,29 +2,17 @@
 
 from __future__ import annotations
 
-import functools
 import logging
 import time
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from diploid_agent.dispatch import Dispatch, DispatchStatus, DispatchStore
+from diploid_agent.locking import locked
 from diploid_agent.models import ChatResult, WakeEvent
 from diploid_agent.plan.models import Task, TaskStatus, TaskType
 
 logger = logging.getLogger(__name__)
-
-
-def _locked(method: Callable[..., Any]) -> Callable[..., Any]:
-    """Run a RuntimeSubagent method under the runtime RLock."""
-
-    @functools.wraps(method)
-    def wrapper(self: RuntimeSubagent, *args: Any, **kwargs: Any) -> Any:
-        with self._lock:
-            return method(self, *args, **kwargs)
-
-    return wrapper
 
 
 class RuntimeSubagent:
@@ -81,7 +69,7 @@ class RuntimeSubagent:
     def _runtime_plugins(self) -> Any:
         return self._runtime._runtime_plugins
 
-    @_locked
+    @locked
     def subagent_start(
         self,
         chat_id: str,

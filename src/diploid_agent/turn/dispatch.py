@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import functools
 import logging
 import time
 from typing import TYPE_CHECKING, Any
 
 from diploid_agent.dispatch import DispatchStatus
 from diploid_agent.engine import TurnRequest, TurnResult
+from diploid_agent.locking import locked
 from diploid_agent.models import ActiveTurn, ChatResult, PartialTurn, WakeEvent
 from diploid_agent.plugins.base import TurnInfo
 from diploid_agent.plugins.contexts import (
@@ -37,17 +37,6 @@ def _join_notices(*parts: str | None) -> str | None:
     """Concatenate non-empty notice strings with a blank line between them."""
     joined = "\n\n".join(p for p in parts if p)
     return joined or None
-
-
-def _locked(method):
-    """Run a TurnDispatch method under the runtime RLock."""
-
-    @functools.wraps(method)
-    def wrapper(self, *args, **kwargs):
-        with self._lock:
-            return method(self, *args, **kwargs)
-
-    return wrapper
 
 
 class TurnDispatch:
@@ -168,7 +157,7 @@ class TurnDispatch:
             return reply[active.thought_total :].lstrip("\n")
         return reply
 
-    @_locked
+    @locked
     def dispatch(
         self,
         chat_id: str,

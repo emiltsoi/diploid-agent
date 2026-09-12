@@ -2,27 +2,15 @@
 
 from __future__ import annotations
 
-import functools
 import json as _json
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable
 from typing import Any
 
 from diploid_agent.config import PluginConfig
+from diploid_agent.locking import locked
 from diploid_agent.models import ChatResult
-
-
-def _locked(method: Callable[..., Any]) -> Callable[..., Any]:
-    """Run a RuntimePlugins method under the runtime RLock."""
-
-    @functools.wraps(method)
-    def wrapper(self: RuntimePlugins, *args: Any, **kwargs: Any) -> Any:
-        with self._lock:
-            return method(self, *args, **kwargs)
-
-    return wrapper
 
 
 class RuntimePlugins:
@@ -121,19 +109,19 @@ class RuntimePlugins:
         reply = self._plugins.event(chat_id, plugin, event=event, raw_args=raw_args, **params)
         return ChatResult(reply=reply)
 
-    @_locked
+    @locked
     def plugin_list(self, chat_id: str) -> list[dict[str, Any]]:
         return self._plugins.list_plugin_status(chat_id)
 
-    @_locked
+    @locked
     def plugin_set_enabled(self, chat_id: str, name: str, enabled: bool) -> ChatResult:
         return ChatResult(reply=self._plugins.set_plugin_enabled(chat_id, name, enabled))
 
-    @_locked
+    @locked
     def plugin_reload(self, chat_id: str, name: str) -> ChatResult:
         return ChatResult(reply=self._plugins.reload_plugin(chat_id, name))
 
-    @_locked
+    @locked
     def plugin_add(self, config: PluginConfig) -> ChatResult:
         result = self._plugins.add_plugin(config)
         self.config.harness.plugins = self._plugins._plugins
@@ -142,7 +130,7 @@ class RuntimePlugins:
         self._runtime._save_runtime_overrides()
         return ChatResult(reply=result)
 
-    @_locked
+    @locked
     def plugin_remove(self, name: str) -> ChatResult:
         result = self._plugins.remove_plugin(name)
         self.config.harness.plugins = self._plugins._plugins
@@ -151,7 +139,7 @@ class RuntimePlugins:
         self._runtime._save_runtime_overrides()
         return ChatResult(reply=result)
 
-    @_locked
+    @locked
     def plugin_toggle(self, name: str, enabled: bool, chat_id: str | None = None) -> ChatResult:
         if chat_id is not None:
             result = self._plugins.set_plugin_enabled(chat_id, name, enabled)
@@ -163,7 +151,7 @@ class RuntimePlugins:
             self._runtime._save_runtime_overrides()
         return ChatResult(reply=result)
 
-    @_locked
+    @locked
     def plugin_rollback(self, steps: int = 1) -> ChatResult:
         result = self._plugins.rollback(steps)
         self.config.harness.plugins = self._plugins._plugins
@@ -172,7 +160,7 @@ class RuntimePlugins:
         self._runtime._save_runtime_overrides()
         return ChatResult(reply=result)
 
-    @_locked
+    @locked
     def plugin_sandbox(self, module: str, plugin: dict[str, Any] | None = None) -> dict[str, Any]:
         """Run a candidate plugin module through start/stop in a subprocess."""
         data: dict[str, Any] = {"name": "sandbox", "module": module, **(plugin or {})}
@@ -218,7 +206,7 @@ class RuntimePlugins:
             )
         return output
 
-    @_locked
+    @locked
     def plugin_create(
         self,
         name: str,
@@ -302,7 +290,7 @@ class RuntimePlugins:
     def incidents_for_plugin(self, name: str) -> list[dict[str, Any]]:
         return self._incidents.for_plugin(name)
 
-    @_locked
+    @locked
     def record_incident(
         self,
         plugin: str,

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import functools
 import json
 import logging
 import shutil
@@ -31,6 +30,7 @@ from diploid_agent.context import ContextBuilder
 from diploid_agent.dispatch import Dispatch, DispatchStatus, DispatchStore
 from diploid_agent.engine import AgentEngine, build_engine
 from diploid_agent.engine.router import ModelRouter
+from diploid_agent.locking import locked
 from diploid_agent.mcp import McpManager
 from diploid_agent.memory import MemoryManager
 from diploid_agent.metrics import MetricsCollector
@@ -84,17 +84,6 @@ _WAKE_RETRY_REPLIES = {
 _WAKE_DROP_REPLIES = {
     "Unknown or already completed wake event.",
 }
-
-
-def _locked(method):
-    """Run a AgentRuntime method under its RLock."""
-
-    @functools.wraps(method)
-    def wrapper(self: AgentRuntime, *args, **kwargs):
-        with self._lock:
-            return method(self, *args, **kwargs)
-
-    return wrapper
 
 
 class AgentRuntime(RuntimeAPI):
@@ -988,7 +977,7 @@ class AgentRuntime(RuntimeAPI):
         finally:
             self.instance_manager.release(chat_id)
 
-    @_locked
+    @locked
     def dispatch(
         self,
         chat_id: str,
@@ -1205,7 +1194,7 @@ class AgentRuntime(RuntimeAPI):
         """Manually mark a task as done and emit the completion event."""
         return self._actions.plan_task_done(plan_id, task_id, result=result, log=log)
 
-    @_locked
+    @locked
     def subagent_start(
         self,
         chat_id: str,
