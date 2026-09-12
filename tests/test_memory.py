@@ -197,6 +197,53 @@ def test_hindsight_spool_dead_letters_4xx(tmp_path: Path, monkeypatch) -> None:
     assert entries[0]["item"]["document_id"] == "d1"
 
 
+def test_hindsight_observation_scope_chat_injected(tmp_path: Path, monkeypatch) -> None:
+    backend = HindsightMemoryBackend(
+        base_url="http://127.0.0.1:1",
+        bank="test",
+        chat_id="chat-1",
+        sessions_root=tmp_path,
+        spool_path=tmp_path / "spool.jsonl",
+        observation_scope="chat",
+    )
+    monkeypatch.setattr(backend, "health", lambda: True)
+    posted: list[list[dict]] = []
+
+    class OKResp:
+        status_code = 200
+
+        def json(self) -> dict:
+            return {"success": True}
+
+    monkeypatch.setattr(backend._client, "post", lambda *a, **k: posted.append(k["json"]["items"]) or OKResp())
+    backend.retain([MemoryItem(content="fact")])
+
+    assert posted[0][0]["observation_scopes"] == [["chat:chat-1"]]
+
+
+def test_hindsight_observation_scope_unset_by_default(tmp_path: Path, monkeypatch) -> None:
+    backend = HindsightMemoryBackend(
+        base_url="http://127.0.0.1:1",
+        bank="test",
+        chat_id="chat-1",
+        sessions_root=tmp_path,
+        spool_path=tmp_path / "spool.jsonl",
+    )
+    monkeypatch.setattr(backend, "health", lambda: True)
+    posted: list[list[dict]] = []
+
+    class OKResp:
+        status_code = 200
+
+        def json(self) -> dict:
+            return {"success": True}
+
+    monkeypatch.setattr(backend._client, "post", lambda *a, **k: posted.append(k["json"]["items"]) or OKResp())
+    backend.retain([MemoryItem(content="fact")])
+
+    assert "observation_scopes" not in posted[0][0]
+
+
 def test_hindsight_retain_rejects_empty_content(tmp_path: Path, monkeypatch) -> None:
     spool_path = tmp_path / "spool.jsonl"
     backend = HindsightMemoryBackend(

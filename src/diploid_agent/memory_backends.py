@@ -271,6 +271,7 @@ class HindsightMemoryBackend(MemoryBackend):
         fallback_to_file: bool = True,
         spool_path: Path | None = None,
         max_chat_memory_chars: int = 8192,
+        observation_scope: str = "",
         metrics: Any | None = None,
     ):
         self.base_url = base_url.rstrip("/")
@@ -285,6 +286,12 @@ class HindsightMemoryBackend(MemoryBackend):
         self.fallback_to_file = fallback_to_file
         self.max_chat_memory_chars = max_chat_memory_chars
         self.metrics = metrics
+        if observation_scope == "chat":
+            self._observation_scopes: Any = [[f"chat:{chat_id}"]]
+        elif observation_scope == "shared":
+            self._observation_scopes = "shared"
+        else:
+            self._observation_scopes = None
 
         self._client = httpx.Client(
             base_url=self.base_url,
@@ -433,6 +440,10 @@ class HindsightMemoryBackend(MemoryBackend):
         """POST Hindsight payloads, handling 4xx, 5xx, and network errors."""
         if not payloads:
             return
+
+        if self._observation_scopes is not None:
+            for payload in payloads:
+                payload.setdefault("observation_scopes", self._observation_scopes)
 
         body = {"items": payloads, "async": self.async_writes}
         try:

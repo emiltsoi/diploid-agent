@@ -24,6 +24,8 @@ class RuntimePlugins:
         config_manager: Any,
         lock: Any,
         config: Any,
+        chat_store: Any,
+        lifecycle_log: Any,
         context_builder_fn: Any,
     ) -> None:
         self._plugins = plugins
@@ -31,6 +33,8 @@ class RuntimePlugins:
         self._config_manager = config_manager
         self._lock = lock
         self.config = config
+        self._chat_store = chat_store
+        self._lifecycle_log = lifecycle_log
         # Late-bound: ContextBuilder is constructed after this component.
         self._context_builder_fn = context_builder_fn
         self._plugin_mcp_server_names: set[str] = set()
@@ -38,6 +42,70 @@ class RuntimePlugins:
     @property
     def context_builder(self) -> Any:
         return self._context_builder_fn()
+
+    _BODY_STATE_FILES = ("chat_body_state.json", "body_state.json", "body.json")
+
+    def _snapshot_plugin_states(self, chat_id: str) -> None:
+        """Snapshot durable plugin and body state files before a transport restart."""
+        chat_dir = self._chat_store._chat_dir(chat_id)
+        snapshot_dir = chat_dir / ".snapshots"
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+        files = set(self._plugins.durable_files())
+        files.update(self._BODY_STATE_FILES)
+
+        for filename in files:
+            src = chat_dir / filename
+            if src.exists():
+                dst = snapshot_dir / f"{filename}.snapshot"
+                shutil.copy2(src, dst)
+
+    def _restore_plugin_states(self, chat_id: str) -> None:
+        """Restore durable plugin and body state files after a transport wake.
+
+        Snapshots are only a crash guard: they are taken on restart-first paths
+        but restore used to run on every wake, so a stale snapshot could silently
+        roll back newer live writes (observed in production:
+        ``chat_working_memory.json`` edits reverted by a ~5h-old snapshot).
+        ``copy2`` preserves the *source* mtime, so comparing snapshot vs live
+        mtime tells us which copy holds newer content:
+
+        - live file missing            -> restore (state would otherwise be lost)
+        - snapshot newer than live     -> restore (live lost post-snapshot writes)
+        - live as new or newer         -> keep live (it has post-snapshot writes)
+        - file not in the durable set  -> skip (frozen snapshot of a retired file)
+        """
+        chat_dir = self._chat_store._chat_dir(chat_id)
+        snapshot_dir = chat_dir / ".snapshots"
+        if not snapshot_dir.exists():
+            return
+
+        durable = set(self._plugins.durable_files())
+        durable.update(self._BODY_STATE_FILES)
+
+        applied: list[str] = []
+        skipped: dict[str, str] = {}
+        for snapshot in snapshot_dir.glob("*.snapshot"):
+            filename = snapshot.stem
+            if filename not in durable:
+                skipped[filename] = "not_durable"
+                continue
+            original = chat_dir / filename
+            if original.exists():
+                live_mtime = original.stat().st_mtime
+                snap_mtime = snapshot.stat().st_mtime
+                if live_mtime >= snap_mtime:
+                    skipped[filename] = "live_newer"
+                    continue
+            shutil.copy2(snapshot, original)
+            applied.append(filename)
+
+        if self._lifecycle_log is not None and (applied or skipped):
+            self._lifecycle_log.write(
+                "plugins.state_restore",
+                chat_id=chat_id,
+                detail={"applied": applied, "skipped": skipped},
+            )
 
     def _register_plugin_mcp_servers(self) -> None:
         """Append plugin MCP server configs to the harness config before McpManager sees it."""

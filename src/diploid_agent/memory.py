@@ -73,6 +73,7 @@ class MemoryManager:
                 fallback_to_file=hc.fallback_to_file,
                 spool_path=hc.spool_path,
                 max_chat_memory_chars=config.max_chat_memory_chars,
+                observation_scope=hc.observation_scope,
                 metrics=metrics,
             )
         else:

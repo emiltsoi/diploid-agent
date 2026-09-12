@@ -178,6 +178,14 @@ class HindsightConfig(BaseModel):
     async_writes: bool = True
     fallback_to_file: bool = True
     spool_path: Path | None = None
+    # Consolidation scope sent as each retain item's observation_scopes.
+    # "" = server default ("combined": every distinct tag set becomes its own
+    # scope, so volatile session:N tags fragment observations per session).
+    # "chat" = one scope per chat ([["chat:<chat_id>"]]) — dedups across
+    # sessions while keeping observations visible to the chat-scoped recall
+    # filter. "shared" = single global untagged scope (breaks tag-filtered
+    # recall of observations — only use with unfiltered recall).
+    observation_scope: str = ""
 
 
 class MemoryConfig(BaseModel):
