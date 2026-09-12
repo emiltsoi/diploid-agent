@@ -27,7 +27,8 @@ Store one or more memory items.
       "update_mode": "replace"
     }
   ],
-  "async": true
+  "async": true,
+  "observation_scopes": [["chat:chat-123"]]
 }
 ```
 
@@ -38,6 +39,11 @@ Store one or more memory items.
 - `document_id` (string, unique per document)
 - `tags` (list of strings)
 - `update_mode` (string, currently always `"replace"`)
+- `observation_scopes` (top-level request field, optional) — set only when
+  `hindsight.observation_scope` is configured. `"chat"` →
+  `[["chat:<chat_id>"]]` (consolidates across sessions within a chat while
+  staying visible to the `tags=["chat:<id>"]` recall filter); `"shared"` → the
+  string `"shared"`; unset → field omitted entirely.
 
 **Responses:**
 
@@ -105,4 +111,5 @@ harness:
       api_key: ${HINDSIGHT_API_KEY}
       async_writes: true
       fallback_to_file: true
+      observation_scope: chat    # "" | "chat" | "shared"; see observation_scopes above
 ```
