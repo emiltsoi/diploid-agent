@@ -21,7 +21,8 @@ import logging
 import os
 import random
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,68 @@ class AcpSessionOps:
 
     def __init__(self, client: Any) -> None:
         self._client = client
+
+    @contextmanager
+    def _report_outcome(
+        self,
+        event: str,
+        *,
+        method: str | Callable[[], str],
+        log_fields: dict[str, Any],
+        detail: dict[str, Any],
+    ) -> Iterator[dict[str, Any]]:
+        """Wrap a session RPC with acp_resume metrics + lifecycle logging.
+
+        Emits ``<event>.success``/``<event>.failure`` and the
+        ``acp_resume_total`` / ``acp_resume_latency_ms`` metrics, then
+        re-raises on failure. ``detail`` is mutated in place by the caller
+        during the block. The yielded ctx lets the caller add
+        ``failure_detail`` keys (logged only on failure, e.g. which phase
+        stalled) and extra ``log_fields`` (e.g. a session_id learned mid-call).
+        ``method`` may be a callable so a mid-flight method switch
+        (resume -> load) reports the method actually used.
+        """
+        ctx: dict[str, Any] = {"log_fields": dict(log_fields), "failure_detail": {}}
+        start = time.perf_counter()
+        try:
+            yield ctx
+        except (AcpError, TimeoutError) as exc:
+            duration_ms = round((time.perf_counter() - start) * 1000, 2)
+            used_method = method() if callable(method) else method
+            if self._client.metrics is not None:
+                self._client.metrics.inc(
+                    "acp_resume_total", result="failure", method=used_method
+                )
+                self._client.metrics.set(
+                    "acp_resume_latency_ms", duration_ms, result="failure"
+                )
+            if self._client._lifecycle_log is not None:
+                self._client._lifecycle_log.write(
+                    f"{event}.failure",
+                    **ctx["log_fields"],
+                    detail={
+                        **detail,
+                        "error": str(exc),
+                        **ctx["failure_detail"],
+                        "duration_ms": duration_ms,
+                    },
+                )
+            raise
+        duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        used_method = method() if callable(method) else method
+        if self._client.metrics is not None:
+            self._client.metrics.inc(
+                "acp_resume_total", result="success", method=used_method
+            )
+            self._client.metrics.set(
+                "acp_resume_latency_ms", duration_ms, result="success"
+            )
+        if self._client._lifecycle_log is not None:
+            self._client._lifecycle_log.write(
+                f"{event}.success",
+                **ctx["log_fields"],
+                detail={**detail, "duration_ms": duration_ms},
+            )
 
     async def _send_cancel_notification(self, session_id: str) -> None:
         """Send a fire-and-forget `session/cancel` notification."""
@@ -158,7 +221,6 @@ class AcpSessionOps:
             )
 
         resume_method = "resume"
-        start = time.perf_counter()
         deadline = time.monotonic() + timeout if timeout is not None and timeout > 0 else None
 
         def _remaining() -> float:
@@ -172,11 +234,15 @@ class AcpSessionOps:
         # Per-phase timing: when a resume eats its budget, the lifecycle log
         # should say which phase consumed it (resume/load call vs the mode and
         # model re-apply) rather than a single opaque duration.
-        phase = "resume"
-        resume_ms: float | None = None
-        config_ms: float | None = None
-        try:
+        detail: dict[str, Any] = {"cwd": str(use_cwd), "resume_ms": None, "config_ms": None}
+        with self._report_outcome(
+            "session.resume",
+            method=lambda: resume_method,
+            log_fields={"session_id": session_id, "model": use_model},
+            detail=detail,
+        ) as ctx:
             call_timeout = self._client._control.call_timeout()
+            ctx["failure_detail"]["phase"] = "resume"
             try:
                 phase_start = time.perf_counter()
                 await self._client._call_with_resume_retry(
@@ -185,14 +251,14 @@ class AcpSessionOps:
                     call_timeout,
                     budget=_remaining,
                 )
-                resume_ms = round((time.perf_counter() - phase_start) * 1000, 2)
+                detail["resume_ms"] = round((time.perf_counter() - phase_start) * 1000, 2)
             except AcpError as exc:
                 if self._client._is_method_not_found(exc):
                     logger.debug(
                         "session/resume not supported; trying session/load for %s", session_id
                     )
                     resume_method = "load"
-                    phase = "load"
+                    ctx["failure_detail"]["phase"] = "load"
                     phase_start = time.perf_counter()
                     await self._client._call_with_resume_retry(
                         "session/load",
@@ -200,53 +266,16 @@ class AcpSessionOps:
                         call_timeout,
                         budget=_remaining,
                     )
-                    resume_ms = round((time.perf_counter() - phase_start) * 1000, 2)
+                    detail["resume_ms"] = round((time.perf_counter() - phase_start) * 1000, 2)
                 else:
                     raise
-            phase = "config"
+            ctx["failure_detail"]["phase"] = "config"
             phase_start = time.perf_counter()
             await self._client._apply_session_config(
                 session_id, use_model, timeout=min(call_timeout, _remaining())
             )
-            config_ms = round((time.perf_counter() - phase_start) * 1000, 2)
-        except (AcpError, TimeoutError) as exc:
-            duration_ms = round((time.perf_counter() - start) * 1000, 2)
-            if self._client.metrics is not None:
-                self._client.metrics.inc("acp_resume_total", result="failure", method=resume_method)
-                self._client.metrics.set("acp_resume_latency_ms", duration_ms, result="failure")
-            if self._client._lifecycle_log is not None:
-                self._client._lifecycle_log.write(
-                    "session.resume.failure",
-                    session_id=session_id,
-                    model=use_model,
-                    detail={
-                        "cwd": str(use_cwd),
-                        "error": str(exc),
-                        "phase": phase,
-                        "duration_ms": duration_ms,
-                        "resume_ms": resume_ms,
-                        "config_ms": config_ms,
-                    },
-                )
-            raise
-
-        duration_ms = round((time.perf_counter() - start) * 1000, 2)
-        if self._client.metrics is not None:
-            self._client.metrics.inc("acp_resume_total", result="success", method=resume_method)
-            self._client.metrics.set("acp_resume_latency_ms", duration_ms, result="success")
-        if self._client._lifecycle_log is not None:
-            self._client._lifecycle_log.write(
-                "session.resume.success",
-                session_id=session_id,
-                model=use_model,
-                detail={
-                    "cwd": str(use_cwd),
-                    "method": resume_method,
-                    "duration_ms": duration_ms,
-                    "resume_ms": resume_ms,
-                    "config_ms": config_ms,
-                },
-            )
+            detail["config_ms"] = round((time.perf_counter() - phase_start) * 1000, 2)
+            detail["method"] = resume_method
         return session_id
 
     async def _session_load(
@@ -275,8 +304,13 @@ class AcpSessionOps:
                 detail={"cwd": str(use_cwd)},
             )
         call_timeout = self._client._control.call_timeout()
-        start = time.perf_counter()
-        try:
+        detail: dict[str, Any] = {"cwd": str(use_cwd)}
+        with self._report_outcome(
+            "session.load",
+            method="load",
+            log_fields={"session_id": session_id, "model": use_model},
+            detail=detail,
+        ):
             await self._client._call(
                 "session/load",
                 {
@@ -287,35 +321,6 @@ class AcpSessionOps:
                 timeout=call_timeout,
             )
             await self._client._apply_session_config(session_id, use_model, timeout=call_timeout)
-        except (AcpError, TimeoutError) as exc:
-            duration_ms = round((time.perf_counter() - start) * 1000, 2)
-            if self._client.metrics is not None:
-                self._client.metrics.inc("acp_resume_total", result="failure", method="load")
-                self._client.metrics.set("acp_resume_latency_ms", duration_ms, result="failure")
-            if self._client._lifecycle_log is not None:
-                self._client._lifecycle_log.write(
-                    "session.load.failure",
-                    session_id=session_id,
-                    model=use_model,
-                    detail={
-                        "cwd": str(use_cwd),
-                        "error": str(exc),
-                        "duration_ms": duration_ms,
-                    },
-                )
-            raise
-
-        duration_ms = round((time.perf_counter() - start) * 1000, 2)
-        if self._client.metrics is not None:
-            self._client.metrics.inc("acp_resume_total", result="success", method="load")
-            self._client.metrics.set("acp_resume_latency_ms", duration_ms, result="success")
-        if self._client._lifecycle_log is not None:
-            self._client._lifecycle_log.write(
-                "session.load.success",
-                session_id=session_id,
-                model=use_model,
-                detail={"cwd": str(use_cwd), "duration_ms": duration_ms},
-            )
         return session_id
 
     async def _apply_session_config(
@@ -375,44 +380,20 @@ class AcpSessionOps:
             )
 
         session_new_timeout = self._client._control.call_timeout()
-        start = time.perf_counter()
-        try:
+        detail: dict[str, Any] = {"cwd": str(use_cwd)}
+        with self._report_outcome(
+            "session.new",
+            method="new",
+            log_fields={"chat_id": chat_id, "model": use_model},
+            detail=detail,
+        ) as ctx:
             session = await self._client._call(
                 "session/new",
                 {"cwd": use_cwd, "mcpServers": []},
                 timeout=session_new_timeout,
             )
             session_id = session["sessionId"]
-        except (AcpError, TimeoutError) as exc:
-            duration_ms = round((time.perf_counter() - start) * 1000, 2)
-            if self._client.metrics is not None:
-                self._client.metrics.inc("acp_resume_total", result="failure", method="new")
-                self._client.metrics.set("acp_resume_latency_ms", duration_ms, result="failure")
-            if self._client._lifecycle_log is not None:
-                self._client._lifecycle_log.write(
-                    "session.new.failure",
-                    chat_id=chat_id,
-                    model=use_model,
-                    detail={
-                        "cwd": str(use_cwd),
-                        "error": str(exc),
-                        "duration_ms": duration_ms,
-                    },
-                )
-            raise
-
-        duration_ms = round((time.perf_counter() - start) * 1000, 2)
-        if self._client.metrics is not None:
-            self._client.metrics.inc("acp_resume_total", result="success", method="new")
-            self._client.metrics.set("acp_resume_latency_ms", duration_ms, result="success")
-        if self._client._lifecycle_log is not None:
-            self._client._lifecycle_log.write(
-                "session.new.success",
-                chat_id=chat_id,
-                session_id=session_id,
-                model=use_model,
-                detail={"cwd": str(use_cwd), "duration_ms": duration_ms},
-            )
+            ctx["log_fields"]["session_id"] = session_id
 
         if self._client._model_options is None:
             self._client._model_options = self._extract_model_options(session)
