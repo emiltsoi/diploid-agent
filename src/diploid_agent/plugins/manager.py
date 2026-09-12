@@ -4,22 +4,20 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
-import inspect
 import logging
 import re
 import sys
-import time
 import traceback
 from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 from diploid_agent.config import McpServerConfig, PluginConfig
-from diploid_agent.dispatch import Dispatch, DispatchStatus, DispatchStore
+from diploid_agent.dispatch import Dispatch, DispatchStore
 from diploid_agent.memory import MemoryItem
 from diploid_agent.models import ChatResult, PartialTurn, SessionRecord, WakeEvent
-from diploid_agent.plugins.base import SleepContext, StatePlugin, TurnInfo, WakeContext
+from diploid_agent.plugins.base import StatePlugin, TurnInfo
 from diploid_agent.plugins.broken import FailedPlugin
 from diploid_agent.plugins.contexts import (
     DispatchCompleteContext,
@@ -45,6 +43,7 @@ from diploid_agent.plugins.contexts import (
     TurnStartContext,
     UserMessageContext,
 )
+from diploid_agent.plugins.hooks import PluginHooks
 from diploid_agent.runtime.plugin_runtime import PluginRuntime
 
 logger = logging.getLogger(__name__)
@@ -71,6 +70,7 @@ class PluginManager:
         self._incident_store = incident_store
         self._instances: dict[str, dict[str, StatePlugin]] = defaultdict(dict)
         self._config_history: list[list[PluginConfig]] = []
+        self._hooks = PluginHooks(self)
         self.reconfigure(plugins)
 
     def _record_incident(
@@ -381,8 +381,7 @@ class PluginManager:
         return config.enabled
 
     def _plugins_for(self, chat_id: str) -> list[StatePlugin]:
-        enabled = [p for p in self._plugins if self._is_enabled_for(chat_id, p)]
-        return [self._get_or_create(chat_id, cfg) for cfg in enabled]
+        return self._hooks._plugins_for(chat_id)
 
     def set_plugin_enabled(self, chat_id: str, name: str, enabled: bool) -> str:
         record = self._runtime._active_record(chat_id) if self._runtime else None
@@ -491,12 +490,11 @@ class PluginManager:
                     errors.append({"name": cfg.name, "error": plugin.error})
         return errors
 
-    def _pending_dispatches(self, chat_id: str) -> list[dict[str, Any]]:
-        if self._dispatch_store is None:
-            return []
-        return [
-            d.to_dict() for d in self._dispatch_store.list_by_chat(chat_id, DispatchStatus.PENDING)
-        ]
+    # ---------------------------------------------------------------- hook dispatch
+    #
+    # Hook fan-out and consult dispatch live in ``PluginHooks``
+    # (plugins/hooks.py); the methods below are thin delegates kept for
+    # call-site compatibility.
 
     def on_waking(
         self,
@@ -508,20 +506,14 @@ class PluginManager:
         other_instance_running: bool = False,
         rehydration_reason: str | None = None,
     ) -> None:
-        previous_turn_at = record.updated_at if record is not None else None
-        context = WakeContext(
-            chat_id=chat_id,
-            record=record,
-            now=now,
-            instance_id=self._instance_id,
-            instance_started_at=self._instance_started_at,
-            previous_turn_at=previous_turn_at,
-            pending_dispatches=self._pending_dispatches(chat_id),
+        self._hooks.on_waking(
+            chat_id,
+            record,
+            now,
             wake_event=wake_event,
             other_instance_running=other_instance_running,
             rehydration_reason=rehydration_reason,
         )
-        self._notify_hook(chat_id, "on_waking", context)
 
     def fill_prompt_slots(
         self,
@@ -534,89 +526,28 @@ class PluginManager:
         force_slots: set[str] | None = None,
         compact: bool = False,
     ) -> dict[str, list[str]]:
-        force_slots = force_slots or set()
-        for plugin in self._plugins_for(chat_id):
-            slot = plugin.prompt_slot
-            force = slot in force_slots
-            if plugin.first_prompt_only and not is_first and not rehydrated and not force:
-                continue
-
-            key = (plugin.name, slot)
-
-            if not is_first and not force and last_blocks is not None:
-                changed = plugin.prompt_block_changed(last_prompt_time)
-                if changed is not None and not changed:
-                    continue
-
-            max_chars = plugin.max_prompt_chars
-            if compact and max_chars != 0:
-                max_chars = (
-                    min(max_chars, self._runtime.config.harness.compact_plugin_max_chars)
-                    if self._runtime is not None
-                    else min(max_chars, 200)
-                )
-
-            block = self._plugin_prompt_block(plugin, max_chars, compact=compact)
-            if block is None:
-                continue
-
-            if not is_first and last_blocks is not None:
-                if not force and block == last_blocks.get(key):
-                    continue
-                last_blocks[key] = block
-            elif is_first and last_blocks is not None:
-                last_blocks[key] = block
-
-            if block:
-                slots.setdefault(slot, []).append(block)
-        return slots
-
-    def _plugin_accepts_compact(self, plugin: StatePlugin) -> bool:
-        """Return True if the plugin's prompt_block accepts a `compact` keyword."""
-        try:
-            sig = inspect.signature(plugin.prompt_block)
-        except (ValueError, TypeError):
-            return False
-        for name, param in sig.parameters.items():
-            if name == "compact":
-                return True
-            if param.kind == inspect.Parameter.VAR_KEYWORD:
-                return True
-        return False
-
-    def _plugin_prompt_block(
-        self, plugin: StatePlugin, max_chars: int | None, compact: bool
-    ) -> str | None:
-        """Call a plugin's prompt_block, passing `compact` only if it supports it."""
-        try:
-            if compact and self._plugin_accepts_compact(plugin):
-                block = plugin.prompt_block(max_chars, compact=True)
-            else:
-                block = plugin.prompt_block(max_chars)
-        except Exception:
-            logger.exception("prompt_block failed for plugin %s", plugin.name)
-            return None
-        return block
+        return self._hooks.fill_prompt_slots(
+            chat_id,
+            slots,
+            is_first,
+            rehydrated=rehydrated,
+            last_blocks=last_blocks,
+            last_prompt_time=last_prompt_time,
+            force_slots=force_slots,
+            compact=compact,
+        )
 
     def mcp_server_configs(self) -> list[McpServerConfig]:
-        servers = []
-        for cfg in self._plugins:
-            if cfg.enabled and cfg.mcp_server and not cfg.mcp_server.disabled:
-                servers.append(cfg.mcp_server)
-        return servers
+        return self._hooks.mcp_server_configs()
 
     def default_skill_names(self) -> list[str]:
-        return [p.skill for p in self._plugins if p.enabled and p.skill]
+        return self._hooks.default_skill_names()
 
     def default_mcp_names(self) -> list[str]:
-        return [s.name for s in self.mcp_server_configs()]
+        return self._hooks.default_mcp_names()
 
     def durable_files(self) -> list[str]:
-        files = []
-        for cfg in self._plugins:
-            if cfg.state_file:
-                files.append(cfg.state_file)
-        return files
+        return self._hooks.durable_files()
 
     def event(
         self,
@@ -627,113 +558,28 @@ class PluginManager:
         raw_args: str | None = None,
         **params: Any,
     ) -> str:
-        for cfg in self._plugins:
-            if cfg.name == plugin_name:
-                plugin = self._get_or_create(chat_id, cfg)
-                result = plugin.event(event=event, raw_args=raw_args, **params)
-                self.on_event(
-                    chat_id,
-                    event or "unknown",
-                    {"plugin": plugin_name, **params},
-                )
-                return result
-        raise KeyError(f"Unknown plugin: {plugin_name}")
+        return self._hooks.event(chat_id, plugin_name, event=event, raw_args=raw_args, **params)
 
     def memory_items(self, chat_id: str, since: float) -> list[MemoryItem]:
-        items: list[MemoryItem] = []
-        for plugin in self._plugins_for(chat_id):
-            try:
-                items.extend(plugin.memory_items(since))
-            except Exception:
-                logger.exception("memory_items failed for plugin %s", plugin.name)
-        return items
+        return self._hooks.memory_items(chat_id, since)
 
     def on_turn_end(self, chat_id: str, turn: TurnInfo) -> None:
-        self._notify_hook(chat_id, "on_turn_end", turn)
+        self._hooks.on_turn_end(chat_id, turn)
 
     def on_sleeping(self, chat_id: str, record: SessionRecord | None, reason: str) -> None:
-        context = SleepContext(
-            chat_id=chat_id,
-            record=record,
-            reason=reason,
-            now=time.time(),
-            instance_id=self._instance_id,
-        )
-        self._notify_hook(chat_id, "on_sleeping", context)
+        self._hooks.on_sleeping(chat_id, record, reason)
 
     def on_shutdown(self, chat_id: str, context: ShutdownContext) -> None:
-        self._notify_hook(chat_id, "on_shutdown", context)
-        self._notify_hook(
-            chat_id,
-            "on_sleeping",
-            SleepContext(
-                chat_id=chat_id,
-                record=context.record,
-                reason="shutdown",
-                now=context.now,
-                instance_id=context.instance_id,
-            ),
-        )
+        self._hooks.on_shutdown(chat_id, context)
 
-    # ---------------------------------------------------------------- hook dispatcher
-
-    T = TypeVar("T")
-
-    def _notify_hook(self, chat_id: str, hook_name: str, *args: Any) -> None:
-        """Void fan-out: call ``hook_name`` on every plugin; log and continue on error."""
-        for plugin in self._plugins_for(chat_id):
-            method = getattr(plugin, hook_name, None)
-            if method is None:
-                continue
-            try:
-                method(*args)
-            except Exception:
-                logger.exception("%s failed for plugin %s", hook_name, plugin.name)
-
-    def _apply_hook(
-        self,
-        chat_id: str,
-        hook_name: str,
-        context: T,
-        can_short_circuit: bool = False,
-        prepare: Callable[[T], None] | None = None,
-    ) -> T | ChatResult | None:
-        """Run a hook across all plugins for this chat.
-
-        Returns the final context, or ChatResult if a gate hook short-circuits.
-        ``prepare`` runs on the current context before each plugin call.
-        """
-        for plugin in self._plugins_for(chat_id):
-            method = getattr(plugin, hook_name, None)
-            if method is None:
-                continue
-            if prepare is not None:
-                prepare(context)
-            try:
-                result = method(context)
-            except Exception:
-                logger.exception("%s failed for plugin %s", hook_name, plugin.name)
-                continue
-            if result is None:
-                continue
-            if isinstance(result, ChatResult):
-                if not can_short_circuit:
-                    logger.error(
-                        "Plugin %s returned ChatResult from non-gate hook %s; ignoring",
-                        plugin.name,
-                        hook_name,
-                    )
-                    continue
-                return result
-            context = result
-        return context
+    # ---------------------------------------------------------------- turn hooks
 
     def before_turn(
         self,
         chat_id: str,
         context: TurnStartContext,
     ) -> TurnStartContext | ChatResult | None:
-        return self._apply_hook(chat_id, "before_turn", context, can_short_circuit=True)
+        return self._hooks.before_turn(chat_id, context)
 
     def before_format_user_message(
         self,
@@ -741,71 +587,56 @@ class PluginManager:
         context: UserMessageContext,
         formatter: Callable[[UserMessageContext], str],
     ) -> UserMessageContext:
-        """Consult hook: plugins can modify the raw/formatted user message."""
-
-        def _ensure_formatted(ctx: UserMessageContext) -> None:
-            if ctx.formatted_message is None:
-                ctx.formatted_message = formatter(ctx)
-
-        result = self._apply_hook(
-            chat_id,
-            "before_format_user_message",
-            context,
-            prepare=_ensure_formatted,
-        )
-        if result is None or isinstance(result, ChatResult):
-            result = context
-        _ensure_formatted(result)
-        return result
+        return self._hooks.before_format_user_message(chat_id, context, formatter)
 
     def before_build_prompt(
         self,
         chat_id: str,
         context: PromptBuildContext,
     ) -> PromptBuildContext:
-        return self._apply_consult_hook(chat_id, "before_build_prompt", context)
+        return self._hooks.before_build_prompt(chat_id, context)
 
     def after_prompt_built(
         self,
         chat_id: str,
         context: PromptContext,
     ) -> PromptContext:
-        return self._apply_consult_hook(chat_id, "after_prompt_built", context)
+        return self._hooks.after_prompt_built(chat_id, context)
 
     def before_engine_call(
         self,
         chat_id: str,
         context: EngineCallContext,
     ) -> EngineCallContext | ChatResult | None:
-        return self._apply_hook(chat_id, "before_engine_call", context, can_short_circuit=True)
+        return self._hooks.before_engine_call(chat_id, context)
 
     def after_engine_call(
         self,
         chat_id: str,
         context: EngineResultContext,
     ) -> EngineResultContext:
-        return self._apply_consult_hook(chat_id, "after_engine_call", context)
+        return self._hooks.after_engine_call(chat_id, context)
 
     def before_record_turn(
         self,
         chat_id: str,
         context: RecordTurnContext,
     ) -> RecordTurnContext:
-        return self._apply_consult_hook(chat_id, "before_record_turn", context)
+        return self._hooks.before_record_turn(chat_id, context)
 
     def after_turn(self, chat_id: str, turn: TurnInfo) -> None:
-        self._notify_hook(chat_id, "after_turn", turn)
+        self._hooks.after_turn(chat_id, turn)
 
     def on_turn_error(self, chat_id: str, context: TurnErrorContext) -> None:
-        self._notify_hook(chat_id, "on_turn_error", context)
+        self._hooks.on_turn_error(chat_id, context)
 
     # ---------------------------------------------------------------- partial / dispatch / event / idle
 
     def on_partial(self, chat_id: str, partial: PartialTurn) -> None:
-        self._notify_hook(chat_id, "on_partial", partial)
+        self._hooks.on_partial(chat_id, partial)
 
     def on_dispatch(self, chat_id: str, dispatch: Dispatch) -> None:
-        self._notify_hook(chat_id, "on_dispatch", chat_id, dispatch)
+        self._hooks.on_dispatch(chat_id, dispatch)
 
     def on_event(
         self,
@@ -813,10 +644,10 @@ class PluginManager:
         event: str,
         payload: dict[str, Any],
     ) -> None:
-        self._notify_hook(chat_id, "on_event", event, payload)
+        self._hooks.on_event(chat_id, event, payload)
 
     def on_idle(self, chat_id: str, context: IdleContext) -> None:
-        self._notify_hook(chat_id, "on_idle", context)
+        self._hooks.on_idle(chat_id, context)
 
     # ---------------------------------------------------------------- session hooks
 
@@ -825,28 +656,28 @@ class PluginManager:
         chat_id: str,
         context: SessionArchiveContext,
     ) -> SessionArchiveContext:
-        return self._apply_consult_hook(chat_id, "before_session_archive", context)
+        return self._hooks.before_session_archive(chat_id, context)
 
     def before_session_clear(
         self,
         chat_id: str,
         context: SessionClearContext,
     ) -> SessionClearContext:
-        return self._apply_consult_hook(chat_id, "before_session_clear", context)
+        return self._hooks.before_session_clear(chat_id, context)
 
     def before_session_start(
         self,
         chat_id: str,
         context: SessionStartContext,
     ) -> SessionStartContext | ChatResult | None:
-        return self._apply_hook(chat_id, "before_session_start", context, can_short_circuit=True)
+        return self._hooks.before_session_start(chat_id, context)
 
     def after_session_active(
         self,
         chat_id: str,
         context: SessionActiveContext,
     ) -> SessionActiveContext:
-        return self._apply_consult_hook(chat_id, "after_session_active", context)
+        return self._hooks.after_session_active(chat_id, context)
 
     # ---------------------------------------------------------------- dispatch hooks
 
@@ -855,28 +686,28 @@ class PluginManager:
         chat_id: str,
         context: DispatchCreateContext,
     ) -> DispatchCreateContext:
-        return self._apply_consult_hook(chat_id, "before_dispatch", context)
+        return self._hooks.before_dispatch(chat_id, context)
 
     def after_dispatch(
         self,
         chat_id: str,
         context: DispatchCreateContext,
     ) -> None:
-        self._notify_hook(chat_id, "after_dispatch", context)
+        self._hooks.after_dispatch(chat_id, context)
 
     def before_dispatch_continue(
         self,
         chat_id: str,
         context: DispatchContinueContext,
     ) -> DispatchContinueContext:
-        return self._apply_consult_hook(chat_id, "before_dispatch_continue", context)
+        return self._hooks.before_dispatch_continue(chat_id, context)
 
     def after_dispatch_continue(
         self,
         chat_id: str,
         context: DispatchCompleteContext,
     ) -> None:
-        self._notify_hook(chat_id, "after_dispatch_continue", context)
+        self._hooks.after_dispatch_continue(chat_id, context)
 
     # ---------------------------------------------------------------- memory hooks
 
@@ -885,72 +716,60 @@ class PluginManager:
         chat_id: str,
         context: MemoryTransitionContext,
     ) -> MemoryTransitionContext:
-        return self._apply_consult_hook(chat_id, "on_chat_memory_transition", context)
+        return self._hooks.on_chat_memory_transition(chat_id, context)
 
     def on_persona_memory_transition(
         self,
         chat_id: str,
         context: MemoryTransitionContext,
     ) -> MemoryTransitionContext:
-        return self._apply_consult_hook(chat_id, "on_persona_memory_transition", context)
+        return self._hooks.on_persona_memory_transition(chat_id, context)
 
     # ---------------------------------------------------------------- wake / first prompt
 
     def after_first_prompt_built(self, chat_id: str, context: PromptContext) -> PromptContext:
-        return self._apply_consult_hook(chat_id, "after_first_prompt_built", context)
+        return self._hooks.after_first_prompt_built(chat_id, context)
 
     # ---------------------------------------------------------------- skill / mcp command hooks
-
-    def _apply_consult_hook(
-        self,
-        chat_id: str,
-        hook_name: str,
-        context: T,
-    ) -> T:
-        """Consult hook: plugins may mutate/replace context; ChatResult is ignored."""
-        result = self._apply_hook(chat_id, hook_name, context, can_short_circuit=False)
-        if result is None or isinstance(result, ChatResult):
-            return context
-        return result
 
     def before_skill_enabled(
         self, chat_id: str, context: SkillCommandContext
     ) -> SkillCommandContext:
-        return self._apply_consult_hook(chat_id, "before_skill_enabled", context)
+        return self._hooks.before_skill_enabled(chat_id, context)
 
     def after_skill_enabled(self, chat_id: str, context: SkillCommandContext) -> None:
-        self._notify_hook(chat_id, "after_skill_enabled", context)
+        self._hooks.after_skill_enabled(chat_id, context)
 
     def before_skill_disabled(
         self, chat_id: str, context: SkillCommandContext
     ) -> SkillCommandContext:
-        return self._apply_consult_hook(chat_id, "before_skill_disabled", context)
+        return self._hooks.before_skill_disabled(chat_id, context)
 
     def after_skill_disabled(self, chat_id: str, context: SkillCommandContext) -> None:
-        self._notify_hook(chat_id, "after_skill_disabled", context)
+        self._hooks.after_skill_disabled(chat_id, context)
 
     def before_mcp_enabled(self, chat_id: str, context: McpCommandContext) -> McpCommandContext:
-        return self._apply_consult_hook(chat_id, "before_mcp_enabled", context)
+        return self._hooks.before_mcp_enabled(chat_id, context)
 
     def after_mcp_enabled(self, chat_id: str, context: McpCommandContext) -> None:
-        self._notify_hook(chat_id, "after_mcp_enabled", context)
+        self._hooks.after_mcp_enabled(chat_id, context)
 
     def before_mcp_disabled(self, chat_id: str, context: McpCommandContext) -> McpCommandContext:
-        return self._apply_consult_hook(chat_id, "before_mcp_disabled", context)
+        return self._hooks.before_mcp_disabled(chat_id, context)
 
     def after_mcp_disabled(self, chat_id: str, context: McpCommandContext) -> None:
-        self._notify_hook(chat_id, "after_mcp_disabled", context)
+        self._hooks.after_mcp_disabled(chat_id, context)
 
     # ---------------------------------------------------------------- retain / promote hooks
 
     def before_retain(self, chat_id: str, context: RetainContext) -> RetainContext:
-        return self._apply_consult_hook(chat_id, "before_retain", context)
+        return self._hooks.before_retain(chat_id, context)
 
     def after_retain(self, chat_id: str, context: RetainContext) -> None:
-        self._notify_hook(chat_id, "after_retain", context)
+        self._hooks.after_retain(chat_id, context)
 
     def before_promote(self, chat_id: str, context: PromoteContext) -> PromoteContext:
-        return self._apply_consult_hook(chat_id, "before_promote", context)
+        return self._hooks.before_promote(chat_id, context)
 
     def after_promote(self, chat_id: str, context: PromoteContext) -> None:
-        self._notify_hook(chat_id, "after_promote", context)
+        self._hooks.after_promote(chat_id, context)
