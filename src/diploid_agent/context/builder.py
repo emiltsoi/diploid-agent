@@ -17,6 +17,8 @@ from typing import Any, ClassVar
 
 from diploid_agent.acp_client.lifecycle import AcpLifecycleLog
 from diploid_agent.config import Config
+from diploid_agent.context.reply_quote import ReplyQuoteFormatter
+from diploid_agent.context.token_estimator import TokenEstimator
 from diploid_agent.dispatch import Dispatch, DispatchStatus
 from diploid_agent.memory import MemoryManager, RecallResult
 from diploid_agent.models import PartialTurn, SessionRecord, WakeEvent
@@ -31,9 +33,7 @@ from diploid_agent.plugins.contexts import (
     PromptBuildContext,
     PromptContext,
     RehydrationReason,
-    UserMessageContext,
 )
-from diploid_agent.runtime.store import load_message_registry
 from diploid_agent.skills import SkillManager
 from diploid_agent.text import compact_duration, human_duration
 
@@ -42,17 +42,6 @@ logger = logging.getLogger(__name__)
 
 class ContextBuilder:
     """Assemble first-turn and follow-up prompts from persona, memory, and slots."""
-
-    # Hand-maintained characters-per-token table for known models.  If the model
-    # is not listed, the conservative 4:1 fallback is used.
-    _CHARS_PER_TOKEN: ClassVar[dict[str, float]] = {
-        "swe-1-7": 3.5,
-        "claude-sonnet-4-20250514": 4.0,
-        "claude-sonnet-4": 4.0,
-        "claude-opus-4": 4.0,
-        "gpt-4o": 4.0,
-        "gpt-4o-mini": 4.0,
-    }
 
     # Plugin slots that are cheap and identity-defining; they are forced into
     # the prompt whenever the ACP session is under context pressure.
@@ -159,6 +148,8 @@ class ContextBuilder:
         self.context_window_fn = context_window_fn
         self.lifecycle_log = lifecycle_log
         self._chat_store = chat_store
+        self._token_estimator = TokenEstimator(config, context_window_fn)
+        self._reply_quote = ReplyQuoteFormatter(config, plugin_manager, chat_store)
         # Shared per-chat metrics store.  The harness sets this to its own dict.
         self.metrics: dict[str, dict[str, Any]] = {}
         # Per-chat cache of the last injected plugin blocks and file mtimes. This
@@ -196,38 +187,7 @@ class ContextBuilder:
         self._last_file_mtimes[chat_id][str(path)] = path.stat().st_mtime
 
     def _chars_per_token(self, model: str | None, record: SessionRecord | None = None) -> float:
-        """Return a character-to-token ratio for `model`.
-
-        Prefer live calibration from the last turn's prompt length and token
-        count, then fall back to the hand-maintained table, then 4:1.
-        """
-        if not model:
-            return 4.0
-
-        if self.config.harness.proactive_calibration_enabled and record is not None:
-            min_chars = self.config.harness.proactive_calibration_min_prompt_chars
-            # The first turn of a session is the cleanest sample: the prompt we
-            # sent dominates input_tokens before session history accumulates.
-            # Later turns are only trusted when the ratio still lands in range —
-            # on established sessions `input_tokens` includes the accumulated
-            # session history, so prompt_chars / input_tokens collapses toward
-            # zero and the next-prompt estimate explodes.
-            for metrics in (record.first_turn_metrics, record.last_turn_metrics):
-                if not metrics:
-                    continue
-                prompt_chars = metrics.get("prompt_chars") or 0
-                input_tokens = metrics.get("input_tokens") or 0
-                if prompt_chars < min_chars or input_tokens <= 0:
-                    continue
-                ratio = prompt_chars / input_tokens
-                if 1.0 <= ratio <= 10.0:
-                    return ratio
-
-        model_lower = model.lower()
-        for name, ratio in self._CHARS_PER_TOKEN.items():
-            if name in model_lower:
-                return ratio
-        return 4.0
+        return self._token_estimator.chars_per_token(model, record)
 
     @staticmethod
     def _strip_recall_heading(text: str) -> str:
@@ -323,35 +283,10 @@ class ContextBuilder:
         return "## System notice\n\n" + "\n\n".join(parts)
 
     def _context_window_for(self, model: str | None) -> int | None:
-        """Resolve the context window for a model, if known."""
-        if self.context_window_fn is not None and model:
-            return self.context_window_fn(model)
-        return self.config.engine.context_window
+        return self._token_estimator.context_window_for(model)
 
     def _context_pressure(self, record: SessionRecord | None) -> dict[str, Any]:
-        """Return context-window pressure metrics for the current record.
-
-        Uses the cumulative token count as the primary pressure signal and the
-        last turn's input tokens as the secondary signal.  When the context
-        window size is unknown, both percentages are zero.
-        """
-        context_window = self._context_window_for(record.model if record else None)
-        cumulative = record.cumulative_metrics if record else {}
-        last_turn = record.last_turn_metrics if record else {}
-
-        result: dict[str, Any] = {
-            "context_window": context_window,
-            "cumulative_ratio": 0.0,
-            "input_ratio": 0.0,
-        }
-        if not context_window:
-            return result
-
-        total = cumulative.get("total_tokens", 0) or 0
-        input_tokens = last_turn.get("input_tokens", 0) or 0
-        result["cumulative_ratio"] = round(total / context_window, 4)
-        result["input_ratio"] = round(input_tokens / context_window, 4)
-        return result
+        return self._token_estimator.context_pressure(record)
 
     def _estimate_next_prompt_tokens(
         self,
@@ -359,42 +294,7 @@ class ContextBuilder:
         record: SessionRecord,
         formatted_message: str,
     ) -> dict[str, int]:
-        """Estimate token footprint of the next prompt for proactive sizing.
-
-        Uses the last turn's actual token usage as the primary signal and a
-        hand-maintained characters-per-token table for the model.  Returns a
-        dict with the components so callers can log them.
-        """
-        last_turn = record.last_turn_metrics or {}
-        last_input = last_turn.get("input_tokens", 0) or 0
-        last_output = last_turn.get("output_tokens", 0) or 0
-        last_total = last_input + last_output
-
-        chars_per_token = self._chars_per_token(record.model, record)
-
-        memory_cfg = self.config.harness.memory
-        short_term_estimate = int((memory_cfg.max_short_term_chars or 0) / chars_per_token)
-
-        # Cheap fresh-soul budget: identity anchor + cheap soul slots.
-        anchor_len = len(identity_anchor(self.config.persona))
-        cheap_soul_estimate = (
-            int(anchor_len / chars_per_token) + self.config.harness.proactive_soul_token_budget
-        )
-
-        user_estimate = int(len(formatted_message) / chars_per_token)
-
-        buffer_factor = self.config.harness.proactive_input_buffer_factor
-        buffered_turn = int(last_total * buffer_factor)
-
-        return {
-            "chars_per_token": chars_per_token,
-            "last_total": last_total,
-            "buffered_turn": buffered_turn,
-            "soul": cheap_soul_estimate,
-            "user": user_estimate,
-            "short_term": short_term_estimate,
-            "total": buffered_turn + cheap_soul_estimate + user_estimate + short_term_estimate,
-        }
+        return self._token_estimator.estimate_next_prompt_tokens(record, formatted_message)
 
     def _wants_memory_recall(self, message: str) -> bool:
         """Return True if a fresh-mode message is asking about remembered facts."""
@@ -727,7 +627,7 @@ class ContextBuilder:
 
     def _estimate_prompt_tokens(self, prompt: str, record: SessionRecord | None) -> int:
         """Return a rough token estimate for a prompt string."""
-        return int(len(prompt) / self._chars_per_token(record.model if record else None, record))
+        return self._token_estimator.estimate_prompt_tokens(prompt, record)
 
     def _chat_memory_summary(self, chat_status: dict[str, Any]) -> str | None:
         """Return a one-line summary of the on-disk chat memory file."""
@@ -919,32 +819,17 @@ class ContextBuilder:
 
     def trim_reply_quote_to(self, quote: str, limit: int) -> str:
         """Trim a reply-to quote to a given budget, with a truncation marker."""
-        if not quote or limit <= 0:
-            return ""
-        if len(quote) <= limit:
-            return quote
-        trimmed = _trim_to_section(quote, limit - 30)
-        return f"{trimmed}\n\n[... {len(quote) - len(trimmed)} characters truncated ...]"
+        return self._reply_quote.trim_reply_quote_to(quote, limit)
 
     def trim_reply_quote(self, quote: str) -> str:
         """Trim a reply-to quote to the configured budget, with a truncation marker."""
-        limit = self.config.harness.memory.max_reply_quote_chars
-        return self.trim_reply_quote_to(quote, limit)
+        return self._reply_quote.trim_reply_quote(quote)
 
     def _telegram_message_registry_path(self, chat_id: str) -> Path:
-        safe = chat_id.replace("/", "_")
-        return (
-            Path(self.config.harness.sessions_root).expanduser() / safe / "telegram_messages.jsonl"
-        )
+        return self._reply_quote._telegram_message_registry_path(chat_id)
 
     def _load_telegram_message_registry(self, chat_id: str) -> dict[int, dict[str, Any]]:
-        store = self._chat_store
-        path = (
-            store.telegram_message_registry_path(chat_id)
-            if store is not None
-            else self._telegram_message_registry_path(chat_id)
-        )
-        return load_message_registry(path)
+        return self._reply_quote._load_telegram_message_registry(chat_id)
 
     def format_user_message(
         self,
@@ -959,88 +844,13 @@ class ContextBuilder:
         When `chat_id` is provided, the `before_format_user_message` hook is
         invoked and plugins can modify the raw or formatted message.
         """
-        if chat_id is None:
-            return self._format_message_impl(
-                user_message,
-                reply_to=reply_to,
-                reply_to_is_bot=reply_to_is_bot,
-                reply_to_message_id=reply_to_message_id,
-                chat_id=chat_id,
-            )
-
-        context = UserMessageContext(
-            chat_id=chat_id,
-            raw_message=user_message,
-            formatted_message=None,
+        return self._reply_quote.format_user_message(
+            user_message,
             reply_to=reply_to,
             reply_to_is_bot=reply_to_is_bot,
             reply_to_message_id=reply_to_message_id,
+            chat_id=chat_id,
         )
-
-        def _formatter(ctx: UserMessageContext) -> str:
-            return self._format_message_impl(
-                ctx.raw_message,
-                reply_to=ctx.reply_to,
-                reply_to_is_bot=ctx.reply_to_is_bot,
-                reply_to_message_id=ctx.reply_to_message_id,
-                chat_id=ctx.chat_id,
-            )
-
-        context = self.plugin_manager.before_format_user_message(chat_id, context, _formatter)
-        return context.formatted_message or context.raw_message
-
-    def _format_message_impl(
-        self,
-        user_message: str,
-        reply_to: str | None = None,
-        reply_to_is_bot: bool | None = None,
-        reply_to_message_id: int | None = None,
-        chat_id: str | None = None,
-    ) -> str:
-        """Apply reply-to quoting to the raw user message."""
-        if not reply_to and not reply_to_message_id:
-            return user_message
-
-        quote = ""
-        label = ""
-
-        if reply_to_message_id and chat_id:
-            registry = self._load_telegram_message_registry(chat_id)
-            entry = registry.get(reply_to_message_id)
-            if entry:
-                preview = entry.get("preview", "")
-                original_length = entry.get("original_length", len(preview))
-                session_number = entry.get("session_number")
-                turn_number = entry.get("turn_number")
-                label = "[In reply to the assistant's earlier message"
-                if session_number is not None and turn_number is not None:
-                    label += f" (session {session_number}, turn {turn_number})"
-                label += ":]"
-                if preview:
-                    quote = preview
-                    if original_length > len(preview):
-                        quote += (
-                            f"\n\n[... {original_length - len(preview)} characters truncated ...]"
-                        )
-
-        if not quote and reply_to:
-            if reply_to_is_bot is True:
-                limit = self.config.harness.memory.max_bot_reply_quote_chars
-                label = "[In reply to the assistant's earlier message:]"
-            elif reply_to_is_bot is False:
-                limit = self.config.harness.memory.max_reply_quote_chars
-                label = "[In reply to your earlier message:]"
-            else:
-                limit = self.config.harness.memory.max_reply_quote_chars
-                label = "[In reply to an earlier message:]"
-            quote = self.trim_reply_quote_to(reply_to.strip(), limit)
-
-        if not quote and not reply_to_message_id:
-            return user_message
-
-        if quote:
-            return f"{label}\n{quote}\n\n[Your new message:]\n{user_message}"
-        return f"{label}\n\n[Your new message:]\n{user_message}"
 
     def is_continuation_message(self, user_message: str) -> bool:
         """Return True if the user message is a continuation trigger."""
