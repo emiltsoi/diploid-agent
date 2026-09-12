@@ -253,7 +253,7 @@ def test_conversation_harness_delegates_to_runtime(tmp_path: Path) -> None:
         assert hasattr(harness, name)
     assert hasattr(harness, "_prompts")
     assert hasattr(harness._prompts, "_build_first_prompt")
-    assert hasattr(harness._prompts, "_telegram_message_registry_path")
+    assert hasattr(harness.runtime._chat_store, "telegram_message_registry_path")
 
 
 class _ChunkingEngine(AgentEngine):
