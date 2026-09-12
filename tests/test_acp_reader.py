@@ -22,6 +22,7 @@ from typing import Any
 import pytest
 
 from diploid_agent.acp_client import AcpClient, AcpTransportError
+from diploid_agent.acp_client.state import AcpClientState
 from diploid_agent.acp_client.transport import AcpTransport
 
 # Minimal JSON-RPC server speaking just enough ACP for the client handshake
@@ -218,10 +219,21 @@ class _FakeProc:
 
 
 class _FakeClient:
+    """Client stand-in whose ``_x`` attributes live on a real AcpClientState."""
+
     def __init__(self) -> None:
-        self._lock = threading.RLock()
-        self._active_prompts: dict[str, Any] = {}
-        self._loop: Any = None
+        object.__setattr__(self, "_state", AcpClientState())
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            return getattr(self._state, name)
+        raise AttributeError(name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name.startswith("_"):
+            setattr(self._state, name, value)
+        else:
+            object.__setattr__(self, name, value)
 
 
 def test_on_reader_done_marks_transport_unhealthy() -> None:

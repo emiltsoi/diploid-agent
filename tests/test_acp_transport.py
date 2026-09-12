@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import os
-import threading
 import time
 from typing import Any
 
@@ -13,6 +12,7 @@ import pytest
 
 from diploid_agent.acp_client.errors import AcpTransportError
 from diploid_agent.acp_client.lifecycle import AcpRestartHistory
+from diploid_agent.acp_client.state import AcpClientState
 from diploid_agent.acp_client.transport import AcpTransport
 
 
@@ -54,14 +54,12 @@ class FakeWatchdog:
 
 
 class FakeClient:
+    """Client stand-in whose ``_x`` attributes live on a real AcpClientState."""
+
     def __init__(self) -> None:
-        self._lock = threading.RLock()
+        object.__setattr__(self, "_state", AcpClientState())
         self.metrics = FakeMetrics()
         self._sandbox = FakeSandbox()
-        self._active_prompts: dict[str, Any] = {}
-        self._pending_cancels: set[str] = set()
-        self._proc: Any = None
-        self._loop: Any = None
         self._max_restarts = 3
         self._restart_backoff_window = 300.0
         self._restart_history_store = AcpRestartHistory(None, 300.0)
@@ -70,6 +68,17 @@ class FakeClient:
         self.agent_bin = "/fake/devin"
         self.start_args: list[str] = []
         self._watchdog = FakeWatchdog()
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            return getattr(self._state, name)
+        raise AttributeError(name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name.startswith("_"):
+            setattr(self._state, name, value)
+        else:
+            object.__setattr__(self, name, value)
 
     def _check_restart_backoff(self) -> None:
         self._restart_history_store.check(self._max_restarts)

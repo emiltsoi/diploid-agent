@@ -12,7 +12,6 @@ import atexit
 import concurrent.futures
 import logging
 import os
-import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -28,6 +27,7 @@ from diploid_agent.acp_client.errors import (
 from diploid_agent.acp_client.lifecycle import AcpLifecycleLog, AcpRestartHistory
 from diploid_agent.acp_client.sandbox import AcpSandbox
 from diploid_agent.acp_client.sessions import AcpSessionOps
+from diploid_agent.acp_client.state import AcpClientState, _StateAttr
 from diploid_agent.acp_client.transport import AcpTransport
 from diploid_agent.acp_client.types import AcpPromptResult, _Prompt
 from diploid_agent.acp_client.utils import (
@@ -48,19 +48,6 @@ _ACP_MODE_MAP = {
     "dangerous": "bypass",
     "bypass": "bypass",
 }
-
-
-class _TransportAttr:
-    def __init__(self, name: str) -> None:
-        self.name = name
-
-    def __get__(self, instance: AcpClient | None, owner: type | None = None) -> Any:
-        if instance is None:
-            raise AttributeError(self.name)
-        return getattr(instance._transport, self.name)
-
-    def __set__(self, instance: AcpClient, value: Any) -> None:
-        setattr(instance._transport, self.name, value)
 
 
 class AcpClient:
@@ -118,20 +105,9 @@ class AcpClient:
                 "WINDSURF_API_KEY/ACP_API_KEY in environment."
             )
 
-        # Session/prompt state.
-        self._next_id = 0
-        self._active_prompts: dict[str, _Prompt] = {}
-        self._session_models: dict[str, str] = {}
-        self._pending_cancels: set[str] = set()
-        self._model_options: list[str] | None = None
-        self._mcp_servers: list[dict[str, Any]] = []
-
-        # Shared lock.
-        self._lock = threading.RLock()
-        # Serializes transport lifecycle work (start/stop/restart).  Always
-        # acquired before ``self._lock`` so the order is
-        # ``_lifecycle_lock`` -> ``_lock``; never the reverse.
-        self._lifecycle_lock = threading.RLock()
+        # Mutable state shared with the transport/session/watchdog
+        # components; ``client._x`` names resolve onto it via ``_StateAttr``.
+        self._state = AcpClientState()
 
         # Low-level transport state.
         self._transport = AcpTransport(self)
@@ -158,9 +134,9 @@ class AcpClient:
         self._lifecycle_log = lifecycle_log
         if lifecycle_log is not None:
             lifecycle_log.context = self._lifecycle_context
-        # Generation of the transport for which we last logged transport.stop,
-        # so repeated close() calls do not emit duplicate stop events.
-        self._logged_stop_gen = -1
+        # Generation of the transport for which we last logged transport.stop
+        # is tracked on ``self._state._logged_stop_gen`` so repeated close()
+        # calls do not emit duplicate stop events.
         restart_history_path = None
         if lifecycle_log is not None:
             restart_history_path = lifecycle_log.path.parent / "acp_restart_history.jsonl"
@@ -182,23 +158,35 @@ class AcpClient:
         atexit.register(self.close)
 
     # ------------------------------------------------------------------
-    # Backward-compatible aliases for transport state.
+    # Shared state aliases: ``client._x`` names resolve onto ``self._state``
+    # so existing test seams and internal callers keep working.
 
-    _loop = _TransportAttr("_loop")
-    _thread = _TransportAttr("_thread")
-    _proc = _TransportAttr("_proc")
-    _reader_task = _TransportAttr("_reader_task")
-    _stderr_task = _TransportAttr("_stderr_task")
-    _inflight_future = _TransportAttr("_inflight_future")
-    _inflight_deadline = _TransportAttr("_inflight_deadline")
-    _last_stdout_at = _TransportAttr("_last_stdout_at")
-    _last_progress_at = _TransportAttr("_last_progress_at")
-    _last_request_at = _TransportAttr("_last_request_at")
-    _last_control_call_deadline = _TransportAttr("_last_control_call_deadline")
-    _pending = _TransportAttr("_pending")
-    _transport_healthy = _TransportAttr("_transport_healthy")
-    _initialized = _TransportAttr("_initialized")
-    _restart_history = _TransportAttr("_restart_history")
+    _lock = _StateAttr("_lock")
+    _lifecycle_lock = _StateAttr("_lifecycle_lock")
+    _next_id = _StateAttr("_next_id")
+    _active_prompts = _StateAttr("_active_prompts")
+    _session_models = _StateAttr("_session_models")
+    _pending_cancels = _StateAttr("_pending_cancels")
+    _model_options = _StateAttr("_model_options")
+    _mcp_servers = _StateAttr("_mcp_servers")
+    _logged_stop_gen = _StateAttr("_logged_stop_gen")
+
+    _loop = _StateAttr("_loop")
+    _thread = _StateAttr("_thread")
+    _proc = _StateAttr("_proc")
+    _reader_task = _StateAttr("_reader_task")
+    _stderr_task = _StateAttr("_stderr_task")
+    _inflight_future = _StateAttr("_inflight_future")
+    _inflight_deadline = _StateAttr("_inflight_deadline")
+    _last_stdout_at = _StateAttr("_last_stdout_at")
+    _last_progress_at = _StateAttr("_last_progress_at")
+    _last_request_at = _StateAttr("_last_request_at")
+    _last_control_call_deadline = _StateAttr("_last_control_call_deadline")
+    _pending = _StateAttr("_pending")
+    _transport_healthy = _StateAttr("_transport_healthy")
+    _initialized = _StateAttr("_initialized")
+    _terminated = _StateAttr("_terminated")
+    _restart_history = _StateAttr("_restart_history")
 
     # ------------------------------------------------------------------
     # Watchdog and control aliases.

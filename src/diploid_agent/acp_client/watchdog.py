@@ -15,6 +15,9 @@ class PromptWatchdog:
 
     def __init__(self, client: Any) -> None:
         self._client = client
+        # Shared mutable state; a test fake without ``_state`` is used as the
+        # state namespace directly (its ``_x`` attrs stand in for the fields).
+        self._state = getattr(client, "_state", None) or client
         self._running = False
         self._thread: threading.Thread | None = None
         self._last_silence_warn = 0.0
@@ -52,20 +55,20 @@ class PromptWatchdog:
     def check(self) -> None:
         """Detect unresponsive ACP transport and trigger recovery."""
         client = self._client
-        with client._lock:
+        with self._state._lock:
             if not self._running:
                 return
-            if client._inflight_future is None or client._inflight_future.done():
+            if self._state._inflight_future is None or self._state._inflight_future.done():
                 return
 
             now = time.monotonic()
-            deadline = client._inflight_deadline
-            last_request = client._last_request_at
+            deadline = self._state._inflight_deadline
+            last_request = self._state._last_request_at
             last_stdout = getattr(client, "_last_stdout_at", 0.0)
-            call_deadline = client._last_control_call_deadline
-            has_prompt = bool(client._active_prompts)
-            has_pending = bool(client._pending)
-            proc = client._proc
+            call_deadline = self._state._last_control_call_deadline
+            has_prompt = bool(self._state._active_prompts)
+            has_pending = bool(self._state._pending)
+            proc = self._state._proc
             proc_dead = proc is not None and proc.returncode is not None
             silence_after = getattr(client, "_silence_warn_after", 600.0)
             # Snapshot the transport identity being judged stalled.  Recovery
@@ -76,7 +79,7 @@ class PromptWatchdog:
             transport = getattr(client, "_transport", None)
             gen = getattr(transport if transport is not None else client, "generation", None)
 
-        # All _stall_recovery calls must happen outside ``client._lock``:
+        # All _stall_recovery calls must happen outside ``self._state._lock``:
         # recovery acquires ``_lifecycle_lock`` and the required lock order is
         # ``_lifecycle_lock`` -> ``_lock``.
         if proc_dead:
@@ -127,7 +130,7 @@ class PromptWatchdog:
             silence = now - last_stdout
             if silence >= silence_after and now - self._last_silence_warn >= silence_after:
                 self._last_silence_warn = now
-                session_id = next(iter(client._active_prompts), None)
+                session_id = next(iter(self._state._active_prompts), None)
                 logger.warning(
                     "ACP prompt for session %s has produced no stdout for %.0fs "
                     "(child alive; not auto-killing)",
@@ -157,12 +160,12 @@ class PromptWatchdog:
         # that do not model the lifecycle lock.
         lifecycle_lock = getattr(self._client, "_lifecycle_lock", None)
         if lifecycle_lock is None:
-            lifecycle_lock = self._client._lock
+            lifecycle_lock = self._state._lock
         with lifecycle_lock:
             self._stall_recovery_inner(trigger, observed_proc, observed_gen)
 
     def _still_stalled(self, client: Any, trigger: str, observed_proc: Any) -> bool:
-        """Re-verify the stall condition under ``client._lock``.
+        """Re-verify the stall condition under ``self._state._lock``.
 
         The in-flight call may have completed while recovery waited on
         ``_lifecycle_lock``; restarting a healthy transport then is
@@ -173,15 +176,15 @@ class PromptWatchdog:
         if trigger == "proc_dead":
             return observed_proc is not None and observed_proc.returncode is not None
         if trigger == "inflight_deadline":
-            inflight = client._inflight_future
-            return inflight is not None and not inflight.done() and now > client._inflight_deadline
+            inflight = self._state._inflight_future
+            return inflight is not None and not inflight.done() and now > self._state._inflight_deadline
         if trigger == "control_deadline":
-            if not client._pending or client._active_prompts:
+            if not self._state._pending or self._state._active_prompts:
                 return False
-            call_deadline = client._last_control_call_deadline
+            call_deadline = self._state._last_control_call_deadline
             if call_deadline:
                 return now > call_deadline
-            return now - client._last_request_at > client._watchdog_timeout
+            return now - self._state._last_request_at > client._watchdog_timeout
         return True
 
     def _stall_recovery_inner(
@@ -191,12 +194,12 @@ class PromptWatchdog:
         observed_gen: Any = None,
     ) -> None:
         client = self._client
-        with client._lock:
+        with self._state._lock:
             transport = getattr(client, "_transport", None)
             current_gen = getattr(
                 transport if transport is not None else client, "generation", None
             )
-            current_proc = client._proc
+            current_proc = self._state._proc
             if (observed_gen is not None or observed_proc is not None) and (
                 current_gen != observed_gen or current_proc is not observed_proc
             ):
@@ -258,20 +261,20 @@ class PromptWatchdog:
 
         client._unblock_inflight("ACP transport watchdog detected a stall")
 
-        with client._lock:
+        with self._state._lock:
             # Kill the process and stop the loop.
-            client._transport_healthy = False
-            client._initialized = False
-            if client._proc is not None and client._proc.returncode is None:
+            self._state._transport_healthy = False
+            self._state._initialized = False
+            if self._state._proc is not None and self._state._proc.returncode is None:
                 try:
-                    logger.warning("Killing unresponsive ACP process %s", client._proc.pid)
-                    client._kill_process_group(client._proc)
+                    logger.warning("Killing unresponsive ACP process %s", self._state._proc.pid)
+                    client._kill_process_group(self._state._proc)
                     if client.metrics is not None:
                         client.metrics.inc("acp_transport_killed_total")
                 except Exception:
                     logger.exception("Failed to kill ACP process during watchdog recovery")
-            if client._loop is not None and client._loop.is_running():
+            if self._state._loop is not None and self._state._loop.is_running():
                 try:
-                    client._loop.call_soon_threadsafe(client._loop.stop)
+                    self._state._loop.call_soon_threadsafe(self._state._loop.stop)
                 except Exception:
                     logger.exception("Failed to stop ACP event loop during watchdog recovery")

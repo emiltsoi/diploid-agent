@@ -3,10 +3,11 @@
 ``AcpSessionOps`` owns the async calls that sit above the raw transport:
 ``session/new``, ``session/resume``/``session/load``, ``session/prompt``,
 ``session/cancel``, and the per-session mode/model re-apply.  Shared state
-(``_active_prompts``, ``_pending``, ``_mcp_servers``, ``_session_models``,
-metrics, lifecycle log) stays on the owning ``AcpClient``; this collaborator
-reaches it through ``self._client``, matching the ``AcpTransport`` /
-``PromptWatchdog`` pattern.
+(``_active_prompts``, ``_pending``, ``_mcp_servers``, ``_session_models``)
+lives on the client's ``AcpClientState`` (``self._state``); sibling
+components and metrics/lifecycle log are still reached through
+``self._client``, matching the ``AcpTransport`` / ``PromptWatchdog``
+pattern.
 
 Cross-calls deliberately go through the ``AcpClient._*`` delegates (e.g.
 ``self._client._call``, ``self._client._prompt``) rather than calling sibling
@@ -42,6 +43,9 @@ class AcpSessionOps:
 
     def __init__(self, client: Any) -> None:
         self._client = client
+        # Shared mutable state; a test fake without ``_state`` is used as the
+        # state namespace directly (its ``_x`` attrs stand in for the fields).
+        self._state = getattr(client, "_state", None) or client
 
     @contextmanager
     def _report_outcome(
@@ -200,7 +204,7 @@ class AcpSessionOps:
         # Keep the client-side MCP list in sync so future transport restarts
         # write the correct mcp_config.json.
         if mcp_servers is not None:
-            self._client._mcp_servers = self._client._sandbox.normalize_mcp_servers(mcp_servers)
+            self._state._mcp_servers = self._client._sandbox.normalize_mcp_servers(mcp_servers)
         resume_params: dict[str, Any] = {
             "sessionId": session_id,
             "cwd": use_cwd,
@@ -295,7 +299,7 @@ class AcpSessionOps:
         # Keep the client-side MCP list in sync so future transport restarts
         # write the correct mcp_config.json.
         if mcp_servers is not None:
-            self._client._mcp_servers = self._client._sandbox.normalize_mcp_servers(mcp_servers)
+            self._state._mcp_servers = self._client._sandbox.normalize_mcp_servers(mcp_servers)
         if self._client._lifecycle_log is not None:
             self._client._lifecycle_log.write(
                 "session.load.attempt",
@@ -342,7 +346,7 @@ class AcpSessionOps:
             {"sessionId": session_id, "configId": "model", "value": use_model},
             timeout=call_timeout,
         )
-        self._client._session_models[session_id] = use_model
+        self._state._session_models[session_id] = use_model
 
     async def _create_session(
         self,
@@ -395,8 +399,8 @@ class AcpSessionOps:
             session_id = session["sessionId"]
             ctx["log_fields"]["session_id"] = session_id
 
-        if self._client._model_options is None:
-            self._client._model_options = self._extract_model_options(session)
+        if self._state._model_options is None:
+            self._state._model_options = self._extract_model_options(session)
 
         # Honor the requested mode and model for this session.
         await self._client._apply_session_config(session_id, use_model, timeout=session_new_timeout)
@@ -425,12 +429,12 @@ class AcpSessionOps:
         # Only set the session model on follow-up when it has changed. Repeated
         # no-op model changes can re-render the session's system prefix and
         # destabilize the ACP subprocess.
-        if self._client._session_models.get(session_id) != use_model:
+        if self._state._session_models.get(session_id) != use_model:
             await self._client._call(
                 "session/set_config_option",
                 {"sessionId": session_id, "configId": "model", "value": use_model},
             )
-            self._client._session_models[session_id] = use_model
+            self._state._session_models[session_id] = use_model
 
         return await self._client._prompt(
             session_id,
@@ -450,8 +454,8 @@ class AcpSessionOps:
             "session/new",
             {"cwd": str(probe_cwd), "mcpServers": []},
         )
-        self._client._model_options = self._extract_model_options(session)
-        return self._client._model_options
+        self._state._model_options = self._extract_model_options(session)
+        return self._state._model_options
 
     @staticmethod
     def _extract_model_options(session_result: dict[str, Any]) -> list[str]:
@@ -477,25 +481,25 @@ class AcpSessionOps:
             session_id=session_id,
             prompt_id=prompt_id,
             text=text,
-            future=client._loop.create_future(),
-            cancel_done=client._loop.create_future(),
+            future=self._state._loop.create_future(),
+            cancel_done=self._state._loop.create_future(),
             soft_timeout=soft_timeout,
             on_chunk=on_chunk,
             on_update=on_update,
         )
-        client._pending[prompt_id] = prompt.future
-        client._active_prompts[session_id] = prompt
-        with client._lock:
+        self._state._pending[prompt_id] = prompt.future
+        self._state._active_prompts[session_id] = prompt
+        with self._state._lock:
             client._last_stdout_at = time.monotonic()
             client._last_progress_at = time.monotonic()
 
         # If a cancel arrived before we registered the prompt, honor it now.
-        if session_id in client._pending_cancels:
-            client._pending_cancels.discard(session_id)
+        if session_id in self._state._pending_cancels:
+            self._state._pending_cancels.discard(session_id)
             prompt.cancelled = True
             if not prompt.cancel_done.done():
                 prompt.cancel_done.set_result(None)
-            client._loop.create_task(client._send_cancel_notification(session_id))
+            self._state._loop.create_task(client._send_cancel_notification(session_id))
 
         # If the caller cancelled before we started, just return.
         if prompt.cancelled:
@@ -522,12 +526,12 @@ class AcpSessionOps:
             )
 
             if soft_timeout is not None and soft_timeout > 0:
-                timeout_task = client._loop.create_task(
+                timeout_task = self._state._loop.create_task(
                     client._soft_timeout_canceller(prompt, soft_timeout)
                 )
 
             prompt_timeout = timeout if timeout is not None else client.timeout
-            start = client._loop.time()
+            start = self._state._loop.time()
             done, _pending = await asyncio.wait(
                 [prompt.future, prompt.cancel_done],
                 return_when=asyncio.FIRST_COMPLETED,
@@ -540,7 +544,7 @@ class AcpSessionOps:
             elif prompt.cancel_done in done:
                 # Cancel was requested. Give the server a short grace period to
                 # finish the aborted turn and send the prompt response.
-                elapsed = client._loop.time() - start
+                elapsed = self._state._loop.time() - start
                 if prompt_timeout is not None:
                     remaining = max(0.0, prompt_timeout - elapsed)
                     wait_for = min(5.0, remaining)
@@ -628,8 +632,8 @@ class AcpSessionOps:
         finally:
             if timeout_task is not None and not timeout_task.done():
                 timeout_task.cancel()
-            client._active_prompts.pop(session_id, None)
-            client._pending.pop(prompt_id, None)
+            self._state._active_prompts.pop(session_id, None)
+            self._state._pending.pop(prompt_id, None)
 
     async def _soft_timeout_canceller(self, prompt: _Prompt, delay: float) -> None:
         """Fire a `session/cancel` notification after `delay` seconds."""
