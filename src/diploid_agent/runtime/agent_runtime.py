@@ -42,13 +42,13 @@ from diploid_agent.models import (
     WakeEvent,
 )
 from diploid_agent.plan.manager import PlanManager
-from diploid_agent.plan.models import Plan, Task, TaskType
+from diploid_agent.plan.models import Plan, Task
 from diploid_agent.plugin_incidents import PluginIncidentStore
 from diploid_agent.plugins import PluginManager
 from diploid_agent.runtime.actions import RuntimeActions
 from diploid_agent.runtime.auto_continue import RuntimeAutoContinue
 from diploid_agent.runtime.config_manager import RuntimeConfigManager
-from diploid_agent.runtime.event_bus import Event, EventBus
+from diploid_agent.runtime.event_bus import EventBus
 from diploid_agent.runtime.instance import InstanceManager
 from diploid_agent.runtime.lifecycle import RuntimeLifecycle
 from diploid_agent.runtime.mcp_skills import RuntimeMcpSkills
@@ -71,20 +71,6 @@ from diploid_agent.transport.base import RuntimeAPI
 from diploid_agent.turn import TurnController
 
 logger = logging.getLogger(__name__)
-
-# Replies that mean a wake could not run now but should be retried later.
-_WAKE_RETRY_REPLIES = {
-    "Chat is busy; wake re-enqueued.",
-    "A turn is already in progress for this chat.",
-    "Another instance is currently handling this chat.",
-    "A turn is already in progress; continuation queued.",
-}
-
-# Replies that should be dropped rather than delivered to the user. These are
-# internal diagnostics, not conversation content.
-_WAKE_DROP_REPLIES = {
-    "Unknown or already completed wake event.",
-}
 
 
 class AgentRuntime(RuntimeAPI):
@@ -183,11 +169,6 @@ class AgentRuntime(RuntimeAPI):
             config=self.config.harness.timer,
         )
 
-        self._event_handlers: dict[str, Callable[[Event], None]] = {
-            "timer.fired": self._handle_timer_fired,
-            "task.completed": self._handle_task_completed,
-            "task.failed": self._handle_task_failed,
-        }
         self._plan_conclusion_enqueued: set[str] = set()
 
         self._outbox = RuntimeOutbox(
@@ -372,7 +353,9 @@ class AgentRuntime(RuntimeAPI):
             ingress_handlers=self._ingress_handlers,
             instance_id=self.instance_id,
             instance_started_at=self.instance_started_at,
-            on_event_fn=self._on_event,
+            plan_manager=self.plan_manager,
+            planning=self._planning,
+            subagent=self._subagent,
             runtime_api=self,
         )
 
@@ -868,102 +851,6 @@ class AgentRuntime(RuntimeAPI):
     def update_config(self, patch: dict[str, Any]) -> dict[str, Any]:
         """Apply a partial runtime configuration update."""
         return self._config_manager.update_config(patch)
-
-    def _on_event(self, event: Event) -> None:
-        handler = self._event_handlers.get(event.type)
-        if handler is not None:
-            handler(event)
-
-    def _handle_timer_fired(self, event: Event) -> None:
-        payload = event.payload
-        event_id = payload["event_id"]
-        wake_event = self.wake_queue.get(event_id)
-        retry_after = self.config.harness.timer.retry_after_seconds
-        if wake_event and wake_event.payload:
-            retry_after = wake_event.payload.get("retry_after", retry_after)
-        try:
-            result = self.wake(
-                payload["chat_id"],
-                event_id=event_id,
-                reason=payload["reason"],
-                silent=payload.get("silent", True),
-            )
-            if result.turn_number is None:
-                # The wake did not result in a real turn. Retry the transient
-                # cases; otherwise just drop without completing.
-                if result.reply in _WAKE_RETRY_REPLIES:
-                    self.wake_queue.fail(event_id, retry_after=retry_after)
-                    return
-                # Some wake results are internal diagnostics that should not be
-                # surfaced as user-visible replies.
-                if result.reply in _WAKE_DROP_REPLIES:
-                    self.wake_queue.complete(event_id)
-                    return
-                # Some wake results are final messages (e.g. budget notice or
-                # "dispatch already completed") that should still be delivered.
-                if (result.reply or result.notice) and self._outbox_delivery_enabled:
-                    self._deliver_chat_result(payload["chat_id"], result)
-                self.wake_queue.complete(event_id)
-                return
-            self.wake_queue.complete(event_id)
-        except Exception:
-            logger.exception("Wake failed for %s", event_id)
-            self.wake_queue.fail(event_id, retry_after=retry_after)
-
-    def _handle_task_completed(self, event: Event) -> None:
-        payload = event.payload
-        task = self.plan_manager.complete_task(
-            payload["plan_id"],
-            payload["task_id"],
-            result=payload.get("result", ""),
-            log=payload.get("log", ""),
-            stop_reason=payload.get("stop_reason"),
-            cancelled=payload.get("cancelled", False),
-            partial=payload.get("partial", False),
-            timed_out=payload.get("timed_out", False),
-        )
-        if task is None:
-            logger.warning(
-                "Task %s not found in plan %s for completion",
-                payload.get("task_id"),
-                payload.get("plan_id"),
-            )
-            return
-        if task.type == TaskType.SUBAGENT:
-            self._complete_subagent_task(task)
-            return
-        plan = self.plan_manager.get_plan(payload["plan_id"])
-        if plan is None:
-            return
-        self._enqueue_plan_task_wake(plan, task)
-        self._maybe_enqueue_plan_conclusion(plan)
-
-    def _handle_task_failed(self, event: Event) -> None:
-        payload = event.payload
-        task = self.plan_manager.fail_task(
-            payload["plan_id"],
-            payload["task_id"],
-            log=payload.get("log", payload.get("error", "")),
-            stop_reason=payload.get("stop_reason"),
-            cancelled=payload.get("cancelled", False),
-            partial=payload.get("partial", False),
-            timed_out=payload.get("timed_out", False),
-        )
-        if task is None:
-            logger.warning(
-                "Task %s not found in plan %s for failure",
-                payload.get("task_id"),
-                payload.get("plan_id"),
-            )
-            return
-        if task.type == TaskType.SUBAGENT:
-            self._complete_subagent_task(task)
-            return
-        plan = self.plan_manager.get_plan(payload["plan_id"])
-        if plan is None:
-            return
-        self._enqueue_plan_task_wake(plan, task)
-        self._maybe_enqueue_plan_conclusion(plan)
 
     # ---------------------------------------------------------------- public API
 
