@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
 
 from diploid_agent.engine import TurnRequest, TurnResult
 from diploid_agent.models import (
     ActiveTurn,
     ChatResult,
-    PartialTurn,
     SessionRecord,
     WakeEvent,
     final_segment_reply,
@@ -26,6 +24,7 @@ from diploid_agent.plugins.contexts import (
 )
 from diploid_agent.turn.base import TurnComponent
 from diploid_agent.turn.notifier import _NotifyStream, _OutboxHeartbeat
+from diploid_agent.turn.stream import TurnStream
 from diploid_agent.turn.utils import join_notices
 
 logger = logging.getLogger(__name__)
@@ -242,77 +241,7 @@ class TurnProcess(TurnComponent):
             outbox_heartbeat = _OutboxHeartbeat(self.runtime, chat_id, active)
             outbox_heartbeat.start()
 
-        def _maybe_emit_partial() -> None:
-            a = self.runtime._active_turns.get(chat_id)
-            if a is None:
-                return
-            record = self.runtime._active_record(chat_id)
-            self.runtime._plugins.on_partial(
-                chat_id,
-                PartialTurn.from_active(a, record),
-            )
-
-        def _on_chunk(text: str) -> None:
-            with self.runtime._lock:
-                a = self.runtime._active_turns.get(chat_id)
-                if a:
-                    a.append_full_text(text)
-                    a.recompute_message_text()
-            if a:
-                with a._condition:
-                    a._condition.notify_all()
-            _maybe_emit_partial()
-
-        def _on_update(update: dict[str, Any]) -> None:
-            session_update = update.get("sessionUpdate")
-            if session_update in ("tool_call", "tool_call_update"):
-                with self.runtime._lock:
-                    a = self.runtime._active_turns.get(chat_id)
-                    if a:
-                        raw_content = update.get("content") or {}
-                        if isinstance(raw_content, list):
-                            content = {}
-                            for item in raw_content:
-                                if isinstance(item, dict):
-                                    content = item
-                                    break
-                        elif isinstance(raw_content, dict):
-                            content = raw_content
-                        else:
-                            content = {}
-                        title = (
-                            content.get("title")
-                            or content.get("kind")
-                            or content.get("toolCallId")
-                            or "tool"
-                        )
-                        status = content.get("status") or "running"
-                        now = time.time()
-                        a.last_side_effect = f"{title} ({status})"[:160]
-                        a.last_side_effect_at = now
-                        a.side_effects.append({"title": title, "status": status, "at": now})
-                _maybe_emit_partial()
-                return
-            if session_update not in ("agent_thought", "agent_thought_chunk"):
-                return
-            content = update.get("content", {})
-            if isinstance(content, list):
-                text = "".join(b.get("text", "") for b in content if b.get("type") == "text")
-            elif content.get("type") == "text":
-                text = content.get("text", "")
-            else:
-                text = ""
-            if not text:
-                return
-            with self.runtime._lock:
-                a = self.runtime._active_turns.get(chat_id)
-                if a:
-                    a.append_thought_text(text)
-                    a.recompute_message_text()
-            if a:
-                with a._condition:
-                    a._condition.notify_all()
-            _maybe_emit_partial()
+        stream = TurnStream(self.runtime, chat_id)
 
         turn_start = time.perf_counter()
 
@@ -340,8 +269,8 @@ class TurnProcess(TurnComponent):
                         request=request,
                         session_id=(None if is_new or force_new_session else old_record.session_id),
                         record=record,
-                        on_chunk=_on_chunk,
-                        on_update=_on_update,
+                        on_chunk=stream.on_chunk,
+                        on_update=stream.on_update,
                     ),
                 )
                 if isinstance(call_ctx, ChatResult):
@@ -432,8 +361,8 @@ class TurnProcess(TurnComponent):
                     continuation_anchor=continuation_anchor,
                     wake_event=wake_event,
                     other_instance_running=other_instance_running,
-                    on_chunk=_on_chunk,
-                    on_update=_on_update,
+                    on_chunk=stream.on_chunk,
+                    on_update=stream.on_update,
                     restart_first=restart_first,
                     log_prefix=log_prefix,
                 )
@@ -468,8 +397,8 @@ class TurnProcess(TurnComponent):
                     continuation_anchor=continuation_anchor,
                     wake_event=wake_event,
                     other_instance_running=other_instance_running,
-                    on_chunk=_on_chunk,
-                    on_update=_on_update,
+                    on_chunk=stream.on_chunk,
+                    on_update=stream.on_update,
                     restart_first=False,
                     log_prefix="ACP empty-reply rehydration",
                 )
