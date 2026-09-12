@@ -156,6 +156,7 @@ class RuntimeMetrics:
                 "cached_tokens": per_chat["cached_tokens"],
                 "latency_seconds": round(per_chat["latency_seconds"], 3),
             }
+            per_chat["last_turn"] = turn_metrics
 
             self._global_metrics["turns"] += 1
             self._global_metrics["input_tokens"] += turn_metrics["input_tokens"]

@@ -142,7 +142,6 @@ class ContextBuilder:
         self.memory_factory = memory_factory
         self.skill_manager = skill_manager
         self.active_skill_names = active_skill_names
-        self.context_window_fn = context_window_fn
         self.lifecycle_log = lifecycle_log
         self._chat_store = chat_store
         self._token_estimator = TokenEstimator(config, context_window_fn)

@@ -91,31 +91,32 @@ class PluginManager:
             )
 
     def reconfigure(self, plugins: list[PluginConfig]) -> None:
-        """Replace the active plugin list, stop removed plugins, and snapshot.
+        """Replace the active plugin list, stop all cached instances, and snapshot.
 
         Existing on-disk state is preserved; plugins are lazily reloaded on the
-        next turn that needs them.
+        next turn that needs them.  Every cached instance is stop()ed first —
+        including still-enabled plugins, which are recycled so they pick up the
+        new config — otherwise reconfigure would orphan live instances.
         """
         new_plugins = [p for p in plugins if p.name]
-        new_enabled = {p.name for p in new_plugins if p.enabled}
 
-        # Stop instances for plugins that are removed or globally disabled.
+        # Stop every cached instance; retained plugins get a fresh instance on
+        # next use, removed/disabled ones are gone for good.
         for chat_id, cache in list(self._instances.items()):
             for name in list(cache.keys()):
-                if name not in new_enabled:
-                    plugin = cache.pop(name, None)
-                    if not isinstance(plugin, FailedPlugin):
-                        try:
-                            plugin.stop()
-                        except Exception:
-                            logger.exception("stop() failed for plugin %s", name)
-                            self._record_incident(
-                                plugin=name,
-                                phase="lifecycle",
-                                error=traceback.format_exc(),
-                                action="failed_plugin",
-                                chat_id=chat_id,
-                            )
+                plugin = cache.pop(name, None)
+                if not isinstance(plugin, FailedPlugin):
+                    try:
+                        plugin.stop()
+                    except Exception:
+                        logger.exception("stop() failed for plugin %s", name)
+                        self._record_incident(
+                            plugin=name,
+                            phase="lifecycle",
+                            error=traceback.format_exc(),
+                            action="failed_plugin",
+                            chat_id=chat_id,
+                        )
 
         self._plugins = sorted(new_plugins, key=lambda p: p.prompt_order)
         self._instances.clear()

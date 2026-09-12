@@ -300,7 +300,7 @@ class AgentRuntime(RuntimeAPI):
             self._memory_manager,
             self.skills,
             self._mcp_skills._active_skill_names,
-            context_window_fn=self.engine.model_context_window,
+            context_window_fn=lambda model: self.engine.model_context_window(model),
             lifecycle_log=self.lifecycle_log,
             chat_store=self._chat_store,
         )
