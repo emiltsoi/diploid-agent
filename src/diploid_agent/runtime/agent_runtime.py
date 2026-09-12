@@ -59,6 +59,7 @@ from diploid_agent.runtime.planning import RuntimePlanning
 from diploid_agent.runtime.plugins import RuntimePlugins
 from diploid_agent.runtime.prompts import RuntimePrompts
 from diploid_agent.runtime.restart import RuntimeRestart
+from diploid_agent.runtime.state import RuntimeState
 from diploid_agent.runtime.store import ChatSessionStore
 from diploid_agent.runtime.subagent import RuntimeSubagent
 from diploid_agent.runtime.timer_service import TimerService
@@ -99,6 +100,7 @@ class AgentRuntime(RuntimeAPI):
         self.metrics = MetricsCollector()
         self.engine = self._create_engine(metrics=self.metrics)
         self._lock = threading.RLock()
+        self._state = RuntimeState()
         self.instance_id = f"harness-{uuid.uuid4().hex[:12]}"
         self.instance_started_at = time.time()
         self._restart = RuntimeRestart(self)
@@ -114,9 +116,6 @@ class AgentRuntime(RuntimeAPI):
         self._store = self._chat_store._store
         self._active_turns: dict[str, ActiveTurn] = {}
         self._active_chat_skills: dict[str, set[str]] = {}
-        # Set once a graceful restart begins draining: no new turns may start so
-        # a stream of queued messages cannot keep the process alive until the cap.
-        self._restart_draining = threading.Event()
         self._runtime_metrics = RuntimeMetrics(
             metrics=self.metrics,
             store=self._store,
@@ -174,7 +173,6 @@ class AgentRuntime(RuntimeAPI):
             "task.failed": self._handle_task_failed,
         }
         self._plan_conclusion_enqueued: set[str] = set()
-        self._started = False
 
         self._outbox = RuntimeOutbox(
             config=config,
@@ -196,10 +194,6 @@ class AgentRuntime(RuntimeAPI):
 
         # Durable record of plugin incidents (sandbox, lifecycle, health, watchdog).
         self._incidents = PluginIncidentStore(self.store_path.parent / "plugin-incidents.jsonl")
-
-        # Rate-limit ACP-subprocess-initiated service restarts.
-        self._last_service_restart_at: float = 0.0
-        self._service_restart_cooldown_seconds = 60.0
 
         self._auto_continue = RuntimeAutoContinue()
 
@@ -328,6 +322,44 @@ class AgentRuntime(RuntimeAPI):
     @client.setter
     def client(self, value: AgentEngine) -> None:
         self.engine = value
+
+    # ------------------------------------------------------- shared state
+    # Aliases over ``self._state`` (RuntimeState). Tests and turn code write
+    # ``runtime._started`` / ``runtime._last_service_restart_at`` and call
+    # ``runtime._restart_draining.set()`` directly; the aliases keep those
+    # seams working while components share the box.
+
+    @property
+    def _started(self) -> bool:
+        return self._state.started
+
+    @_started.setter
+    def _started(self, value: bool) -> None:
+        self._state.started = value
+
+    @property
+    def _restart_draining(self) -> threading.Event:
+        return self._state.restart_draining
+
+    @_restart_draining.setter
+    def _restart_draining(self, value: threading.Event) -> None:
+        self._state.restart_draining = value
+
+    @property
+    def _last_service_restart_at(self) -> float:
+        return self._state.last_service_restart_at
+
+    @_last_service_restart_at.setter
+    def _last_service_restart_at(self, value: float) -> None:
+        self._state.last_service_restart_at = value
+
+    @property
+    def _service_restart_cooldown_seconds(self) -> float:
+        return self._state.service_restart_cooldown_seconds
+
+    @_service_restart_cooldown_seconds.setter
+    def _service_restart_cooldown_seconds(self, value: float) -> None:
+        self._state.service_restart_cooldown_seconds = value
 
     def _on_service_restart(self, service: str, reason: str) -> None:
         """Handle a service restart request from the ACP subprocess."""
