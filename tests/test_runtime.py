@@ -28,6 +28,7 @@ from diploid_agent.models import ActiveTurn, WakeEvent
 from diploid_agent.notifier import NoopNotifier
 from diploid_agent.plan.models import Task, TaskStatus, TaskType
 from diploid_agent.runtime import AgentRuntime, TurnController
+from diploid_agent.runtime.plugin_runtime import PluginRuntime
 from diploid_agent.transport.base import RuntimeAPI
 
 
@@ -59,6 +60,11 @@ def _make_config_with_outbox(tmp_path: Path) -> Config:
 def test_agent_runtime_implements_runtime_api(tmp_path: Path) -> None:
     runtime = AgentRuntime(_make_config(tmp_path))
     assert isinstance(runtime, RuntimeAPI)
+
+
+def test_agent_runtime_implements_plugin_runtime(tmp_path: Path) -> None:
+    runtime = AgentRuntime(_make_config(tmp_path))
+    assert isinstance(runtime, PluginRuntime)
 
 
 def test_subagent_start_creates_dispatch_and_plan(tmp_path: Path) -> None:

@@ -404,6 +404,10 @@ class AgentRuntime(RuntimeAPI):
         """Return True if auto-continue should be suppressed for this chat."""
         return self._auto_continue.is_suppressed(chat_id)
 
+    def is_continuation_message(self, user_message: str) -> bool:
+        """Return True if the user message is a continuation trigger."""
+        return self._prompts.is_continuation_message(user_message)
+
     def _create_notifier(self):
         """Create the runtime's configured notifier."""
         return self._outbox._create_notifier()
