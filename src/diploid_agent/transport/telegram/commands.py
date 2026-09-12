@@ -51,6 +51,22 @@ class TelegramCommandMixin:
                 "notice": None,
             }
 
+    def _harness_call_reply(self, *, sorry: str, **kwargs: Any) -> str:
+        """Call ``command_handler`` and collapse the result to a reply string."""
+        raw = self.command_handler.call(**kwargs)
+        if isinstance(raw, str):
+            return raw
+        if not isinstance(raw, dict) or "error" in raw:
+            return sorry
+        return _coerce_chat_result(raw).reply
+
+    def _harness_call_result(self, *, sorry: str, **kwargs: Any) -> dict[str, Any]:
+        """Call ``command_handler`` and collapse the result to a ChatResult dict."""
+        raw = self.command_handler.call(**kwargs)
+        if isinstance(raw, dict) and "error" in raw:
+            return {"reply": sorry, "notice": None}
+        return _coerce_chat_result(raw).to_dict()
+
     def _harness_metrics(self, chat_id: int) -> str:
         raw = self.command_handler.call(
             method="get_metrics",
@@ -159,89 +175,66 @@ class TelegramCommandMixin:
             return f"Sorry, I could not update {section} config via the harness."
 
     def _harness_mcp_list(self, chat_id: int) -> str:
-        raw = self.command_handler.call(
+        return self._harness_call_reply(
+            sorry="Sorry, I could not fetch the MCP server list.",
             method="mcp_list",
             chat_id=chat_id,
             http_path="/mcp/{chat_id}",
             http_method="GET",
         )
-        if isinstance(raw, str):
-            return raw
-        if not isinstance(raw, dict) or "error" in raw:
-            return "Sorry, I could not fetch the MCP server list."
-        return _coerce_chat_result(raw).reply
 
     def _harness_mcp_enable(self, chat_id: int, name: str) -> str:
-        raw = self.command_handler.call(
+        return self._harness_call_reply(
+            sorry=f"Sorry, I could not enable {name}.",
             method="mcp_enable",
             chat_id=chat_id,
             http_path="/mcp",
             name=name,
             http_body={"command": "enable", "name": name},
         )
-        if isinstance(raw, str):
-            return raw
-        if not isinstance(raw, dict) or "error" in raw:
-            return f"Sorry, I could not enable {name}."
-        return _coerce_chat_result(raw).reply
 
     def _harness_mcp_disable(self, chat_id: int, name: str) -> str:
-        raw = self.command_handler.call(
+        return self._harness_call_reply(
+            sorry=f"Sorry, I could not disable {name}.",
             method="mcp_disable",
             chat_id=chat_id,
             http_path="/mcp",
             name=name,
             http_body={"command": "disable", "name": name},
         )
-        if isinstance(raw, str):
-            return raw
-        if not isinstance(raw, dict) or "error" in raw:
-            return f"Sorry, I could not disable {name}."
-        return _coerce_chat_result(raw).reply
 
     def _harness_skill_list(self, chat_id: int) -> str:
-        raw = self.command_handler.call(
+        return self._harness_call_reply(
+            sorry="Sorry, I could not fetch the skill list.",
             method="skill_list",
             chat_id=chat_id,
             http_path="/skill/{chat_id}",
             http_method="GET",
         )
-        if isinstance(raw, str):
-            return raw
-        if not isinstance(raw, dict) or "error" in raw:
-            return "Sorry, I could not fetch the skill list."
-        return _coerce_chat_result(raw).reply
 
     def _harness_skill_enable(self, chat_id: int, name: str) -> str:
-        raw = self.command_handler.call(
+        return self._harness_call_reply(
+            sorry=f"Sorry, I could not enable {name}.",
             method="skill_enable",
             chat_id=chat_id,
             http_path="/skill",
             name=name,
             http_body={"command": "enable", "name": name},
         )
-        if isinstance(raw, str):
-            return raw
-        if not isinstance(raw, dict) or "error" in raw:
-            return f"Sorry, I could not enable {name}."
-        return _coerce_chat_result(raw).reply
 
     def _harness_skill_disable(self, chat_id: int, name: str) -> str:
-        raw = self.command_handler.call(
+        return self._harness_call_reply(
+            sorry=f"Sorry, I could not disable {name}.",
             method="skill_disable",
             chat_id=chat_id,
             http_path="/skill",
             name=name,
             http_body={"command": "disable", "name": name},
         )
-        if isinstance(raw, str):
-            return raw
-        if not isinstance(raw, dict) or "error" in raw:
-            return f"Sorry, I could not disable {name}."
-        return _coerce_chat_result(raw).reply
 
     def _harness_skill_create(self, chat_id: int, name: str, content: str) -> str:
-        raw = self.command_handler.call(
+        return self._harness_call_reply(
+            sorry=f"Sorry, I could not create {name}.",
             method="skill_create",
             chat_id=chat_id,
             http_path="/skill",
@@ -249,11 +242,6 @@ class TelegramCommandMixin:
             content=content,
             http_body={"command": "create", "name": name, "content": content},
         )
-        if isinstance(raw, str):
-            return raw
-        if not isinstance(raw, dict) or "error" in raw:
-            return f"Sorry, I could not create {name}."
-        return _coerce_chat_result(raw).reply
 
     def _harness_plugin_list(self, chat_id: int) -> str:
         raw = self.command_handler.call(
@@ -271,27 +259,23 @@ class TelegramCommandMixin:
         return json.dumps(plugins, default=str, indent=2)
 
     def _harness_plugin_enable(self, chat_id: int, name: str, enabled: bool) -> str:
-        raw = self.command_handler.call(
+        return self._harness_call_reply(
+            sorry=f"Sorry, I could not {'enable' if enabled else 'disable'} {name}.",
             method="plugin_set_enabled",
             chat_id=chat_id,
             http_path="/plugin/enable",
             name=name,
             enabled=enabled,
         )
-        if isinstance(raw, dict) and "error" in raw:
-            return f"Sorry, I could not {'enable' if enabled else 'disable'} {name}."
-        return _coerce_chat_result(raw).reply
 
     def _harness_plugin_reload(self, chat_id: int, name: str) -> str:
-        raw = self.command_handler.call(
+        return self._harness_call_reply(
+            sorry=f"Sorry, I could not reload {name}.",
             method="plugin_reload",
             chat_id=chat_id,
             http_path="/plugin/reload",
             name=name,
         )
-        if isinstance(raw, dict) and "error" in raw:
-            return f"Sorry, I could not reload {name}."
-        return _coerce_chat_result(raw).reply
 
     def _harness_status(self, chat_id: int) -> str:
         raw = self.command_handler.call(
@@ -386,44 +370,32 @@ class TelegramCommandMixin:
         return raw.get("memory", "") or ""
 
     def _harness_summarize(self, chat_id: int) -> dict[str, Any]:
-        raw = self.command_handler.call(
+        return self._harness_call_result(
+            sorry="Sorry, I could not summarize the conversation.",
             method="summarize",
             chat_id=chat_id,
             http_path="/summarize/{chat_id}",
         )
-        if isinstance(raw, dict) and "error" in raw:
-            return {
-                "reply": "Sorry, I could not summarize the conversation.",
-                "notice": None,
-            }
-        return _coerce_chat_result(raw).to_dict()
 
     def _harness_recall(self, chat_id: int, query: str, tags: list[str] | None = None) -> str:
-        raw = self.command_handler.call(
+        return self._harness_call_reply(
+            sorry="Sorry, I could not recall anything.",
             method="recall",
             chat_id=chat_id,
             http_path="/recall",
             query=query,
             tags=tags or [],
         )
-        if isinstance(raw, dict) and "error" in raw:
-            return "Sorry, I could not recall anything."
-        return _coerce_chat_result(raw).reply
 
     def _harness_promote(self, chat_id: int, fact: str) -> dict[str, Any]:
-        raw = self.command_handler.call(
+        return self._harness_call_result(
+            sorry="Sorry, I could not promote that to persona memory.",
             method="promote",
             chat_id=chat_id,
             http_path="/promote",
             fact=fact,
             http_body={"message": fact},
         )
-        if isinstance(raw, dict) and "error" in raw:
-            return {
-                "reply": "Sorry, I could not promote that to persona memory.",
-                "notice": None,
-            }
-        return _coerce_chat_result(raw).to_dict()
 
     def _harness_models(self) -> str:
         raw = self.command_handler.call(
@@ -446,76 +418,51 @@ class TelegramCommandMixin:
         return f"Available models:\n{text}"
 
     def _harness_switch_model(self, chat_id: int, model: str) -> dict[str, Any]:
-        raw = self.command_handler.call(
+        return self._harness_call_result(
+            sorry=f"Sorry, I could not switch to model `{model}`.",
             method="switch_model",
             chat_id=chat_id,
             http_path="/switch-model",
             model=model,
         )
-        if isinstance(raw, dict) and "error" in raw:
-            return {
-                "reply": f"Sorry, I could not switch to model `{model}`.",
-                "notice": None,
-            }
-        return _coerce_chat_result(raw).to_dict()
 
     def _harness_new(self, chat_id: int) -> dict[str, Any]:
-        raw = self.command_handler.call(
+        return self._harness_call_result(
+            sorry="Sorry, I could not start a new session.",
             method="new_session",
             chat_id=chat_id,
             http_path="/new/{chat_id}",
         )
-        if isinstance(raw, dict) and "error" in raw:
-            return {
-                "reply": "Sorry, I could not start a new session.",
-                "notice": None,
-            }
-        return _coerce_chat_result(raw).to_dict()
 
     def _harness_stop(self, chat_id: int) -> dict[str, Any]:
-        raw = self.command_handler.call(
+        return self._harness_call_result(
+            sorry="Sorry, I could not stop the current turn.",
             method="stop",
             chat_id=chat_id,
             http_path="/stop",
         )
-        if isinstance(raw, dict) and "error" in raw:
-            return {
-                "reply": "Sorry, I could not stop the current turn.",
-                "notice": None,
-            }
-        return _coerce_chat_result(raw).to_dict()
 
     def _harness_restart(self, chat_id: int) -> dict[str, Any]:
-        raw = self.command_handler.call(
+        return self._harness_call_result(
+            sorry="Sorry, I could not restart the ACP transport.",
             method="restart",
             chat_id=chat_id,
             http_path="/restart",
         )
-        if isinstance(raw, dict) and "error" in raw:
-            return {
-                "reply": "Sorry, I could not restart the ACP transport.",
-                "notice": None,
-            }
-        return _coerce_chat_result(raw).to_dict()
 
     def _harness_graceful_restart(
         self,
         chat_id: int,
         service: str | None,
     ) -> dict[str, Any]:
-        raw = self.command_handler.call(
+        return self._harness_call_result(
+            sorry="Sorry, I could not schedule a graceful restart.",
             method="graceful_service_restart",
             chat_id=chat_id,
             http_path="/graceful-restart",
             service=service,
             reason="telegram command",
         )
-        if isinstance(raw, dict) and "error" in raw:
-            return {
-                "reply": "Sorry, I could not schedule a graceful restart.",
-                "notice": None,
-            }
-        return _coerce_chat_result(raw).to_dict()
 
     def _harness_state_event(
         self,
@@ -527,7 +474,8 @@ class TelegramCommandMixin:
         http_body = {"plugin": plugin, "event": event}
         if raw_args:
             http_body["params"] = {"raw_args": raw_args}
-        raw = self.command_handler.call(
+        return self._harness_call_reply(
+            sorry="Sorry, I could not dispatch that state event.",
             method="plugin_event",
             chat_id=chat_id,
             http_path="/state",
@@ -536,9 +484,6 @@ class TelegramCommandMixin:
             raw_args=raw_args,
             http_body=http_body,
         )
-        if isinstance(raw, dict) and "error" in raw:
-            return "Sorry, I could not dispatch that state event."
-        return _coerce_chat_result(raw).reply
 
     def _harness_sessions(self, chat_id: int) -> str:
         raw = self.command_handler.call(
@@ -561,32 +506,22 @@ class TelegramCommandMixin:
         return "Sessions:\n" + "\n".join(lines)
 
     def _harness_resume(self, chat_id: int, session_number: int) -> dict[str, Any]:
-        raw = self.command_handler.call(
+        return self._harness_call_result(
+            sorry="Sorry, I could not resume that session.",
             method="resume_session",
             chat_id=chat_id,
             http_path="/resume",
             session_number=session_number,
         )
-        if isinstance(raw, dict) and "error" in raw:
-            return {
-                "reply": "Sorry, I could not resume that session.",
-                "notice": None,
-            }
-        return _coerce_chat_result(raw).to_dict()
 
     def _harness_branch(self, chat_id: int, session_number: int) -> dict[str, Any]:
-        raw = self.command_handler.call(
+        return self._harness_call_result(
+            sorry="Sorry, I could not branch that session.",
             method="branch_session",
             chat_id=chat_id,
             http_path="/branch",
             session_number=session_number,
         )
-        if isinstance(raw, dict) and "error" in raw:
-            return {
-                "reply": "Sorry, I could not branch that session.",
-                "notice": None,
-            }
-        return _coerce_chat_result(raw).to_dict()
 
     def _harness_subagent(self, chat_id: int, prompt: str) -> ChatResult:
         return self.command_handler.handle("/subagent", chat_id=chat_id, arg=prompt)
