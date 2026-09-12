@@ -7,7 +7,7 @@ import os
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 import yaml
 from pydantic import BaseModel
@@ -397,6 +397,27 @@ class RuntimeConfigManager:
                     "Plugins config updated in memory but persistence failed"
                 )
             return "Plugins config updated"
+
+    def update_mesh_chat_map(
+        self,
+        chat_map: dict[str, str] | None = None,
+        chat_mapping: Literal["per_sender", "single", "session"] | None = None,
+        fallback_chat_id: str | None = None,
+    ) -> dict:
+        """Update the live mesh chat mapping and persist runtime overrides."""
+        with self._lock:
+            mesh = self.config.harness.mesh
+            if chat_map is not None:
+                mesh.chat_map.update(chat_map)
+            if chat_mapping is not None:
+                mesh.chat_mapping = chat_mapping
+            if fallback_chat_id is not None:
+                mesh.fallback_chat_id = fallback_chat_id
+            if not self._save_overrides_fn():
+                raise ConfigPersistenceError(
+                    "Mesh chat map updated in memory but persistence failed"
+                )
+            return self.get_config()
 
     def get_config(self) -> dict[str, Any]:
         """Return the current live runtime configuration (excluding secrets)."""

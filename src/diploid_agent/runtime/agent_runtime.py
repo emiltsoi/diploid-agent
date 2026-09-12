@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import sys
 import threading
@@ -15,7 +14,6 @@ from typing import Any, Literal
 from diploid_agent.acp_client import AcpLifecycleLog
 from diploid_agent.config import (
     Config,
-    ConfigPersistenceError,
     NotificationsConfig,
     PluginConfig,
     TaskConfig,
@@ -24,7 +22,7 @@ from diploid_agent.config import (
     WakerConfig,
 )
 from diploid_agent.context import ContextBuilder
-from diploid_agent.dispatch import Dispatch, DispatchStatus, DispatchStore
+from diploid_agent.dispatch import Dispatch, DispatchStore
 from diploid_agent.engine import AgentEngine, build_engine
 from diploid_agent.engine.router import ModelRouter
 from diploid_agent.locking import locked
@@ -37,7 +35,6 @@ from diploid_agent.models import (
     ChatState,
     RuntimeStatus,
     SessionRecord,
-    WakeEvent,
 )
 from diploid_agent.plan.manager import PlanManager
 from diploid_agent.plan.models import Plan, Task
@@ -47,6 +44,7 @@ from diploid_agent.runtime.actions import RuntimeActions
 from diploid_agent.runtime.auto_continue import RuntimeAutoContinue
 from diploid_agent.runtime.config_manager import RuntimeConfigManager
 from diploid_agent.runtime.event_bus import EventBus
+from diploid_agent.runtime.ingress import RuntimeIngress
 from diploid_agent.runtime.instance import InstanceManager
 from diploid_agent.runtime.lifecycle import RuntimeLifecycle
 from diploid_agent.runtime.mcp_skills import RuntimeMcpSkills
@@ -331,6 +329,16 @@ class AgentRuntime(RuntimeAPI):
             call_unlocked_fn=self._call_unlocked,
             suppress_auto_continue_fn=lambda *a, **k: self.suppress_auto_continue(*a, **k),
             acp_client_fn=lambda: getattr(self, "acp_client", None),
+        )
+        self._ingress = RuntimeIngress(
+            config=config,
+            lock=self._lock,
+            instance_manager=self.instance_manager,
+            wake_queue=self.wake_queue,
+            dispatch_store=self.dispatch_store,
+            turn_controller=self.turn_controller,
+            planning=self._planning,
+            ingress_handlers=self._ingress_handlers,
         )
         self._lifecycle = RuntimeLifecycle(
             state=self._state,
@@ -866,24 +874,11 @@ class AgentRuntime(RuntimeAPI):
 
     def register_ingress_handler(self, protocol: str, handler: Any) -> None:
         """Register a protocol-specific inbound HTTP handler."""
-        self._ingress_handlers[protocol] = handler
+        self._ingress.register_ingress_handler(protocol, handler)
 
     async def handle_ingress(self, protocol: str, request: Any) -> Any:
         """Dispatch an inbound HTTP request to the registered handler."""
-        from fastapi import HTTPException, Request, status
-
-        if not isinstance(request, Request):
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Invalid ingress request object",
-            )
-        handler = self._ingress_handlers.get(protocol)
-        if handler is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Unknown ingress protocol: {protocol}",
-            )
-        return await handler.handle(request)
+        return await self._ingress.handle_ingress(protocol, request)
 
     def process(
         self,
@@ -896,83 +891,25 @@ class AgentRuntime(RuntimeAPI):
         reply_to_message_id: int | None = None,
         notify: bool = True,
     ) -> ChatResult:
-        if not self.instance_manager.acquire(chat_id):
-            # The chat is busy with another turn. Rather than dropping the user
-            # message, queue it as a high-priority wake so it runs when the
-            # current turn releases the lock.
-            payload = {
-                "user_message": user_message,
-                "model": model,
-                "reply_to": reply_to,
-                "reply_to_is_bot": reply_to_is_bot,
-                "reply_to_message_id": reply_to_message_id,
-                "notify": True,
-                "retry_after": 2.0,
-            }
-            self.wake_queue.enqueue(
-                WakeEvent(
-                    id="",
-                    chat_id=chat_id,
-                    reason="user_request",
-                    priority=10,
-                    scheduled_at=time.time(),
-                    payload=payload,
-                    silent=False,
-                    created_at=time.time(),
-                    ready=True,
-                )
-            )
-            return ChatResult(
-                reply="I'll get back to you in a moment.",
-                notice="This chat is busy; your message was queued.",
-            )
-        try:
-            result = self.turn_controller.process(
-                chat_id,
-                user_message,
-                model=model,
-                reply_to=reply_to,
-                reply_to_is_bot=reply_to_is_bot,
-                reply_to_message_id=reply_to_message_id,
-                notify=notify,
-                other_instance_running=False,
-            )
-            if result is not None and reply_to_message_id is not None:
-                result.reply_to_message_id = reply_to_message_id
-            return result
-        finally:
-            self.instance_manager.release(chat_id)
+        return self._ingress.process(
+            chat_id,
+            user_message,
+            model=model,
+            reply_to=reply_to,
+            reply_to_is_bot=reply_to_is_bot,
+            reply_to_message_id=reply_to_message_id,
+            notify=notify,
+        )
 
-    @locked
     def dispatch(
         self,
         chat_id: str,
         context: str | None = None,
     ) -> ChatResult:
-        return self.turn_controller.dispatch(chat_id, context=context)
+        return self._ingress.dispatch(chat_id, context=context)
 
     def continue_turn(self, dispatch_id: str, result: str) -> ChatResult:
-        dispatch = self.dispatch_store.get(dispatch_id)
-        if dispatch is None:
-            return ChatResult(reply="Unknown dispatch.")
-        chat_id = dispatch.chat_id
-        if not self.instance_manager.acquire(chat_id):
-            return ChatResult(reply="Another instance is currently handling this chat.")
-        wake_id = f"wake-{dispatch_id}"
-        self.wake_queue.ready(wake_id, now=time.time())
-        try:
-            chat_result = self.turn_controller.continue_turn(dispatch_id, result)
-            if chat_result.turn_number is not None:
-                self.wake_queue.complete(wake_id)
-            return chat_result
-        except Exception:
-            self.wake_queue.fail(
-                wake_id,
-                retry_after=self.config.harness.waker.retry_after,
-            )
-            raise
-        finally:
-            self.instance_manager.release(chat_id)
+        return self._ingress.continue_turn(dispatch_id, result)
 
     def wake(
         self,
@@ -981,72 +918,9 @@ class AgentRuntime(RuntimeAPI):
         reason: str | None = None,
         silent: bool | None = None,
     ) -> ChatResult:
-        event = None
-        if event_id is not None:
-            event = self.wake_queue.get(event_id)
-            if event is None:
-                return ChatResult(reply="Unknown or already completed wake event.")
-            chat_id = event.chat_id
-            reason = event.reason
-            if silent is None:
-                silent = event.silent
-
-        if silent is None:
-            silent = False
-        reason = reason or "user_request"
-
-        if not self.instance_manager.acquire(chat_id):
-            return ChatResult(reply="Chat is busy; wake re-enqueued.")
-
-        try:
-            payload = event.payload if event else {}
-            if reason == "plan_task_update":
-                user_message = self._build_plan_task_update_message(payload)
-            elif reason == "plan_completed":
-                user_message = self._build_plan_completed_message(payload)
-            else:
-                if payload and isinstance(payload.get("user_message"), str):
-                    user_message = payload["user_message"]
-                else:
-                    user_message = f"[system wake: {reason}]"
-                    if payload:
-                        user_message += f"\n{json.dumps(payload, default=str)}"
-
-            model = payload.get("model")
-            reply_to = payload.get("reply_to")
-            reply_to_is_bot = payload.get("reply_to_is_bot")
-            reply_to_message_id = payload.get("reply_to_message_id")
-            wake_notify = payload.get("notify", not silent)
-
-            if reason == "dispatch" and "dispatch_id" in payload:
-                dispatch = self.dispatch_store.get(payload["dispatch_id"])
-                if dispatch and dispatch.status in (
-                    DispatchStatus.PENDING,
-                    DispatchStatus.TIMEOUT,
-                    DispatchStatus.CANCELLED,
-                    DispatchStatus.FAILED,
-                ):
-                    return self.continue_turn(
-                        payload["dispatch_id"],
-                        payload.get("result", dispatch.result or ""),
-                    )
-
-            result = self.turn_controller.process(
-                chat_id,
-                user_message,
-                model=model,
-                reply_to=reply_to,
-                reply_to_is_bot=reply_to_is_bot,
-                reply_to_message_id=reply_to_message_id,
-                wake_event=event,
-                notify=wake_notify,
-                other_instance_running=False,
-            )
-            if result is not None and reply_to_message_id is not None:
-                result.reply_to_message_id = reply_to_message_id
-            return result
-        finally:
-            self.instance_manager.release(chat_id)
+        return self._ingress.wake(
+            chat_id, event_id=event_id, reason=reason, silent=silent
+        )
 
     def _enqueue_plan_task_wake(self, plan: Plan, task: Task) -> None:
         """Enqueue a non-silent wake that reports one task's completion or failure."""
@@ -1093,19 +967,11 @@ class AgentRuntime(RuntimeAPI):
         fallback_chat_id: str | None = None,
     ) -> dict:
         """Update the live mesh chat mapping and persist runtime overrides."""
-        with self._lock:
-            mesh = self.config.harness.mesh
-            if chat_map is not None:
-                mesh.chat_map.update(chat_map)
-            if chat_mapping is not None:
-                mesh.chat_mapping = chat_mapping
-            if fallback_chat_id is not None:
-                mesh.fallback_chat_id = fallback_chat_id
-            if not self._save_runtime_overrides():
-                raise ConfigPersistenceError(
-                    "Mesh chat map updated in memory but persistence failed"
-                )
-            return self.get_config()
+        return self._config_manager.update_mesh_chat_map(
+            chat_map=chat_map,
+            chat_mapping=chat_mapping,
+            fallback_chat_id=fallback_chat_id,
+        )
 
     def graceful_service_restart(
         self,
