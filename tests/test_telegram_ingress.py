@@ -23,6 +23,7 @@ from diploid_agent.telegram_ingress import create_app
 class FakeClient:
     def __init__(self, models: list[str] | None = None) -> None:
         self._models = models or ["swe-1-7"]
+        self.set_model_calls: list[tuple[str, str]] = []
 
     def create_session(
         self, prompt: str, *, cwd: Path | None = None, model: str | None = None, **kwargs
@@ -45,6 +46,10 @@ class FakeClient:
 
     def session_alive(self, session_id: str) -> bool:
         return False
+
+    def set_session_model(self, session_id: str, model: str) -> str:
+        self.set_model_calls.append((session_id, model))
+        return model
 
     def cancel(self, session_id: str) -> None:
         return None
@@ -229,6 +234,21 @@ def test_switch_model(client: TestClient) -> None:
     )
     assert response.status_code == 200
     assert "glm-5-2" in response.json()["reply"]
+
+
+def test_switch_model_in_place(client: TestClient) -> None:
+    """`in_place` switches the model on the live session without a new session."""
+    client.post("/chat", json={"chat_id": "chat-3ip", "message": "hello"})
+    response = client.post(
+        "/switch-model",
+        json={"chat_id": "chat-3ip", "model": "glm-5-2", "in_place": True},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert "glm-5-2" in body["reply"]
+    assert body["session_id"] == "session-1"
+    fake = client.app.state.harness.client
+    assert fake.set_model_calls == [("session-1", "glm-5-2")]
 
 
 def test_list_sessions(client: TestClient) -> None:

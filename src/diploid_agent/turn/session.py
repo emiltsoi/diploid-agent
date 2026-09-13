@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 
+from diploid_agent.acp_client.utils import _normalize_model
 from diploid_agent.engine import TurnRequest
 from diploid_agent.locking import locked
 from diploid_agent.models import ChatResult, SessionRecord
@@ -23,6 +25,33 @@ logger = logging.getLogger(__name__)
 class TurnSession(TurnComponent):
     """Session management for a single chat."""
 
+    def _session_op_busy(self, chat_id: str) -> ChatResult | None:
+        """Refusal while a turn or another session op is in flight for the chat.
+
+        Session ops release the runtime lock for their ACP calls
+        (``_call_unlocked``); without this gate a turn or a second op could
+        slip into that window and overwrite the session record mid-flight.
+        """
+        if chat_id in self.runtime._active_turns or chat_id in self.runtime._session_ops:
+            return ChatResult(
+                reply="A turn or session operation is in progress for this chat.",
+                notice="Wait for it to finish, then retry.",
+            )
+        return None
+
+    @contextlib.contextmanager
+    def _hold_session_op(self, chat_id: str):
+        """Mark a session-mutating op as in-flight for the chat.
+
+        Keeps the busy gate at ``process``/``continue_turn``/other session ops
+        closed across this op's ``_call_unlocked`` windows.
+        """
+        self.runtime._session_ops.add(chat_id)
+        try:
+            yield
+        finally:
+            self.runtime._session_ops.discard(chat_id)
+
     def _can_resume_record(self, chat_id: str, record: SessionRecord, use_model: str) -> bool:
         """Return True if the ACP session for this record can be resumed."""
         if not record or not record.session_id:
@@ -32,12 +61,15 @@ class TurnSession(TurnComponent):
         if record.last_stop_reason == "timeout":
             return False
         current_mcp = sorted(self.runtime._mcp_skills._active_mcp_server_names(chat_id))
-        record_mcp = sorted(record.enabled_mcp_servers or [])
-        if current_mcp != record_mcp:
+        # None means the field predates tracking — "unknown", not "empty" —
+        # so it cannot prove drift; only a known mismatch blocks resume.
+        if (
+            record.enabled_mcp_servers is not None
+            and sorted(record.enabled_mcp_servers) != current_mcp
+        ):
             return False
         current_skills = sorted(self.runtime._mcp_skills._active_skill_names(chat_id))
-        record_skills = sorted(record.enabled_skills or [])
-        return current_skills == record_skills
+        return record.enabled_skills is None or sorted(record.enabled_skills) == current_skills
 
     def _finalize_session_activation(
         self,
@@ -200,39 +232,119 @@ class TurnSession(TurnComponent):
         )
 
     @locked
-    def switch_model(self, chat_id: str, model: str) -> ChatResult:
-        """Switch the model for a chat by starting a fresh Devin session."""
-        record = self.runtime._active_record(chat_id)
-        current_model = self.runtime._prompts._model(record)
-        return self._start_fresh_session(
-            chat_id,
-            desired_model=model,
-            kind="switch_model",
-            label=f"switched to {model}",
-            system_message=f"switched to model {model}",
-            reply_prefix=f"Now running on model `{model}`.",
-            old_model=current_model,
+    def switch_model(self, chat_id: str, model: str, *, in_place: bool = False) -> ChatResult:
+        """Switch the model for a chat.
+
+        By default this archives the active session and starts a fresh ACP
+        session on the new model (see docs/model-switching.md). With
+        ``in_place=True`` and a live session on record, the model is instead
+        changed on the existing ACP session via ``session/set_config_option``
+        — the session id and context survive, but no persona/memory
+        re-injection runs.
+        """
+        if self.runtime._restart_draining.is_set():
+            return ChatResult(
+                reply="The service is draining for a restart; please retry in a moment.",
+                notice="Restart in progress; the model was not switched.",
+            )
+        if (busy := self._session_op_busy(chat_id)) is not None:
+            return busy
+        with self._hold_session_op(chat_id):
+            record = self.runtime._active_record(chat_id)
+            current_model = self.runtime._prompts._model(record)
+            if in_place and record is not None and record.session_id:
+                return self._switch_model_in_place(chat_id, record, model, current_model)
+            return self._start_fresh_session(
+                chat_id,
+                desired_model=model,
+                kind="switch_model",
+                label=f"switched to {model}",
+                system_message=f"switched to model {model}",
+                reply_prefix=f"Now running on model `{model}`.",
+                old_model=current_model,
+            )
+
+    def _switch_model_in_place(
+        self,
+        chat_id: str,
+        record: SessionRecord,
+        model: str,
+        current_model: str,
+    ) -> ChatResult:
+        """Apply a model change to the live ACP session, no session boundary.
+
+        The caller holds the chat's ``_session_ops`` marker, so no turn or
+        other session op can interleave with the ACP call or the record write.
+        """
+        desired = _normalize_model(model)
+        if desired == _normalize_model(current_model):
+            return ChatResult(reply=f"Already using model `{desired}` for this chat.")
+        try:
+            applied = self.runtime._call_unlocked(
+                self.runtime.engine.set_session_model, record.session_id, desired
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("In-place model switch failed for %s: %s", chat_id, exc)
+            return ChatResult(
+                reply=f"Could not switch to `{desired}` in place: {exc}",
+                notice=(
+                    "The live session's model state may be inconsistent; "
+                    "retry the switch or use a fresh-session model switch."
+                ),
+            )
+        if self.runtime._active_record(chat_id) is not record:
+            return ChatResult(
+                reply=f"Applied `{applied or desired}`, but the active session changed mid-switch.",
+                notice="Retry the model switch to update the current session.",
+            )
+        record.model = applied or desired
+        record.updated_at = time.time()
+        self.runtime._append_record(record)
+        self.runtime.record_system_note(
+            chat_id, f"[model switched to {record.model} in place]"
+        )
+        if self.runtime.lifecycle_log is not None:
+            self.runtime.lifecycle_log.write(
+                "model.switch_in_place",
+                chat_id=chat_id,
+                session_id=record.session_id,
+                model=record.model,
+            )
+        return ChatResult(
+            reply=f"Now running on model `{record.model}` (same session).",
+            session_id=record.session_id,
+            session_number=record.session_number,
+            turn_number=record.turn_number,
         )
 
     @locked
     def new_session(self, chat_id: str, model: str | None = None) -> ChatResult:
         """Start a fresh ACP session for a chat, clearing the active context."""
-        record = self.runtime._active_record(chat_id)
-        plugin_overrides = record.plugin_overrides if record else None
-        return self._start_fresh_session(
-            chat_id,
-            desired_model=model or self.runtime._prompts._model(record),
-            kind="new",
-            label="new session",
-            system_message="new session started",
-            reply_prefix="New session started.",
-            clear_active=True,
-            plugin_overrides=plugin_overrides,
-        )
+        if (busy := self._session_op_busy(chat_id)) is not None:
+            return busy
+        with self._hold_session_op(chat_id):
+            record = self.runtime._active_record(chat_id)
+            plugin_overrides = record.plugin_overrides if record else None
+            return self._start_fresh_session(
+                chat_id,
+                desired_model=model or self.runtime._prompts._model(record),
+                kind="new",
+                label="new session",
+                system_message="new session started",
+                reply_prefix="New session started.",
+                clear_active=True,
+                plugin_overrides=plugin_overrides,
+            )
 
     @locked
     def resume_session(self, chat_id: str, session_number: int) -> ChatResult:
         """Resume an archived session as the active one."""
+        if (busy := self._session_op_busy(chat_id)) is not None:
+            return busy
+        with self._hold_session_op(chat_id):
+            return self._resume_session(chat_id, session_number)
+
+    def _resume_session(self, chat_id: str, session_number: int) -> ChatResult:
         state = self.runtime._chat_state(chat_id)
         source = state.sessions.get(session_number)
         if source is None:
@@ -432,6 +544,12 @@ class TurnSession(TurnComponent):
     @locked
     def branch_session(self, chat_id: str, session_number: int) -> ChatResult:
         """Branch from an archived session, creating a new active session."""
+        if (busy := self._session_op_busy(chat_id)) is not None:
+            return busy
+        with self._hold_session_op(chat_id):
+            return self._branch_session(chat_id, session_number)
+
+    def _branch_session(self, chat_id: str, session_number: int) -> ChatResult:
         state = self.runtime._chat_state(chat_id)
         source = state.sessions.get(session_number)
         if source is None:

@@ -43,6 +43,7 @@ def register_models(
             chat_id=req.chat_id,
             model=req.model,
             catch=False,
+            **({"in_place": True} if req.in_place else {}),
         )
         return _to_response(raw)
 

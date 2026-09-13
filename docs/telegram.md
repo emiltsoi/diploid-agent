@@ -217,7 +217,7 @@ message, so the conversation thread is visible.
 | `/state <plugin> <event> [args...]` | Dispatch a state event to a plugin (e.g. `/state curriculum add_word hola hello`). |
 | `/memory` | Show per-chat memory. |
 | `/models` | List ACP model names. |
-| `/model <name>` | Switch this chat to a new model. |
+| `/model [--in-place] <name>` | Switch this chat to a new model. `--in-place` changes the model on the live session instead of starting a new one. |
 | `/new` | Start a fresh Devin session for this chat while keeping chat memory. |
 | `/stop` | Cancel the current turn and return a partial reply. |
 | `/restart` | Kill the ACP subprocess and start a fresh transport. |

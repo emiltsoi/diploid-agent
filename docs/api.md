@@ -77,7 +77,9 @@ echoed back.
 
 ## `POST /switch-model`
 
-Switch the model for a chat.
+Switch the model for a chat. By default this starts a fresh ACP session on
+the new model; pass `"in_place": true` to instead change the model on the live
+session via `session/set_config_option`, keeping the session id and context.
 
 ```bash
 curl -X POST http://127.0.0.1:4003/switch-model \
@@ -93,6 +95,9 @@ Response:
   "notice": null
 }
 ```
+
+See [model-switching.md](model-switching.md) for the in-place variant's
+trade-offs.
 
 ## `POST /stop`
 

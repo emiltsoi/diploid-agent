@@ -281,6 +281,12 @@ for details on `/new`, `/resume`, `/branch`, `/sessions`, and auto-recovery.
    - Records the switch as a turn in the transcript/memory.
 3. The agent acknowledges the new model.
 
+With `in_place` (`/model --in-place <name>` or `"in_place": true` in the POST
+body) the flow is shorter: `engine.set_session_model` issues
+`session/set_config_option` on the live session, `SessionRecord.model` is
+updated, and a system note is appended to the transcript — no `session/new`,
+no archive, no activation prompt.
+
 ## Data flow for a background subagent
 
 1. User calls `POST /subagent` or Telegram `/subagent <prompt>`, or the ACP

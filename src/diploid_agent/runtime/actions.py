@@ -450,9 +450,9 @@ class RuntimeActions:
         )
 
     @_actions_locked
-    def switch_model(self, chat_id: str, model: str) -> ChatResult:
+    def switch_model(self, chat_id: str, model: str, *, in_place: bool = False) -> ChatResult:
         """Switch the model for a chat."""
-        return self.turn_controller.switch_model(chat_id, model)
+        return self.turn_controller.switch_model(chat_id, model, in_place=in_place)
 
     def new_session(self, chat_id: str, model: str | None = None) -> ChatResult:
         """Start a fresh ACP session for a chat."""

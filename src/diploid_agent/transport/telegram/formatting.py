@@ -19,7 +19,7 @@ _TELEGRAM_HELP = """Available commands:
 /state <plugin> <event> [args...] - dispatch a state event to a plugin
 /memory - show per-chat memory
 /models - list ACP model names
-/model <name> - switch this chat to a new model
+/model [--in-place] <name> - switch this chat to a new model (--in-place keeps the live session)
 /new - start a fresh Devin session while keeping chat memory
 /stop - cancel the current turn and return a partial reply
 /restart - kill the ACP subprocess and start a fresh transport

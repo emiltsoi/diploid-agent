@@ -447,7 +447,7 @@ class AcpSessionOps:
         # no-op model changes can re-render the session's system prefix and
         # destabilize the ACP subprocess.
         if self._state._session_models.get(session_id) != use_model:
-            await self._set_session_model(session_id, use_model)
+            await self._client._set_session_model(session_id, use_model)
 
         return await self._client._prompt(
             session_id,

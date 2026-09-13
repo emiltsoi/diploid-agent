@@ -431,13 +431,20 @@ class TelegramCommandMixin:
             text = text[:3997] + "..."
         return f"Available models:\n{text}"
 
-    def _harness_switch_model(self, chat_id: int, model: str) -> dict[str, Any]:
+    def _harness_switch_model(
+        self, chat_id: int, model: str, *, in_place: bool = False
+    ) -> dict[str, Any]:
+        # Pass `in_place` only when set: older switch_model signatures on the
+        # runtime/HTTP side lack the kwarg.
+        extra: dict[str, Any] = {"in_place": True} if in_place else {}
         return self._harness_call_result(
             sorry=f"Sorry, I could not switch to model `{model}`.",
             method="switch_model",
             chat_id=chat_id,
             http_path="/switch-model",
             model=model,
+            http_body={"model": model, **extra},
+            **extra,
         )
 
     def _harness_new(self, chat_id: int) -> dict[str, Any]:
@@ -666,11 +673,16 @@ class TelegramCommandMixin:
             reply = self._harness_models()
             self._send_text(chat_id, reply, reply_to_message_id=chat_input.message_id)
         elif command == "/model":
-            if not arg:
-                reply = "Usage: /model <name>"
+            model_args = arg.split()
+            in_place = "--in-place" in model_args
+            model_args = [a for a in model_args if a != "--in-place"]
+            if not model_args or any(a.startswith("--") for a in model_args):
+                reply = "Usage: /model [--in-place] <name>"
                 self._send_text(chat_id, reply, reply_to_message_id=chat_input.message_id)
             else:
-                result = self._harness_switch_model(chat_id, arg)
+                result = self._harness_switch_model(
+                    chat_id, " ".join(model_args), in_place=in_place
+                )
                 self._send_result(chat_id, result, reply_to_message_id=chat_input.message_id)
         elif command == "/new":
             result = self._harness_new(chat_id)

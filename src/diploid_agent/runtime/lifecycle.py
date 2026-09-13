@@ -40,6 +40,7 @@ _WAKE_RETRY_REPLIES = {
     "A turn is already in progress for this chat.",
     "Another instance is currently handling this chat.",
     "A turn is already in progress; continuation queued.",
+    "A session operation is in progress for this chat.",
 }
 
 # Replies that should be dropped rather than delivered to the user. These are

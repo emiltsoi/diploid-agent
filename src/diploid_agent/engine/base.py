@@ -87,6 +87,17 @@ class AgentEngine(abc.ABC):
         """
         return session_id
 
+    def set_session_model(self, session_id: str, model: str) -> str:
+        """Switch the model on a live session, keeping its context.
+
+        Returns the model id actually applied. Engines that cannot switch a
+        session's model in place raise ``NotImplementedError`` so callers can
+        fall back to starting a fresh session.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support in-place model switching"
+        )
+
     @abc.abstractmethod
     def close(self) -> None:
         """Close the engine and release resources."""

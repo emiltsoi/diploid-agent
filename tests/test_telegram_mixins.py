@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from diploid_agent.models import ChatResult
 from diploid_agent.transport.telegram.commands import TelegramCommandMixin
+from diploid_agent.transport.telegram.models import ChatInput
 from diploid_agent.transport.telegram.sender import TelegramSenderMixin
 from diploid_agent.transport.telegram.state import TelegramStateMixin
 
@@ -72,3 +73,76 @@ def test_harness_call_reply_error_dict_returns_sorry() -> None:
     commands.command_handler = _StubHandler({"error": "boom"})
     reply = commands._harness_call_reply(sorry="Sorry, I could not reload x.")
     assert reply == "Sorry, I could not reload x."
+
+
+class _RecordingHandler:
+    """Stands in for CommandHandler: records call kwargs, returns a result."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def call(self, **kwargs):
+        self.calls.append(kwargs)
+        return ChatResult(reply="switched")
+
+
+def _commands_recording() -> tuple[_Commands, _RecordingHandler, list[str]]:
+    commands = _Commands()
+    handler = _RecordingHandler()
+    sent_texts: list[str] = []
+    commands.command_handler = handler
+    commands._send_text = lambda chat_id, text, **kw: sent_texts.append(text)
+    commands._send_result = lambda chat_id, result, **kw: None
+    return commands, handler, sent_texts
+
+
+def _chat_input(text: str) -> ChatInput:
+    return ChatInput(chat_id=1, message_id=2, text=text)
+
+
+def test_model_command_in_place_flag() -> None:
+    commands, handler, _ = _commands_recording()
+    ci = _chat_input("/model --in-place glm-5.2")
+    assert commands._handle_command(ci, "/model", "--in-place glm-5.2") is True
+    call = handler.calls[-1]
+    assert call["method"] == "switch_model"
+    assert call["model"] == "glm-5.2"
+    assert call["in_place"] is True
+    assert call["http_body"] == {"model": "glm-5.2", "in_place": True}
+
+
+def test_model_command_in_place_flag_trailing() -> None:
+    """`/model <name> --in-place` is accepted — the flag may appear anywhere."""
+    commands, handler, _ = _commands_recording()
+    ci = _chat_input("/model glm-5.2 --in-place")
+    assert commands._handle_command(ci, "/model", "glm-5.2 --in-place") is True
+    call = handler.calls[-1]
+    assert call["model"] == "glm-5.2"
+    assert call["in_place"] is True
+
+
+def test_model_command_plain_omits_in_place() -> None:
+    """`/model <name>` forwards no `in_place` kwarg — older runtimes keep working."""
+    commands, handler, _ = _commands_recording()
+    ci = _chat_input("/model glm-5.2")
+    assert commands._handle_command(ci, "/model", "glm-5.2") is True
+    call = handler.calls[-1]
+    assert call["model"] == "glm-5.2"
+    assert "in_place" not in call
+    assert call["http_body"] == {"model": "glm-5.2"}
+
+
+def test_model_command_unknown_flag_shows_usage() -> None:
+    commands, handler, sent_texts = _commands_recording()
+    ci = _chat_input("/model --bogus glm-5.2")
+    assert commands._handle_command(ci, "/model", "--bogus glm-5.2") is True
+    assert handler.calls == []
+    assert sent_texts == ["Usage: /model [--in-place] <name>"]
+
+
+def test_model_command_no_args_shows_usage() -> None:
+    commands, handler, sent_texts = _commands_recording()
+    ci = _chat_input("/model --in-place")
+    assert commands._handle_command(ci, "/model", "--in-place") is True
+    assert handler.calls == []
+    assert sent_texts == ["Usage: /model [--in-place] <name>"]

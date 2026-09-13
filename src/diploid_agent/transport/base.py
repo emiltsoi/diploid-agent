@@ -104,7 +104,7 @@ class RuntimeAPI(abc.ABC):
         """Branch a session."""
 
     @abc.abstractmethod
-    def switch_model(self, chat_id: str, model: str) -> Any:
+    def switch_model(self, chat_id: str, model: str, *, in_place: bool = False) -> Any:
         """Switch the model for a chat."""
 
     @abc.abstractmethod

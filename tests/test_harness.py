@@ -351,6 +351,249 @@ def test_model_switch_starts_new_session(monkeypatch, tmp_path: Path) -> None:
     assert result.session_id == "session-glm-5-2"
 
 
+def test_model_switch_in_place_keeps_session(monkeypatch, tmp_path: Path) -> None:
+    """`/model --in-place` switches the model on the live ACP session."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root)
+    harness = ConversationHarness(config)
+
+    create_calls: list[str | None] = []
+
+    def fake_create_session(prompt, *, cwd=None, model=None, **kwargs):
+        create_calls.append(model)
+        return AcpPromptResult(reply=f"Ready. — {model}", session_id="session-1")
+
+    set_calls: list[tuple[str, str]] = []
+
+    def fake_set_session_model(session_id: str, model: str) -> str:
+        set_calls.append((session_id, model))
+        return model
+
+    send_calls: list[tuple[str, str | None]] = []
+
+    def fake_send_message(session_id, prompt, *, cwd=None, model=None, **kwargs):
+        send_calls.append((session_id, model))
+        return AcpPromptResult(reply="Follow-up.", session_id=session_id)
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+    monkeypatch.setattr(harness.client, "send_message", fake_send_message)
+    monkeypatch.setattr(harness.client, "set_session_model", fake_set_session_model)
+
+    try:
+        result1 = harness.process("chat-ip", "hello")
+        assert result1.session_id == "session-1"
+
+        result = harness.switch_model("chat-ip", "glm-5.2", in_place=True)
+        assert "glm-5-2" in result.reply
+        assert result.session_id == "session-1"
+        assert result.session_number == result1.session_number
+        assert set_calls == [("session-1", "glm-5-2")]
+        assert len(create_calls) == 1  # no new ACP session was started
+
+        record = harness._active_record("chat-ip")
+        assert record.model == "glm-5-2"
+
+        # Follow-up turns keep the switched model.
+        harness.process("chat-ip", "still there?")
+        assert send_calls[-1] == ("session-1", "glm-5-2")
+    finally:
+        harness.client.close()
+
+
+def test_model_switch_in_place_same_model_is_noop(monkeypatch, tmp_path: Path) -> None:
+    """An in-place switch to the current model does not touch the engine."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root)
+    harness = ConversationHarness(config)
+
+    monkeypatch.setattr(
+        harness.client,
+        "create_session",
+        lambda prompt, *, cwd=None, model=None, **kwargs: AcpPromptResult(
+            reply="Ready.", session_id="session-1"
+        ),
+    )
+    set_calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        harness.client,
+        "set_session_model",
+        lambda session_id, model: set_calls.append((session_id, model)),
+    )
+
+    try:
+        harness.process("chat-same", "hello")
+        # `swe-1.7` normalizes to the running model `swe-1-7`.
+        result = harness.switch_model("chat-same", "swe-1.7", in_place=True)
+        assert "Already using model `swe-1-7`" in result.reply
+        assert set_calls == []
+    finally:
+        harness.client.close()
+
+
+def test_model_switch_in_place_without_session_falls_back(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """With no live session, an in-place switch falls back to a fresh session."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root)
+    harness = ConversationHarness(config)
+
+    create_calls: list[str | None] = []
+
+    def fake_create_session(prompt, *, cwd=None, model=None, **kwargs):
+        create_calls.append(model)
+        return AcpPromptResult(reply=f"Ready. — {model}", session_id=f"session-{model}")
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+
+    try:
+        result = harness.switch_model("chat-new", "glm-5-2", in_place=True)
+        assert "glm-5-2" in result.reply
+        assert result.session_id == "session-glm-5-2"
+        assert create_calls == ["glm-5-2"]
+    finally:
+        harness.client.close()
+
+
+def test_model_switch_in_place_during_turn_is_refused(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """An in-place switch is refused while a turn is running for the chat."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root)
+    harness = ConversationHarness(config)
+
+    monkeypatch.setattr(
+        harness.client,
+        "create_session",
+        lambda prompt, *, cwd=None, model=None, **kwargs: AcpPromptResult(
+            reply="Ready.", session_id="session-1"
+        ),
+    )
+    set_calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        harness.client,
+        "set_session_model",
+        lambda session_id, model: set_calls.append((session_id, model)),
+    )
+
+    from diploid_agent.models import ActiveTurn
+
+    try:
+        harness.process("chat-busy", "hello")
+        harness._active_turns["chat-busy"] = ActiveTurn(
+            "chat-busy", "session-1", "working", time.time()
+        )
+        result = harness.switch_model("chat-busy", "glm-5-2", in_place=True)
+        assert "in progress" in result.reply
+        assert set_calls == []
+    finally:
+        harness.client.close()
+
+
+def test_model_switch_in_place_engine_error_leaves_record(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A failed in-place switch reports the error and keeps the old model."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root)
+    harness = ConversationHarness(config)
+
+    monkeypatch.setattr(
+        harness.client,
+        "create_session",
+        lambda prompt, *, cwd=None, model=None, **kwargs: AcpPromptResult(
+            reply="Ready.", session_id="session-1"
+        ),
+    )
+
+    def fake_set_session_model(session_id: str, model: str) -> str:
+        raise RuntimeError("Session not found")
+
+    monkeypatch.setattr(harness.client, "set_session_model", fake_set_session_model)
+
+    try:
+        harness.process("chat-err", "hello")
+        result = harness.switch_model("chat-err", "glm-5-2", in_place=True)
+        assert "Could not switch" in result.reply
+        record = harness._active_record("chat-err")
+        assert record.model == "swe-1-7"
+        assert record.session_id == "session-1"
+    finally:
+        harness.client.close()
+
+
+def test_session_op_blocks_turns_and_other_ops(monkeypatch, tmp_path: Path) -> None:
+    """While an in-place switch is in flight, turns and session ops are refused.
+
+    The `_session_ops` marker stays held across the unlocked ACP call so a
+    turn starting mid-switch cannot pin a stale `record.model` and silently
+    revert the switch when it finalizes.
+    """
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root)
+    harness = ConversationHarness(config)
+
+    monkeypatch.setattr(
+        harness.client,
+        "create_session",
+        lambda prompt, *, cwd=None, model=None, **kwargs: AcpPromptResult(
+            reply="Ready.", session_id="session-1"
+        ),
+    )
+    send_calls: list[str | None] = []
+
+    def fake_send_message(session_id, prompt, *, cwd=None, model=None, **kwargs):
+        send_calls.append(model)
+        return AcpPromptResult(reply="Follow-up.", session_id=session_id)
+
+    monkeypatch.setattr(harness.client, "send_message", fake_send_message)
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocking_set_session_model(session_id: str, model: str) -> str:
+        entered.set()
+        assert release.wait(timeout=30)
+        return model
+
+    monkeypatch.setattr(harness.client, "set_session_model", blocking_set_session_model)
+
+    try:
+        harness.process("chat-gate", "hello")
+
+        outcome: dict[str, ChatResult] = {}
+        switch = threading.Thread(
+            target=lambda: outcome.setdefault(
+                "result", harness.switch_model("chat-gate", "glm-5-2", in_place=True)
+            ),
+            daemon=True,
+        )
+        switch.start()
+        assert entered.wait(timeout=10)
+        assert "chat-gate" in harness._session_ops
+
+        # A user message and another session op are both refused while the
+        # switch holds the chat.
+        busy_turn = harness.process("chat-gate", "are you there?")
+        assert "session operation is in progress" in busy_turn.reply
+        busy_new = harness.new_session("chat-gate")
+        assert "in progress" in busy_new.reply
+        assert send_calls == []
+
+        release.set()
+        switch.join(timeout=30)
+        result = outcome["result"]
+        assert "glm-5-2" in result.reply
+        assert result.session_id == "session-1"
+        assert "chat-gate" not in harness._session_ops
+        record = harness._active_record("chat-gate")
+        assert record.model == "glm-5-2"
+    finally:
+        release.set()
+        harness.client.close()
+
+
 def test_partial_turn_returns_partial_notice(monkeypatch, tmp_path: Path) -> None:
     """A cancelled/partial ACP result is surfaced to the user."""
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"

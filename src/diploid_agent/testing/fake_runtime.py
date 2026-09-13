@@ -36,6 +36,9 @@ class FakeAgentEngine(AgentEngine):
     def session_alive(self, session_id: str) -> bool:
         return True
 
+    def set_session_model(self, session_id: str, model: str) -> str:
+        return model
+
     def resume_session(
         self,
         session_id: str,

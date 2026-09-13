@@ -100,6 +100,11 @@ class AgentRuntime(RuntimeAPI):
         self.instance_started_at = time.time()
         # Shared dicts injected into components by reference.
         self._active_turns: dict[str, ActiveTurn] = {}
+        # Chats with a session-mutating op in flight (switch/new/resume/branch).
+        # Unlike an ActiveTurn these hold no per-chat lock — the runtime lock's
+        # `_call_unlocked` windows would otherwise let a turn or second op slip
+        # in mid-flight and corrupt the session record.
+        self._session_ops: set[str] = set()
         self._active_chat_skills: dict[str, set[str]] = {}
         self._memory_managers: dict[str, MemoryManager] = {}
         self._plan_conclusion_enqueued: set[str] = set()
@@ -249,6 +254,7 @@ class AgentRuntime(RuntimeAPI):
             plugins=self._plugins,
             chat_store=self._chat_store,
             active_turns=self._active_turns,
+            session_ops=self._session_ops,
             store=self._store,
             instance_id=self.instance_id,
             instance_started_at=self.instance_started_at,
@@ -1021,9 +1027,9 @@ class AgentRuntime(RuntimeAPI):
         """Public API for a graceful service restart (HTTP/Telegram/MCP)."""
         return self._actions.graceful_service_restart(chat_id, service=service, reason=reason)
 
-    def switch_model(self, chat_id: str, model: str) -> ChatResult:
+    def switch_model(self, chat_id: str, model: str, *, in_place: bool = False) -> ChatResult:
         """Switch the model for a chat."""
-        return self._actions.switch_model(chat_id, model)
+        return self._actions.switch_model(chat_id, model, in_place=in_place)
 
     def new_session(self, chat_id: str, model: str | None = None) -> ChatResult:
         """Start a fresh ACP session for a chat."""

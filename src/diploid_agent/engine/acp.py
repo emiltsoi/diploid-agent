@@ -243,6 +243,9 @@ class AcpEngine(AgentEngine):
             timeout=timeout if timeout is not None else self.config.acp_resume_timeout,
         )
 
+    def set_session_model(self, session_id: str, model: str) -> str:
+        return self._client.set_session_model(session_id, model)
+
     def active_session_id(self) -> str | None:
         """Return the ACP session id currently in flight, if any."""
         return self._client.active_session_id()

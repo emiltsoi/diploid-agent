@@ -107,6 +107,10 @@ class WakeRequest(BaseModel):
 class SwitchModelRequest(BaseModel):
     chat_id: str
     model: str
+    in_place: bool = Field(
+        False,
+        description="Switch the model on the live session instead of starting a new one",
+    )
 
 
 class ResumeRequest(BaseModel):

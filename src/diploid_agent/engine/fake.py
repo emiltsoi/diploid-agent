@@ -64,6 +64,10 @@ class FakeAgentEngine(AgentEngine):
         self.call_log.append(("session_alive", session_id))
         return self.alive
 
+    def set_session_model(self, session_id: str, model: str) -> str:
+        self.call_log.append(("set_session_model", session_id, model))
+        return model
+
     def resume_session(
         self,
         session_id: str,

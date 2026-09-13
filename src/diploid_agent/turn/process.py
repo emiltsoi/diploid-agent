@@ -63,6 +63,11 @@ class TurnProcess(TurnPipeline):
                     ),
                     notice="Restart in progress; your turn was not started.",
                 )
+            if chat_id in self.runtime._session_ops:
+                return ChatResult(
+                    reply="A session operation is in progress for this chat.",
+                    notice="Please retry in a moment.",
+                )
             if chat_id in self.runtime._active_turns:
                 return ChatResult(
                     reply="A turn is already in progress for this chat.",

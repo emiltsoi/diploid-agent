@@ -102,6 +102,11 @@ class TurnDispatch(TurnPipeline):
                     reply="The service is draining for a restart; continuation deferred.",
                     notice=f"dispatch:{dispatch_id}",
                 )
+            if chat_id in self.runtime._session_ops:
+                return ChatResult(
+                    reply="A session operation is in progress for this chat.",
+                    notice=f"dispatch:{dispatch_id}",
+                )
             if chat_id in self.runtime._active_turns:
                 return ChatResult(
                     reply="A turn is already in progress; continuation queued.",

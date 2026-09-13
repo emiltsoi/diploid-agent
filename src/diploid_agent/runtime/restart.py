@@ -44,6 +44,7 @@ class RuntimeRestart:
         plugins: PluginManager,
         chat_store: ChatSessionStore,
         active_turns: dict[str, ActiveTurn],
+        session_ops: set[str],
         store: dict[str, ChatState],
         instance_id: str,
         instance_started_at: float,
@@ -58,6 +59,7 @@ class RuntimeRestart:
         self._plugins = plugins
         self._chat_store = chat_store
         self._active_turns = active_turns
+        self._session_ops = session_ops
         self._store = store
         self._instance_id = instance_id
         self._instance_started_at = instance_started_at
@@ -261,13 +263,19 @@ class RuntimeRestart:
         while True:
             with self._lock:
                 turns = list(self._active_turns.values())
-            if not turns:
+                ops_pending = bool(self._session_ops)
+            if not turns and not ops_pending:
                 return True
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return False
-            with turns[0]._condition:
-                turns[0]._condition.wait(timeout=min(remaining, 0.5))
+            if turns:
+                with turns[0]._condition:
+                    turns[0]._condition.wait(timeout=min(remaining, 0.5))
+            else:
+                # Session ops clear themselves via `finally` — no condition to
+                # wait on; they are sub-second, so poll briefly.
+                time.sleep(min(remaining, 0.1))
 
     def _flush_plugins_for_restart(self) -> None:
         """Run shutdown/sleeping hooks on every chat so plugin state persists."""

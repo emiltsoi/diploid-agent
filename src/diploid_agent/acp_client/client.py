@@ -335,10 +335,17 @@ class AcpClient:
         """
         self._ensure_started()
         effective_timeout = timeout if timeout is not None else self._control.call_timeout()
-        return self._run(
-            self._set_session_model(session_id, model, timeout=effective_timeout),
-            timeout=effective_timeout + 30.0,
-        )
+        try:
+            return self._run(
+                self._set_session_model(session_id, model, timeout=effective_timeout),
+                timeout=effective_timeout + 30.0,
+            )
+        except Exception:
+            # The change may have been applied server-side before the failure
+            # surfaced (e.g. a lost response). Drop the cached model so the
+            # next send_message re-pins the session to its recorded model.
+            self._state._session_models.pop(session_id, None)
+            raise
 
     def resume_session(
         self,

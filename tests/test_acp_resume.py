@@ -426,6 +426,81 @@ def test_resume_session_jitter_is_bounded(client: AcpClient) -> None:
     assert 0 <= delay10 <= client.acp_resume_retry_max_seconds
 
 
+def test_set_session_model_issues_config_option(client: AcpClient, monkeypatch) -> None:
+    """_set_session_model sends session/set_config_option and tracks the model."""
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def fake_call(method: str, params: dict[str, Any], **kwargs: Any) -> Any:
+        calls.append((method, params))
+        return {}
+
+    monkeypatch.setattr(client, "_call", fake_call)
+    applied = client._loop.run_until_complete(client._set_session_model("s-1", "glm-5.2"))
+    assert applied == "glm-5-2"
+    assert calls == [
+        (
+            "session/set_config_option",
+            {"sessionId": "s-1", "configId": "model", "value": "glm-5-2"},
+        )
+    ]
+    assert client._session_models["s-1"] == "glm-5-2"
+
+    # A repeat call with the same model is a no-op.
+    applied = client._loop.run_until_complete(client._set_session_model("s-1", "glm-5-2"))
+    assert applied == "glm-5-2"
+    assert len(calls) == 1
+
+
+def test_send_message_does_not_reconfigure_after_set_session_model(
+    client: AcpClient, monkeypatch
+) -> None:
+    """A follow-up send_message on the switched model issues no config call."""
+    calls: list[str] = []
+
+    async def fake_call(method: str, params: dict[str, Any], **kwargs: Any) -> Any:
+        calls.append(method)
+        return {}
+
+    async def fake_prompt(session_id: str, prompt_text: str, **kwargs: Any) -> Any:
+        return AcpPromptResult(reply="ok", session_id=session_id)
+
+    monkeypatch.setattr(client, "_call", fake_call)
+    monkeypatch.setattr(client, "_prompt", fake_prompt)
+
+    applied = client._loop.run_until_complete(client._set_session_model("s-1", "glm-5-2"))
+    assert applied == "glm-5-2"
+    calls.clear()
+
+    client._loop.run_until_complete(client._send_message("s-1", "hi", model="glm-5.2"))
+    assert "session/set_config_option" not in calls
+
+    # A genuinely different model still triggers exactly one config call.
+    client._loop.run_until_complete(client._send_message("s-1", "hi", model="swe-1-7"))
+    assert calls == ["session/set_config_option"]
+
+
+def test_set_session_model_failure_drops_cached_model(
+    client: AcpClient, monkeypatch
+) -> None:
+    """On failure the cached model is dropped so send_message re-pins it."""
+
+    async def failing_call(method: str, params: dict[str, Any], **kwargs: Any) -> Any:
+        raise AcpTransportError("response lost")
+
+    monkeypatch.setattr(client, "_call", failing_call)
+    monkeypatch.setattr(client, "_ensure_started", lambda: None)
+    monkeypatch.setattr(
+        client,
+        "_run",
+        lambda coro, timeout=None: client._loop.run_until_complete(coro),
+    )
+    client._session_models["s-1"] = "swe-1-7"
+
+    with pytest.raises(AcpTransportError):
+        client.set_session_model("s-1", "glm-5-2")
+    assert "s-1" not in client._session_models
+
+
 def test_acp_engine_resume_forwards_timeout(monkeypatch) -> None:
     """AcpEngine.resume_session forwards an explicit timeout and applies the default."""
     engine = AcpEngine(
