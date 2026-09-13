@@ -47,6 +47,11 @@ harness:
     lease_seconds: 300.0
     max_retries: 5
     retry_after_seconds: 30.0
+    # Agent-initiated self-wakes (reason=self_wake via POST /timer) require the
+    # authorship plugin's self_wake_enabled toggle and are budget-limited:
+    self_wake_max_pending: 3          # max armed self-wakes per chat
+    self_wake_min_interval_seconds: 300  # min seconds between arming calls
+    self_wake_max_delay_seconds: 604800  # max scheduling horizon (7 days)
   plan:
     root: plans
     store_filename: plans.jsonl

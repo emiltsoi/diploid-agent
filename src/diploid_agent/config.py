@@ -401,6 +401,14 @@ class TimerConfig(BaseModel):
     lease_seconds: float = Field(default=300.0, gt=0, le=86400)
     max_retries: int = Field(default=5, ge=0, le=100)
     retry_after_seconds: float = Field(default=30.0, gt=0, le=86400)
+    # Agent-initiated self-wakes (reason=self_wake) are rate-limited so an
+    # agent cannot loop or spam itself: at most ``self_wake_max_pending``
+    # queued per chat, no faster than one enqueue per
+    # ``self_wake_min_interval_seconds``, and no farther out than
+    # ``self_wake_max_delay_seconds``.
+    self_wake_max_pending: int = Field(default=3, ge=0, le=100)
+    self_wake_min_interval_seconds: float = Field(default=300.0, ge=0, le=86400)
+    self_wake_max_delay_seconds: float = Field(default=604800.0, gt=0, le=31536000)
 
 
 class ConversationBudget(BaseModel):
@@ -488,6 +496,9 @@ class HarnessConfig(BaseModel):
     reinject_soul_turns: int = 20  # fallback turn budget when window is unknown
     proactive_new_session_threshold: float = (
         0.85  # estimated prompt ratio that forces a fresh session
+    )
+    pressure_handoff_enabled: bool = (
+        True  # grant one bounded turn to author a handoff before a pressure rebuild
     )
     proactive_input_buffer_factor: float = 1.2  # multiplier for last-turn tokens when estimating
     proactive_soul_token_budget: int = 500  # cheap fresh-soul token budget for proactive sizing

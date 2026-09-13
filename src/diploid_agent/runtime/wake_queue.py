@@ -177,6 +177,31 @@ class WakeQueue:
                 and (e.leased_until is None or e.leased_until <= now)
             )
 
+    def cancel_event(
+        self,
+        event_id: str,
+        chat_id: str | None = None,
+        now: float | None = None,
+    ) -> WakeEvent | None:
+        """Remove one ready, unleased event by id and return it.
+
+        ``chat_id``, when given, scopes the removal so a caller can only
+        retract events belonging to its own chat. Currently leased events are
+        left alone so a wake being processed is not cancelled mid-flight.
+        """
+        if now is None:
+            now = time.time()
+        with self._transaction():
+            event = self._in_memory.get(event_id)
+            if (
+                event is None
+                or not event.ready
+                or (chat_id is not None and event.chat_id != chat_id)
+                or (event.leased_until is not None and event.leased_until > now)
+            ):
+                return None
+            return self._in_memory.pop(event_id)
+
     def cancel(
         self,
         chat_id: str | None = None,

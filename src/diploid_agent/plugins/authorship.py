@@ -55,3 +55,6 @@ class AuthorshipPlugin(StatePlugin):
         if max_chars is not None and len(block) > max_chars:
             block = block[:max_chars]
         return block or None
+
+
+Plugin = AuthorshipPlugin

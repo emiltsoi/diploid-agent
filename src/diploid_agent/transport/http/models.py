@@ -66,6 +66,7 @@ __all__ = [
     "SubagentRequest",
     "SwitchModelRequest",
     "TaskResponse",
+    "TimerCancelRequest",
     "TimerRequest",
     "WakeRequest",
 ]
@@ -153,6 +154,11 @@ class TimerRequest(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
     silent: bool = True
     priority: int = 1
+
+
+class TimerCancelRequest(BaseModel):
+    chat_id: str
+    event_id: str
 
 
 class RuntimeStatusResponse(BaseModel):

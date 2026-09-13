@@ -869,7 +869,9 @@ Less commonly used routes, all present on the same ingress:
 
 - `GET /config` — redacted live runtime configuration. Unauthenticated.
 - `PATCH /config` — partial update of `telegram` and/or `plugins` config. Requires `X-API-Key`.
-- `POST /timer` — enqueue a one-shot timer wake. Requires `X-API-Key`.
+- `POST /timer` — enqueue a one-shot timer wake. Requires `X-API-Key`. Events with `reason` starting `self_wake` are agent-initiated self-wakes: they require the authorship plugin's `self_wake_enabled` toggle (403 otherwise) and are budget-limited by `timer.self_wake_max_pending` / `self_wake_min_interval_seconds` / `self_wake_max_delay_seconds` (429/422 on violation).
+- `GET /timer/pending?chat_id=&reason=` — list armed wake events for a chat (metadata only; payloads are not returned). Requires `X-API-Key`.
+- `POST /timer/cancel` — retract one armed wake by `{"chat_id", "event_id"}`. Requires `X-API-Key`.
 - `GET /runtime/status`, `POST /runtime/start`, `POST /runtime/stop` — runtime lifecycle status and control. The `POST`s require `X-API-Key`; `GET` is unauthenticated.
 - `GET /prometheus` — Prometheus-format metrics. Unauthenticated.
 - `POST /plugin/enable`, `POST /plugin/reload`, `POST /plugins/create` — plugin enable/reload and chat-scoped plugin creation. Require `X-API-Key`.
@@ -956,7 +958,7 @@ curl http://127.0.0.1:4003/timer/config
 Response:
 
 ```json
-{"enabled":true,"interval_seconds":5.0,"lease_seconds":300.0,"max_retries":5,"retry_after_seconds":30.0}
+{"enabled":true,"interval_seconds":5.0,"lease_seconds":300.0,"max_retries":5,"retry_after_seconds":30.0,"self_wake_max_pending":3,"self_wake_min_interval_seconds":300.0,"self_wake_max_delay_seconds":604800.0}
 ```
 
 ### `POST /timer/config`

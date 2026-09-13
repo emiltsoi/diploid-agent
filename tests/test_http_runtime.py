@@ -16,6 +16,7 @@ from diploid_agent.config import (
     NotificationsConfig,
     PersonaConfig,
     PlanConfig,
+    PluginConfig,
     Secrets,
     TaskConfig,
     TimerConfig,
@@ -43,6 +44,14 @@ def _make_config(tmp_path: Path) -> Config:
             plan=PlanConfig(root=tmp_path / "plans"),
             memory={"backend": "file"},  # type: ignore[arg-type]
             timer=TimerConfig(enabled=True, interval_seconds=0.1),
+            plugins=[
+                PluginConfig(
+                    name="authorship",
+                    enabled=True,
+                    module="diploid_agent.plugins.authorship",
+                    config={"self_wake_enabled": True},
+                )
+            ],
         ),
         secrets=Secrets(WINDSURF_API_KEY="test-key"),
     )
@@ -547,3 +556,150 @@ def test_subagents_endpoint_returns_status(client: TestClient, monkeypatch) -> N
     assert len(body["subagents"]) == 1
     assert body["subagents"][0]["dispatch_id"] == "dispatch-1"
     assert body["subagents"][0]["status"] == "running"
+
+
+def _make_budgeted_config(tmp_path: Path, **timer_kwargs: Any) -> Config:
+    cfg = _make_config(tmp_path)
+    for key, value in timer_kwargs.items():
+        setattr(cfg.harness.timer, key, value)
+    return cfg
+
+
+def _budgeted_client(tmp_path: Path, **timer_kwargs: Any):
+    config = _make_budgeted_config(tmp_path, **timer_kwargs)
+    runtime = AgentRuntime(config)
+    runtime.engine = FakeEngine()
+    return TestClient(create_app(config, runtime)), runtime
+
+
+def test_timer_self_wake_min_interval(client: TestClient) -> None:
+    body = {
+        "chat_id": "chat-1",
+        "reason": "self_wake",
+        "scheduled_at": time.time() + 3600,
+    }
+    assert client.post("/timer", json=body).status_code == 200
+    resp = client.post("/timer", json=body)
+    assert resp.status_code == 429
+    assert "rate limit" in resp.json()["detail"]
+
+
+def test_timer_self_wake_max_pending(tmp_path: Path) -> None:
+    client, _ = _budgeted_client(
+        tmp_path,
+        self_wake_min_interval_seconds=0.0,
+        self_wake_max_pending=2,
+    )
+    body = {
+        "chat_id": "chat-1",
+        "reason": "self_wake",
+        "scheduled_at": time.time() + 3600,
+    }
+    assert client.post("/timer", json=body).status_code == 200
+    assert client.post("/timer", json=body).status_code == 200
+    resp = client.post("/timer", json=body)
+    assert resp.status_code == 429
+    assert "budget" in resp.json()["detail"]
+
+
+def test_timer_self_wake_horizon(tmp_path: Path) -> None:
+    client, _ = _budgeted_client(tmp_path, self_wake_max_delay_seconds=3600.0)
+    resp = client.post(
+        "/timer",
+        json={
+            "chat_id": "chat-1",
+            "reason": "self_wake",
+            "scheduled_at": time.time() + 7200,
+        },
+    )
+    assert resp.status_code == 422
+    assert "too far out" in resp.json()["detail"]
+
+
+def test_timer_non_self_wake_reasons_are_not_gated(client: TestClient) -> None:
+    body = {
+        "chat_id": "chat-1",
+        "reason": "plan_task_update",
+        "scheduled_at": time.time() + 3600,
+    }
+    for _ in range(4):
+        assert client.post("/timer", json=body).status_code == 200
+
+
+def test_timer_pending_lists_and_filters(client: TestClient) -> None:
+    runtime = client.app.state.runtime
+    for reason in ("self_wake", "other"):
+        client.post(
+            "/timer",
+            json={
+                "chat_id": "chat-1",
+                "reason": reason,
+                "scheduled_at": time.time() + 3600,
+                "payload": {"user_message": "secret prompt"},
+            },
+        )
+
+    resp = client.get("/timer/pending", params={"chat_id": "chat-1"})
+    assert resp.status_code == 200
+    events = resp.json()["events"]
+    assert {e["reason"] for e in events} == {"self_wake", "other"}
+    assert all("payload" not in e for e in events)
+
+    resp = client.get(
+        "/timer/pending", params={"chat_id": "chat-1", "reason": "self_wake"}
+    )
+    events = resp.json()["events"]
+    assert len(events) == 1
+    assert events[0]["reason"] == "self_wake"
+    # Other chats see nothing.
+    resp = client.get("/timer/pending", params={"chat_id": "chat-2"})
+    assert resp.json()["events"] == []
+    assert runtime.wake_queue.pending_count() == 2
+
+
+def test_timer_cancel(client: TestClient) -> None:
+    resp = client.post(
+        "/timer",
+        json={
+            "chat_id": "chat-1",
+            "reason": "self_wake",
+            "scheduled_at": time.time() + 3600,
+        },
+    )
+    event_id = resp.json()["event_id"]
+
+    # Wrong chat cannot retract it.
+    resp = client.post(
+        "/timer/cancel", json={"chat_id": "chat-2", "event_id": event_id}
+    )
+    assert resp.status_code == 404
+
+    resp = client.post(
+        "/timer/cancel", json={"chat_id": "chat-1", "event_id": event_id}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+    resp = client.post(
+        "/timer/cancel", json={"chat_id": "chat-1", "event_id": event_id}
+    )
+    assert resp.status_code == 404
+
+
+def test_timer_self_wake_requires_authorship_toggle(tmp_path: Path) -> None:
+    config = _make_config(tmp_path)
+    config.harness.plugins[0].config["self_wake_enabled"] = False
+    runtime = AgentRuntime(config)
+    runtime.engine = FakeEngine()
+    client = TestClient(create_app(config, runtime))
+
+    resp = client.post(
+        "/timer",
+        json={
+            "chat_id": "chat-1",
+            "reason": "self_wake",
+            "scheduled_at": time.time() + 3600,
+        },
+    )
+    assert resp.status_code == 403
+    assert "authorship" in resp.json()["detail"]
