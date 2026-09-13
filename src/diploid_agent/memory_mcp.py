@@ -49,7 +49,9 @@ class MemoryMcpServer:
         self.harness_url = harness_url.rstrip("/")
         self._client = httpx.Client(
             base_url=self.harness_url,
-            timeout=30.0,
+            # Recalls on a large bank take ~35-40s server-side; stay above the
+            # backend budget (hindsight.timeout, default 120s) plus overhead.
+            timeout=150.0,
         )
 
     def _request(
