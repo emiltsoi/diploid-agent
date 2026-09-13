@@ -321,6 +321,25 @@ class AcpClient:
         self._ensure_started()
         return self._run(self._session_alive(session_id), timeout=30.0)
 
+    def set_session_model(
+        self,
+        session_id: str,
+        model: str,
+        *,
+        timeout: float | None = None,
+    ) -> str:
+        """Switch the model on a live session via `session/set_config_option`.
+
+        Keeps the session (and its context) intact — unlike `create_session`,
+        no new session is started. Returns the normalized model id applied.
+        """
+        self._ensure_started()
+        effective_timeout = timeout if timeout is not None else self._control.call_timeout()
+        return self._run(
+            self._set_session_model(session_id, model, timeout=effective_timeout),
+            timeout=effective_timeout + 30.0,
+        )
+
     def resume_session(
         self,
         session_id: str,
@@ -706,6 +725,16 @@ class AcpClient:
     ) -> None:
         """Set mode and model on a freshly created or resumed session."""
         await self._sessions._apply_session_config(session_id, use_model, timeout=timeout)
+
+    async def _set_session_model(
+        self,
+        session_id: str,
+        model: str,
+        *,
+        timeout: float | None = None,
+    ) -> str:
+        """Switch the model on a live session; returns the applied model id."""
+        return await self._sessions._set_session_model(session_id, model, timeout=timeout)
 
     async def _create_session(
         self,

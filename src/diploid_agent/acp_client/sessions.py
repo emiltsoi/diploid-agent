@@ -340,6 +340,31 @@ class AcpSessionOps:
         )
         self._state._session_models[session_id] = use_model
 
+    async def _set_session_model(
+        self,
+        session_id: str,
+        model: str,
+        *,
+        timeout: float | None = None,
+    ) -> str:
+        """Switch the model on a live session via `session/set_config_option`.
+
+        Returns the normalized model id actually applied. A no-op (without a
+        `session/set_config_option` call) when the session already runs the
+        requested model, because repeated no-op model changes re-render the
+        session's system prefix and can destabilize the ACP subprocess.
+        """
+        use_model = _normalize_model(model)
+        if self._state._session_models.get(session_id) == use_model:
+            return use_model
+        await self._client._call(
+            "session/set_config_option",
+            {"sessionId": session_id, "configId": "model", "value": use_model},
+            timeout=timeout or self._client._control.call_timeout(),
+        )
+        self._state._session_models[session_id] = use_model
+        return use_model
+
     async def _create_session(
         self,
         prompt_text: str,
@@ -422,11 +447,7 @@ class AcpSessionOps:
         # no-op model changes can re-render the session's system prefix and
         # destabilize the ACP subprocess.
         if self._state._session_models.get(session_id) != use_model:
-            await self._client._call(
-                "session/set_config_option",
-                {"sessionId": session_id, "configId": "model", "value": use_model},
-            )
-            self._state._session_models[session_id] = use_model
+            await self._set_session_model(session_id, use_model)
 
         return await self._client._prompt(
             session_id,

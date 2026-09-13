@@ -68,6 +68,16 @@ class AcpCallbackPump:
                     pass
             if cb_thread.is_alive():
                 await asyncio.to_thread(cb_thread.join, 2.0)
+            # If the worker was wedged or already dead, the sentinel is still
+            # queued and would kill the next generation's worker on its first
+            # get().  Drain the queue so the next start() begins clean; while
+            # _cb_thread is None, _dispatch_cb runs inline so nothing new can
+            # be enqueued concurrently.
+            while True:
+                try:
+                    self._cb_queue.get_nowait()
+                except queue.Empty:
+                    break
 
     def _route_update(self, msg: dict[str, Any]) -> None:
         """Route a `session/update` notification to its in-flight prompt."""

@@ -315,9 +315,12 @@ class StatePlugin(abc.ABC):
         return
 
     def stop(self) -> None:
-        """Called when the plugin is removed, globally disabled, or the harness shuts down.
+        """Called when the plugin is removed, disabled, reconfigured, or the harness shuts down.
 
-        Override to release resources or stop background work.
+        PluginManager.reconfigure also stops every live instance (config
+        updates recycle them), so do not treat this as final teardown of
+        shared/external resources.  Override to release resources or stop
+        background work; a fresh instance is created lazily on next use.
         """
         return
 

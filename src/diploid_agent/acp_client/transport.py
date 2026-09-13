@@ -446,6 +446,17 @@ class AcpTransport:
     async def _start_transport(self) -> None:
         self.generation += 1
 
+        # Reap the previous generation's callback worker before the new reader
+        # exists: stale-transport and watchdog recovery reach here without
+        # going through close(), which used to leave an orphaned thread
+        # competing on the shared queue.
+        await self._cb_pump.stop()
+        # Drop prompts orphaned by a force-stopped loop (their finally never
+        # ran); a live prompt can never exist at a generation boundary, and a
+        # stale entry would let _route_update's single-prompt fallback
+        # misroute the new generation's updates.
+        self._state._active_prompts.clear()
+
         env = os.environ.copy()
         env["WINDSURF_API_KEY"] = self._client._api_key
         env["ACP_API_KEY"] = self._client._api_key
@@ -507,11 +518,6 @@ class AcpTransport:
         self._reader_task.add_done_callback(self._on_reader_done)
         self._stderr_task = asyncio.create_task(self._stderr_drain())
         self._stderr_task.add_done_callback(self._on_drain_done)
-        # Reap the previous generation's callback worker if one is still
-        # running: stale-transport and watchdog recovery reach here without
-        # going through close(), which used to leave an orphaned thread
-        # competing on the shared queue.
-        await self._cb_pump.stop()
         self._cb_pump.start()
         # The new generation accepts calls now that proc and reader are live.
         self._terminated = False
