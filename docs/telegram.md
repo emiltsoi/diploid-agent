@@ -278,10 +278,10 @@ For the `telegram` section, the following keys may be updated live:
 
 In the single-process deployment `telegram` changes take effect immediately —
 the poller re-reads the runtime config on every message. In the two-process
-deployment `/config telegram` currently fails: there is no `/telegram/config`
-route (`PATCH /config` on the ingress is the closest equivalent), and the
-fields are poller-side rendering settings that a remote poller would not pick
-up without a restart anyway. The other sections (`task`, `waker`, `timer`,
+deployment the command is routed through `PATCH /config` (there is no
+`/telegram/config` route) and persisted to `runtime-overrides.yaml`, but the
+fields are poller-side rendering settings, so a remote poller only picks them
+up on restart. The other sections (`task`, `waker`, `timer`,
 `notifications`) take effect immediately on the running harness in either
 mode.
 

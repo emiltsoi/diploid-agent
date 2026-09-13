@@ -1,28 +1,22 @@
 """Curated memory pockets: the per-chat promoted file and persona memory.
 
 ``PromotedMemory`` owns the user-curated ``chat_PROMOTED.md`` pocket (always
-loaded compact so the compactor cannot drop it) and appends to the persona's
-``MEMORY.md`` — including Hindsight indexing when that backend is active.
+loaded compact so the compactor cannot drop it) and reads the persona's
+``MEMORY.md`` for prompt injection. The persona file is read-only here — only
+the agent or the operator edits it.
 """
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from diploid_agent.memory_backends import (
-    HindsightMemoryBackend,
-    MemoryBackend,
-    _trim_to_section,
-)
-from diploid_agent.memory_models import MemoryItem
+from diploid_agent.memory_backends import MemoryBackend, _trim_to_section
 
 
 class PromotedMemory:
-    """User-curated promoted pocket plus persona memory reads/writes."""
+    """User-curated promoted pocket plus persona memory reads."""
 
     def __init__(
         self,
@@ -171,37 +165,3 @@ class PromotedMemory:
                 return True
 
         return False
-
-    def promote_to_persona(self, fact: str) -> None:
-        """Append a fact to the persona's MEMORY.md and, for Hindsight, index it.
-
-        Memory files are not mechanically pruned. The agent has agency to edit
-        them using its own file tools when the system notice says they exceed
-        the prompt budget.
-        """
-        path = self.persona_path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        new_block = f"- {fact.strip()}\n"
-        with open(path, "a") as f:
-            f.write(new_block)
-
-        backend = self._backend_fn()
-        if isinstance(backend, HindsightMemoryBackend):
-            item = MemoryItem(
-                content=fact.strip(),
-                timestamp=datetime.now(UTC).isoformat(),
-                document_id=f"promote-{self._chat_id}-{uuid.uuid4().hex[:12]}",
-                metadata={
-                    "chat_id": self._chat_id,
-                    "persona": self._persona.name,
-                    "kind": "promoted",
-                },
-                tags=[
-                    "memory",
-                    "persona",
-                    "promoted",
-                    f"chat:{self._chat_id}",
-                    f"persona:{self._persona.name}",
-                ],
-            )
-            backend.retain([item])

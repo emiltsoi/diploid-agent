@@ -394,8 +394,8 @@ class StatePlugin(abc.ABC):
         """Notify hook: called after an observation is retained."""
 
     def before_promote(self, context: PromoteContext) -> PromoteContext | None:
-        """Consult hook: called before a fact is promoted to persona memory."""
+        """Consult hook: called before a fact is promoted to the chat's promoted pocket."""
         return None
 
     def after_promote(self, context: PromoteContext) -> None:
-        """Notify hook: called after a fact is promoted to persona memory."""
+        """Notify hook: called after a fact is promoted to the chat's promoted pocket."""

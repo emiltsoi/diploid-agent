@@ -503,10 +503,6 @@ class MemoryManager:
         """
         self._promoted.append(fact)
 
-    def promote_to_persona(self, fact: str) -> None:
-        """Append a fact to the persona's MEMORY.md and, for Hindsight, index it."""
-        self._promoted.promote_to_persona(fact)
-
     def close(self) -> None:
         """Release any resources held by the backend."""
         try:

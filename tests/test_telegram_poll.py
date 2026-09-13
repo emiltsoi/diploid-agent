@@ -186,6 +186,9 @@ class _FakeClient:
     def post(self, url: str, **kwargs: Any) -> _FakeResponse:
         return _FakeResponse(self._url_data.get(url, {}))
 
+    def patch(self, url: str, **kwargs: Any) -> _FakeResponse:
+        return _FakeResponse(self._url_data.get(url, {}))
+
 
 def test_harness_metrics_with_data() -> None:
     poller = TelegramPoller(token="dummy", harness_url="http://localhost")
@@ -1150,6 +1153,26 @@ def test_harness_config_http_posts_to_endpoint() -> None:
     result = poller._harness_config(12345, "task workers=2")
     assert "workers" in result
     assert "120.0" in result
+
+
+def test_harness_config_http_telegram_uses_patch_config() -> None:
+    """No /telegram/config route exists — telegram goes through PATCH /config."""
+    poller = TelegramPoller(token="dummy", harness_url="http://localhost")
+    calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    class _PatchRecorder(_FakeClient):
+        def patch(self, url: str, **kwargs: Any) -> _FakeResponse:
+            calls.append(("PATCH", url, kwargs.get("json", {})))
+            return _FakeResponse({"ok": True})
+
+        def post(self, url: str, **kwargs: Any) -> _FakeResponse:
+            calls.append(("POST", url, kwargs.get("json", {})))
+            return _FakeResponse({})
+
+    poller._local.client = _PatchRecorder({})
+    result = poller._harness_config(12345, "telegram message_format=markdown_v2")
+    assert calls == [("PATCH", "http://localhost/config", {"telegram": {"message_format": "markdown_v2"}})]
+    assert "restart" in result
 
 
 def test_stream_turn_heartbeat_wait_has_minimum_floor(tmp_path: Path, monkeypatch: Any) -> None:

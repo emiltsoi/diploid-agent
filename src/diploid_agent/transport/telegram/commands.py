@@ -174,14 +174,30 @@ class TelegramCommandMixin:
             headers["X-API-Key"] = self._api_key
 
         try:
-            resp = self.client.post(
-                f"{self.harness_url}/{section}/config",
-                json=fields,
-                headers=headers,
-                timeout=30.0,
-            )
+            if section == "telegram":
+                # There is no dedicated /telegram/config route; PATCH /config
+                # takes a section-scoped payload.
+                resp = self.client.patch(
+                    f"{self.harness_url}/config",
+                    json={section: fields},
+                    headers=headers,
+                    timeout=30.0,
+                )
+            else:
+                resp = self.client.post(
+                    f"{self.harness_url}/{section}/config",
+                    json=fields,
+                    headers=headers,
+                    timeout=30.0,
+                )
             resp.raise_for_status()
-            return json.dumps(resp.json(), indent=2, sort_keys=False)
+            body = json.dumps(resp.json(), indent=2, sort_keys=False)
+            if section == "telegram":
+                body += (
+                    "\n\nNote: telegram settings are applied by the poller "
+                    "process — restart it to pick these up."
+                )
+            return body
         except httpx.HTTPStatusError as exc:
             return f"Harness returned {exc.response.status_code}: {exc.response.text}"
         except (httpx.HTTPError, OSError):

@@ -43,6 +43,15 @@
   can no longer misroute updates into the next transport generation.
 - `memory_mcp` harness-call timeout raised to 150 s so `memory_recall` on a
   large Hindsight bank (~35–40 s server-side) no longer times out at 30 s.
+- `/config telegram` in the two-process deployment now routes through
+  `PATCH /config` instead of the nonexistent `/telegram/config` route, and the
+  reply notes that poller-side settings apply on poller restart.
+
+### Removed
+
+- `MemoryManager.promote_to_persona` / `PromotedMemory.promote_to_persona` —
+  dead code superseded by the per-chat `chat_PROMOTED.md` pocket; persona
+  `MEMORY.md` files are now read-only to the harness.
 
 ## 0.6.1 — 2026-09-10
 

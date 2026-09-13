@@ -342,41 +342,6 @@ def test_record_turn_document_id_is_unique_per_session(tmp_path: Path) -> None:
     assert "persona:test-persona" in items[0]["tags"]
 
 
-def test_promote_to_persona_indexes_in_hindsight(tmp_path: Path) -> None:
-    from diploid_agent.config import MemoryConfig, PersonaConfig
-
-    class FakeClient:
-        pass
-
-    persona = PersonaConfig(name="test-persona", profile_root=tmp_path / "persona")
-    persona.profile_root.mkdir(parents=True, exist_ok=True)
-    spool_path = tmp_path / "spool.jsonl"
-    config = MemoryConfig(
-        backend="hindsight",
-        hindsight={
-            "base_url": "http://127.0.0.1:1",
-            "bank": "test",
-            "spool_path": spool_path,
-        },
-    )
-    manager = MemoryManager(
-        config=config,
-        persona=persona,
-        sessions_root=tmp_path,
-        chat_id="chat-1",
-        devin_client=FakeClient(),
-    )
-    manager.promote_to_persona("I like tea.")
-
-    assert (persona.profile_root / "MEMORY.md").read_text().strip() == "- I like tea."
-    lines = spool_path.read_text().splitlines()
-    assert len(lines) == 1
-    item = json.loads(lines[0])
-    assert item["content"] == "I like tea."
-    assert "persona" in item["tags"]
-    assert "promoted" in item["tags"]
-    assert f"persona:{persona.name}" in item["tags"]
-
 
 def test_memory_manager_file_backend_recall(tmp_path: Path) -> None:
     from diploid_agent.config import MemoryConfig, PersonaConfig

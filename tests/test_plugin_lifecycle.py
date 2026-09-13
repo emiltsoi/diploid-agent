@@ -626,10 +626,6 @@ def test_retain_and_promote_hooks_fire(monkeypatch, tmp_path: Path) -> None:
         return AcpPromptResult(reply="ok", session_id="s1")
 
     monkeypatch.setattr(harness.client, "create_session", fake_create_session)
-    monkeypatch.setattr(
-        "diploid_agent.memory.MemoryManager.promote_to_persona",
-        lambda self, fact: None,
-    )
 
     captured: dict[str, Any] = {}
 
