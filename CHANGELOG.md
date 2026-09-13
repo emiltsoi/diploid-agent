@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.4 — 2026-09-14
 
 ### Added
 
@@ -29,6 +29,17 @@
   first grants one bounded turn on the live session so the agent can author
   its own handoff state while it still holds full context. One-shot per
   session via `SessionRecord.pressure_handoff_done`.
+- Agent self-armed wakes: `POST /timer` accepts `reason=self_wake*`, gated by
+  the authorship `self_wake_enabled` toggle (403 when off) and budget-limited
+  by `timer.self_wake_max_pending` / `self_wake_min_interval_seconds` /
+  `self_wake_max_delay_seconds` (429/422). `GET /timer/pending` lists armed
+  events and `POST /timer/cancel` retracts one (`WakeQueue.cancel_event`);
+  armed wakes fire through the existing `TimerService → timer.fired → wake`
+  path. Companion `harness_self_wake`/`_list`/`_cancel` MCP tools live in
+  diploid-plugins.
+- `cron` prompt slot: the `diploid_plugins.cron` plugin renders bounded
+  last-run lines from `sessions/<chat>/cron/*.last` for `delivery: digest`
+  jobs, plus `service.last` reload warnings.
 
 ## 0.6.3 — 2026-09-14
 
