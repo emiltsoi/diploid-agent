@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Pre-pressure handoff turn: when the proactive context-pressure check would
+  force a fresh session, `harness.pressure_handoff_enabled` (default `true`)
+  first grants one bounded turn on the live session so the agent can author
+  its own handoff state while it still holds full context. One-shot per
+  session via `SessionRecord.pressure_handoff_done`.
+
 ## 0.6.3 — 2026-09-14
 
 ### Added

@@ -63,6 +63,9 @@ def _make_builder_with_profile_root(tmp_path: Path, profile_root: Path) -> Conte
             sessions_root=tmp_path / "sessions",
             session_store_path=tmp_path / "sessions.jsonl",
             memory={"backend": "file"},  # type: ignore[arg-type]
+            # Tests below assert the direct rebuild path; the handoff turn
+            # gets its own coverage in test_build_follow_up_pressure_handoff_*.
+            pressure_handoff_enabled=False,
         ),
     )
     sessions_root = tmp_path / "sessions"
@@ -98,6 +101,7 @@ def _make_config(tmp_path: Path) -> Config:
             sessions_root=tmp_path / "sessions",
             session_store_path=tmp_path / "sessions.jsonl",
             memory={"backend": "file"},  # type: ignore[arg-type]
+            pressure_handoff_enabled=False,
         ),
     )
 
@@ -945,6 +949,74 @@ def test_build_follow_up_proactive_fresh_session(
     pctx = builder.build_follow_up("chat-1", "how are you?", record=record)
     assert "Fresh ACP session for context pressure" in pctx.prompt
     assert pctx.force_new_session
+
+
+def test_build_follow_up_pressure_handoff_turn(tmp_path: Path) -> None:
+    """First pressure trigger grants a bounded handoff turn, not a rebuild."""
+    builder = _make_builder(tmp_path)
+    builder.config.harness.pressure_handoff_enabled = True
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="session-1",
+        model="swe-1-7",
+        persona="test-pilot",
+        cwd=str(tmp_path),
+        created_at=time.time(),
+        updated_at=time.time(),
+        turn_number=5,
+        cumulative_metrics={"total_tokens": 950},
+        last_turn_metrics={"input_tokens": 950},
+    )
+    builder.config.engine.context_window = 1000
+
+    pctx = builder.build_follow_up("chat-1", "how are you?", record=record)
+    assert not pctx.force_new_session
+    assert not pctx.compact
+    assert record.pressure_handoff_done
+    assert "handoff turn" in pctx.prompt
+    assert "next you" in pctx.prompt
+
+
+def test_build_follow_up_pressure_handoff_one_shot(tmp_path: Path) -> None:
+    """Once the handoff turn is spent, the next pressure trigger rebuilds."""
+    builder = _make_builder(tmp_path)
+    builder.config.harness.pressure_handoff_enabled = True
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="session-1",
+        model="swe-1-7",
+        persona="test-pilot",
+        cwd=str(tmp_path),
+        created_at=time.time(),
+        updated_at=time.time(),
+        turn_number=5,
+        cumulative_metrics={"total_tokens": 950},
+        last_turn_metrics={"input_tokens": 950},
+        pressure_handoff_done=True,
+    )
+    builder.config.engine.context_window = 1000
+
+    pctx = builder.build_follow_up("chat-1", "how are you?", record=record)
+    assert pctx.force_new_session
+    assert "handoff turn" not in pctx.prompt
+
+
+def test_build_follow_up_pressure_handoff_flag_persists(tmp_path: Path) -> None:
+    """The one-shot flag round-trips through SessionRecord serialization."""
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="session-1",
+        model="swe-1-7",
+        persona="test-pilot",
+        cwd=str(tmp_path),
+        created_at=time.time(),
+        updated_at=time.time(),
+        pressure_handoff_done=True,
+    )
+    assert SessionRecord.from_dict(record.to_dict()).pressure_handoff_done
 
 
 def test_build_follow_up_no_fresh_on_lifetime_tokens(tmp_path: Path) -> None:

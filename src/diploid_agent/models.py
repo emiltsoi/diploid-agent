@@ -39,6 +39,10 @@ class SessionRecord:
     enabled_skills: list[str] | None = None
     disabled_skills: list[str] | None = None
     plugin_overrides: dict[str, bool] | None = None
+    # One-shot flag: this session already spent its context-pressure handoff
+    # turn. Not copied to the next record — a fresh session earns a fresh
+    # handoff the next time its window fills.
+    pressure_handoff_done: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -69,6 +73,7 @@ class SessionRecord:
             enabled_skills=data.get("enabled_skills"),
             disabled_skills=data.get("disabled_skills"),
             plugin_overrides=data.get("plugin_overrides"),
+            pressure_handoff_done=data.get("pressure_handoff_done", False),
         )
 
     def next_turn_number(self) -> int:

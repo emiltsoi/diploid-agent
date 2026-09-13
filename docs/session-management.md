@@ -246,6 +246,18 @@ turn. A `fresh` prompt:
 The proactive trigger is controlled by `harness.proactive_new_session_threshold`
 (default `0.85`) and `harness.proactive_input_buffer_factor` (default `1.2`).
 
+### Pre-pressure handoff turn
+
+When `harness.pressure_handoff_enabled` is `true` (the default), the first
+pressure trigger on a session does **not** force the fresh session
+immediately. The turn still runs on the live session — which still holds
+full context — and the prompt carries a "handoff turn" notice asking the
+agent to write its own resume state (self-state handoff, felt state,
+promotable facts) while it can still see everything. The next pressure
+trigger then proceeds with the fresh session. The one-shot flag lives on
+`SessionRecord.pressure_handoff_done`; it is not copied to the rebuilt
+session's record, so each session gets at most one handoff turn.
+
 ## Smart short-term context
 
 `memory.short_term_strategy` defaults to `smart` and `max_short_term_chars` to

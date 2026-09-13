@@ -999,6 +999,22 @@ class ContextBuilder:
         soul_mode, force_new_session = self._pressure._soul_mode(
             chat_id, record, rehydrated, formatted
         )
+        # Pre-pressure handoff: when the window estimate says "rebuild", grant
+        # the agent one bounded turn on the *current* session first, so it can
+        # author its own resume note while it still holds full context. The
+        # per-session flag makes it one-shot — the next turn's pressure check
+        # proceeds with the fresh session unconditionally.
+        handoff_turn = False
+        if (
+            force_new_session
+            and record is not None
+            and self.config.harness.pressure_handoff_enabled
+            and not record.pressure_handoff_done
+        ):
+            record.pressure_handoff_done = True
+            force_new_session = False
+            soul_mode = "small"
+            handoff_turn = True
         resolved_reason = (
             rehydration_reason
             if rehydration_reason is not None
@@ -1103,7 +1119,16 @@ class ContextBuilder:
         rehydration_notice = self._anchors._rehydration_notice(build_ctx.rehydration_reason)
 
         soul_notice = ""
-        if force_new_session:
+        if handoff_turn:
+            soul_notice = (
+                "Context window is nearly full — this is your handoff turn. "
+                "The next turn will start a fresh session with compacted "
+                "memory, so while you still hold full context, write what the "
+                "next you needs: update your self_state/next-self handoff and "
+                "felt state, and promote any facts worth keeping. Still reply "
+                "to the user, but the handoff is the priority."
+            )
+        elif force_new_session:
             if soul_mode == "fresh":
                 wake_narrative = self._wake_context._wake_narrative(
                     chat_id, self._wake_context._last_wake_event(chat_id), record=record
