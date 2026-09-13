@@ -422,6 +422,7 @@ def test_silent_delivery_writes_last_files(tmp_path: Path) -> None:
     assert last_file.exists()
     data = json.loads(last_file.read_text())
     assert data["status"] == "ok"
+    assert data["delivery"] == "silent"  # digest slot filters on this field
     assert (tmp_path / "sessions" / "chat-1" / "cron" / "tidy.log").exists()
 
 
@@ -446,3 +447,138 @@ def test_state_store_roundtrip(tmp_path: Path) -> None:
     store.update(state)
     store2 = CronStateStore(tmp_path / "cron_state.jsonl")
     assert store2.get("job-a").next_due_at == 123.0
+
+
+# ------------------------------------------------------------- review fixes
+
+
+def test_finalize_is_idempotent(tmp_path: Path) -> None:
+    """A racing event-bus + reconcile finalize must not double-count."""
+    config = _make_config(tmp_path, persona_crons={"jobs": [_script_job()]})
+    svc = _make_service(config, tmp_path)
+    plan = svc._plan_manager.create_plan(name="p", chat_id="chat-1")
+    from diploid_agent.plan.models import Task
+
+    task = svc._plan_manager.add_task(plan.id, Task(name="cron:tidy"))
+    svc._plan_manager.start_task(plan.id, task.id)
+    svc._plan_manager.fail_task(plan.id, task.id, log="boom")
+    state = svc._state.ensure("tidy")
+    state.running_task_id = task.id
+    state.running_plan_id = plan.id
+    svc._state.update(state)
+    task = svc._plan_manager.get_task(plan.id, task.id)
+    svc._finalize(state, task)
+    assert svc._state.get("tidy").consecutive_failures == 1
+    # Second finalize of the same task (the caller's stale state still shows
+    # it running) must return early instead of counting the failure twice.
+    svc._finalize(state, task)
+    assert svc._state.get("tidy").consecutive_failures == 1
+
+
+def test_start_failure_marks_task_failed(tmp_path: Path, monkeypatch) -> None:
+    """A failed start must not leave an orphaned READY task in the plan."""
+    config = _make_config(tmp_path, persona_crons={"jobs": [_script_job()]})
+    svc = _make_service(config, tmp_path)
+    svc._tick()
+    state = svc._state.get("tidy")
+    state.next_due_at = time.time() - 1
+    svc._state.update(state)
+
+    def _boom(plan_id: str, task_id: str):
+        raise ValueError("nope")
+
+    monkeypatch.setattr(svc._task_engine, "start_task", _boom)
+    svc._tick()
+    state = svc._state.get("tidy")
+    assert state.last_status == "failed"
+    assert state.running_task_id is None
+    task = svc._plan_manager.get_task(svc._cron_plans["chat-1"], state.last_task_id)
+    assert task.status == TaskStatus.FAILED
+
+
+def test_cron_gap_samples_hidden_dense_gap() -> None:
+    """The first upcoming gap is ~50min; a 10-min gap hides one fire later."""
+    lt = time.localtime()
+    base = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 10, 0, 0, 0, 0, -1))
+    # Midday hours keep the sampled gaps DST-immune.
+    assert CronService._cron_gap("5,55 12,13 * * *", base) == 600
+
+
+def test_dense_later_cron_dropped(tmp_path: Path) -> None:
+    config = _make_config(
+        tmp_path,
+        min_interval_seconds=1200.0,
+        persona_crons={"jobs": [_script_job(schedule={"cron": "5,55 12,13 * * *"})]},
+    )
+    svc = _make_service(config, tmp_path)
+    assert "tidy" not in svc._jobs
+    assert any("min_interval" in w for w in svc._warnings)
+
+
+def test_sparse_cron_survives_sampling(tmp_path: Path) -> None:
+    config = _make_config(
+        tmp_path,
+        min_interval_seconds=1200.0,
+        persona_crons={"jobs": [_script_job(schedule={"cron": "30 3 * * *"})]},
+    )
+    svc = _make_service(config, tmp_path)
+    assert "tidy" in svc._jobs
+
+
+def test_at_daily_lands_on_wall_clock(tmp_path: Path) -> None:
+    config = _make_config(
+        tmp_path,
+        persona_crons={"jobs": [_script_job(schedule={"at_daily": "10:30"})]},
+    )
+    svc = _make_service(config, tmp_path)
+    spec = svc._jobs["tidy"].spec
+    base = time.time()
+    nxt = svc._next_due(spec, base)
+    lt = time.localtime(nxt)
+    assert (lt.tm_hour, lt.tm_min) == (10, 30)
+    assert base < nxt <= base + 90000  # a 25h DST day still lands "tomorrow"
+
+
+def test_missing_chat_id_drops_job(tmp_path: Path) -> None:
+    job = _script_job()
+    job["chat_id"] = None
+    config = _make_config(tmp_path, persona_crons={"jobs": [job]})
+    config.harness.mesh.fallback_chat_id = ""  # no fallback configured
+    svc = _make_service(config, tmp_path)
+    assert "tidy" not in svc._jobs
+    assert any("chat_id" in w for w in svc._warnings)
+
+
+def test_reads_do_not_rewrite_state_file(tmp_path: Path) -> None:
+    store = CronStateStore(tmp_path / "cron_state.jsonl")
+    store.ensure("job-a")
+    saved: list[int] = []
+    orig_save = store._save
+
+    def _spy() -> None:
+        saved.append(1)
+        orig_save()
+
+    store._save = _spy  # type: ignore[method-assign]
+    store.get("job-a")
+    store.all()
+    store.ensure("job-a")  # existing — pure read
+    assert not saved
+    store.ensure("job-b")  # new — writes once
+    assert len(saved) == 1
+
+
+def test_catchup_task_description_tagged(tmp_path: Path) -> None:
+    config = _make_config(
+        tmp_path,
+        persona_crons={"jobs": [_script_job(catchup="once")]},
+    )
+    svc = _make_service(config, tmp_path)
+    state = svc._state.ensure("tidy")
+    state.next_due_at = time.time() - 600
+    svc._state.update(state)
+    svc._tick()
+    state = svc._state.get("tidy")
+    assert state.last_task_id is not None
+    task = svc._plan_manager.get_task(state.running_plan_id or "", state.last_task_id)
+    assert task is not None and "catchup" in task.description

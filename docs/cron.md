@@ -64,7 +64,10 @@ first-seen wins and a warning names both files.
 ## Delivery
 
 Every mode appends `sessions/<chat>/cron/<job>.log` and writes
-`<job>.last` (`{status, finished_at, next_due_at, summary}`).
+`<job>.last` (`{job_id, delivery, status, finished_at, next_due_at,
+consecutive_failures, summary}`). The digest plugin filters on
+`delivery`: `silent` entries never render, except that an auto-`disabled`
+job always surfaces — silence must not hide a broken job.
 
 - **`silent`** — files only; nothing enters prompts.
 - **`digest`** — files plus a `cron` prompt slot (the
@@ -76,6 +79,12 @@ Every mode appends `sessions/<chat>/cron/<job>.log` and writes
 ## Scheduling semantics
 
 - `CronService` ticks on `harness.cron.tick_seconds` (default 5).
+- `cron` and `at_daily` schedules are local wall-clock time (system-cron
+  convention — croniter is fed a tz-aware local base, so DST shifts land
+  on the named hour); `every_seconds` is plain elapsed time.
+- `min_interval_seconds` is checked against the *minimum* gap across the
+  next several fires of a cron expression, so a dense sub-pattern hiding
+  behind a sparse upcoming gap is still caught.
 - Brand-new jobs seed `next_due_at` forward — no boot storm.
 - A job past due at service start honors `catchup`: `once` fires a single
   tagged run; `skip` advances the schedule.

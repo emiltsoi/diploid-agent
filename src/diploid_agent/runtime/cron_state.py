@@ -76,29 +76,30 @@ class CronStateStore:
         tmp.replace(self._path)
 
     @contextmanager
-    def _transaction(self):
-        """Acquire the cross-process lock, re-read the file, yield, then save."""
+    def _transaction(self, save: bool = True):
+        """Lock, re-read, yield; write back only when ``save`` is set."""
         self._lock_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock, open(self._lock_path, "a+") as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             try:
                 self._load()
                 yield
-                self._save()
+                if save:
+                    self._save()
             finally:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     def get(self, job_id: str) -> CronJobState | None:
-        with self._transaction():
+        with self._transaction(save=False):
             return self._in_memory.get(job_id)
 
     def ensure(self, job_id: str, source_file: str = "") -> CronJobState:
-        with self._transaction():
+        with self._transaction(save=False):
             state = self._in_memory.get(job_id)
-            if state is None:
-                state = CronJobState(job_id=job_id, source_file=source_file)
-                self._in_memory[job_id] = state
-            return state
+        if state is None:
+            state = CronJobState(job_id=job_id, source_file=source_file)
+            return self.update(state)
+        return state
 
     def update(self, state: CronJobState) -> CronJobState:
         state.updated_at = time.time()
@@ -107,7 +108,7 @@ class CronStateStore:
             return state
 
     def all(self) -> dict[str, CronJobState]:
-        with self._transaction():
+        with self._transaction(save=False):
             return dict(self._in_memory)
 
     def remove_missing(self, job_ids: set[str]) -> None:

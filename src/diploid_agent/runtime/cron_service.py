@@ -20,6 +20,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -98,6 +99,7 @@ class CronService:
         self._cron_plans: dict[str, str] = {}  # chat_id -> plan_id
         self._task_to_job: dict[str, str] = {}  # task_id -> job_id
         self._catchup_pending: set[str] = set()
+        self._finalize_lock = threading.Lock()
         self._booted = False
         self._thread: threading.Thread | None = None
         self._running = False
@@ -211,8 +213,8 @@ class CronService:
                     continue
                 if spec.id in merged:
                     warnings.append(
-                        f"cron id conflict: {spec.id} in {watch.path} shadows "
-                        f"{merged[spec.id].source_file}"
+                        f"cron id conflict: {spec.id} in {watch.path} is shadowed "
+                        f"by {merged[spec.id].source_file}"
                     )
                     continue
                 resolved = self._resolve_job(spec, watch, warnings, now)
@@ -261,6 +263,11 @@ class CronService:
             return None
         persona_dir = persona.profile_root if persona is not None else None
         chat_id = spec.chat_id or self._config.harness.mesh.fallback_chat_id
+        if not chat_id:
+            warnings.append(
+                f"job {spec.id}: no chat_id and no mesh fallback configured — dropped"
+            )
+            return None
         return _ResolvedJob(
             spec=spec,
             source_file=watch.path,
@@ -271,15 +278,27 @@ class CronService:
         )
 
     @staticmethod
-    def _cron_gap(expr: str, now: float) -> float | None:
-        """Gap between the next two fires of a cron expression."""
+    def _cron_gap(expr: str, now: float, samples: int = 5) -> float | None:
+        """Minimum gap across the next several fires of a cron expression.
+
+        Sampling only the first pair can miss a dense sub-pattern hiding
+        behind a sparse upcoming gap, so we take the min over the next
+        ``samples - 1`` inter-fire gaps.
+        """
         if croniter is None:
             return None
         try:
-            it = croniter(expr, now)
-            first = it.get_next(float)
-            return it.get_next(float) - first
-        except (ValueError, KeyError):
+            # A tz-aware local start keeps the expression in wall-clock
+            # time — croniter treats float/naive input as UTC.
+            it = croniter(expr, datetime.fromtimestamp(now).astimezone())
+            prev = it.get_next(float)
+            gaps: list[float] = []
+            for _ in range(max(1, samples - 1)):
+                cur = it.get_next(float)
+                gaps.append(cur - prev)
+                prev = cur
+            return min(gaps)
+        except (ValueError, KeyError, TypeError):
             return None
 
     # ------------------------------------------------------------------ service
@@ -397,6 +416,12 @@ class CronService:
             return base + sched.every_seconds
         if sched.at_daily is not None:
             hour, minute = (int(p) for p in sched.at_daily.split(":"))
+            if croniter is not None:
+                # croniter does wall-clock math, so 23h/25h DST days stay right.
+                return croniter(
+                    f"{minute} {hour} * * *",
+                    datetime.fromtimestamp(base).astimezone(),
+                ).get_next(float)
             lt = time.localtime(base)
             candidate = time.mktime(
                 (lt.tm_year, lt.tm_mon, lt.tm_mday, hour, minute, 0, 0, 0, -1)
@@ -405,7 +430,9 @@ class CronService:
                 candidate += 86400.0
             return candidate
         if sched.cron is not None and croniter is not None:
-            return croniter(sched.cron, base).get_next(float)
+            return croniter(
+                sched.cron, datetime.fromtimestamp(base).astimezone()
+            ).get_next(float)
         return base + 86400.0  # unreachable: validators require one field
 
     def _cron_plan_id(self, chat_id: str) -> str:
@@ -438,7 +465,10 @@ class CronService:
         cwd = Path(spec.call.cwd).expanduser() if spec.call.cwd else resolved.persona_dir
         task = Task(
             name=f"cron:{spec.id}",
-            description=f"cron job {spec.id} ({resolved.source_label})",
+            description=(
+                f"cron job {spec.id} ({resolved.source_label}"
+                f"{', catchup' if catchup else ''})"
+            ),
             chat_id=resolved.chat_id,
             cwd=cwd,
         )
@@ -469,8 +499,11 @@ class CronService:
         self._task_to_job[added.id] = spec.id
         try:
             self._task_engine.start_task(plan_id, added.id)
-        except ValueError as exc:
+        except Exception as exc:  # noqa: BLE001 — leave no orphaned READY task
             logger.warning("Cron job %s failed to start: %s", spec.id, exc)
+            self._plan_manager.fail_task(
+                plan_id, added.id, log=f"cron could not start: {exc}"
+            )
             state.running_task_id = None
             state.running_plan_id = None
             state.last_status = "failed"
@@ -508,37 +541,46 @@ class CronService:
         event: Event | None = None,
     ) -> None:
         resolved = self._jobs.get(state.job_id)
-        ok = task.status == TaskStatus.DONE and not task.timed_out
-        if event is not None and event.type == "task.failed":
-            ok = False
-        summary = (task.result or task.log or "").strip().splitlines()
-        state.last_summary = summary[0][:200] if summary else ""
-        state.last_status = "ok" if ok else "failed"
-        state.last_finished_at = time.time()
-        state.running_task_id = None
-        state.running_plan_id = None
-        if ok:
-            state.consecutive_failures = 0
-        else:
-            state.consecutive_failures += 1
-            max_failures = (
-                resolved.spec.max_consecutive_failures if resolved is not None else 3
-            )
-            if state.consecutive_failures >= max_failures:
-                state.disabled = True
-                state.last_status = "disabled"
-                state.last_summary = (
-                    f"auto-disabled after {state.consecutive_failures} "
-                    f"consecutive failures: {state.last_summary}"
+        # The event-bus thread and the tick's reconcile pass can both reach
+        # here for the same finished task — re-read under the lock so only
+        # the first finalizer claims it.
+        with self._finalize_lock:
+            fresh = self._state.get(state.job_id)
+            if fresh is None or fresh.running_task_id != task.id:
+                return
+            state = fresh
+            ok = task.status == TaskStatus.DONE and not task.timed_out
+            if event is not None and event.type == "task.failed":
+                ok = False
+            summary = (task.result or task.log or "").strip().splitlines()
+            state.last_summary = summary[0][:200] if summary else ""
+            state.last_status = "ok" if ok else "failed"
+            state.last_finished_at = time.time()
+            state.running_task_id = None
+            state.running_plan_id = None
+            if ok:
+                state.consecutive_failures = 0
+            else:
+                state.consecutive_failures += 1
+                max_failures = (
+                    resolved.spec.max_consecutive_failures
+                    if resolved is not None
+                    else 3
                 )
+                if state.consecutive_failures >= max_failures:
+                    state.disabled = True
+                    state.last_status = "disabled"
+                    state.last_summary = (
+                        f"auto-disabled after {state.consecutive_failures} "
+                        f"consecutive failures: {state.last_summary}"
+                    )
+            self._state.update(state)
         if resolved is not None:
             self._deliver(resolved, state, task)
             if state.queued_due and not state.disabled:
                 state.queued_due = False
                 self._state.update(state)
                 self._materialize(resolved, state, time.time())
-                return
-        self._state.update(state)
 
     # ------------------------------------------------------------- delivery
 
@@ -567,6 +609,7 @@ class CronService:
                 json.dumps(
                     {
                         "job_id": resolved.spec.id,
+                        "delivery": resolved.spec.delivery,
                         "status": state.last_status,
                         "finished_at": state.last_finished_at,
                         "next_due_at": state.next_due_at,
@@ -582,6 +625,8 @@ class CronService:
     def _write_service_last(self) -> None:
         """Surface reload warnings where the digest slot can read them."""
         chat_id = self._config.harness.mesh.fallback_chat_id
+        if not chat_id:
+            return
         out_dir = self._results_dir(chat_id)
         try:
             out_dir.mkdir(parents=True, exist_ok=True)

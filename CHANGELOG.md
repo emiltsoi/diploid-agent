@@ -15,6 +15,15 @@
   `sessions/<chat>/cron/` result files. `delivery: silent|digest` in Wave A
   (`turn` rejected until Wave B); `GET /cron` exposes merged jobs + state.
   See `docs/cron.md`. New dependency: `croniter>=6.2.4,<7`.
+- Post-review cron fixes: `cron`/`at_daily` schedules now evaluate in local
+  wall-clock time (croniter was fed a float/naive base, which it treats as
+  UTC); `.last` result files carry `delivery` so the digest slot can honor
+  `silent` (auto-disabled jobs still surface); `_finalize` is idempotent
+  against the event/reconcile race; a failed `start_task` no longer leaves
+  an orphaned READY task; `min_interval` checks the minimum gap across the
+  next several fires; read-only state transactions no longer rewrite
+  `cron_state.jsonl`; jobs with no resolvable `chat_id` drop with a warning
+  instead of crashing the tick.
 - Pre-pressure handoff turn: when the proactive context-pressure check would
   force a fresh session, `harness.pressure_handoff_enabled` (default `true`)
   first grants one bounded turn on the live session so the agent can author
