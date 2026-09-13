@@ -17,7 +17,8 @@ This is the wiki for the `diploid-agent`.
 11. [Hindsight API contract](hindsight-api-contract.md) — the external Hindsight server contract.
 12. [Background dispatches and continuation](dispatch.md) — run work in the background and resume the session when it completes.
 13. [Wake queue and proactive wake](wake.md) — persistent wake events and the `diploid-waker` poller.
-14. [Mesh integration](mesh.md) — agent-to-agent mesh messaging, reply semantics, and per-turn send caps.
+14. [Cron scheduler](cron.md) — declarative config-file jobs: script subprocesses and phantom LLM calls with digest/silent delivery.
+15. [Mesh integration](mesh.md) — agent-to-agent mesh messaging, reply semantics, and per-turn send caps.
 
 ## One-sentence summary
 

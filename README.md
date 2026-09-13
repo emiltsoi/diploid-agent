@@ -38,6 +38,8 @@ retention to a Hindsight memory server.
   rehydration.
 - Sandboxes the ACP subprocess so it cannot run raw `systemctl`, `reboot`, or `shutdown` against the host; restart requests from the agent are routed through the harness and scheduled gracefully with `systemd-run`.
 - Queues incoming user messages as high-priority wake events when a chat is busy instead of dropping them, and pushes the final result through an outbox consumed by the Telegram `DeliveryWorker` so background turns, mesh wake replies, and subagent completions can still reach the user.
+- Lets agents arm their own wakes: the `harness_self_wake`/`_list`/`_cancel` MCP tools write budget-capped `self_wake` events into the wake queue (`timer.self_wake_max_pending` / `self_wake_min_interval_seconds` / `self_wake_max_delay_seconds`), gated by the authorship plugin's `self_wake_enabled` toggle; `POST /timer`, `GET /timer/pending`, and `POST /timer/cancel` expose the same surface over HTTP.
+- Runs declarative cron jobs from `config/crons.yaml` (operator-owned) and `<persona>/crons.yaml` (agent-authored, gated by the authorship `cron_enabled` toggle): `script` jobs run as shell subprocesses and `llm` jobs run as *phantoms* — fresh isolated ACP children composed with the persona's identity files + promoted pocket and an empty MCP list — materialized through the TaskEngine. `delivery: silent|digest` writes per-job result files that a bounded `cron` prompt slot renders; `GET /cron` exposes merged job state. See `docs/cron.md`.
 - Sends a `System: service was restarted.` notice to recently active chats on startup and drops stale `auto_continue` wakes so a crash-restart does not immediately re-run an old continuation.
 - Edits the streaming placeholder with a `(still working, Xm)` liveness suffix, and sends `⏳ Still thinking...` outbox heartbeats for long wake-driven turns, so users know whether to wait or send `/stop`.
 - Curates a `/promote`-driven **promoted memory** pocket that survives `fresh`
@@ -66,6 +68,10 @@ retention to a Hindsight memory server.
   first-turn prompt metrics, instead of a fixed 4:1 guess; `fresh` compact mode
   uses tiered prompt assembly with a `prompt_blocks` allowlist/denylist and a
   capped recall escape hatch.
+- Grants one bounded handoff turn before a context-pressure rebuild
+  (`harness.pressure_handoff_enabled`, default on): the first trigger asks the
+  live session to author its own resume state while it still holds full
+  context; the next trigger proceeds with the fresh session.
 - Pre-computes the smart short-term summary only when the recent-turn window is
   overflowing, avoiding unnecessary summarizer calls.
 - Records resume / load / new latency and outcome telemetry in the lifecycle log
@@ -197,6 +203,7 @@ Browse the docs as a searchable site: **https://emiltsoi.github.io/diploid-agent
 - [Hindsight API contract](docs/hindsight-api-contract.md)
 - [Background dispatches and continuation](docs/dispatch.md)
 - [Wake queue and proactive wake](docs/wake.md)
+- [Cron — declarative scheduled jobs](docs/cron.md)
 - [Mesh integration](docs/mesh.md)
 - [Index of all documentation](docs/index.md)
 - [Plugin contract](docs/plugin-contract.md)
@@ -210,6 +217,7 @@ Browse the docs as a searchable site: **https://emiltsoi.github.io/diploid-agent
 - Exposes MCP tools (`mesh_send`, `mesh_list`, `mesh_register`, `mesh_sync`, `mesh_publish`, `mesh_health`, `mesh_deregister`).
 - Enforces `reply=yes/no/end` semantics: `reply=no` nudges the model to avoid replying, `reply=end` hard-blocks `mesh_send`, and DSNs are recorded without a turn.
 - Nudges and hard-caps `mesh_send` calls per ACP turn via `harness.mesh.max_sends_per_turn` and `harness.mesh.max_message_in_turn_suggestion`.
+- Surfaces a bounded "Recent mesh" digest of terminal threads in the prompt — sender, summary, relative age — so closed conversations still shape context without forcing a reply.
 - Strengthens prompt discipline with a top-of-prompt `SYSTEM — MESH REPLY RULE` CTA that commands the agent to use `mesh_send` for replies and to keep mesh content out of normal assistant text.
 - Can mirror sent mesh messages back to Telegram as `System: [mesh] ...` notices via `harness.notifications.mesh_telegram_float`.
 - Shares the same `mesh-peer-registry` and local vault format with [`hermes-mesh`](https://github.com/emiltsoi/hermes-mesh) and [`openclaw-mesh`](https://github.com/emiltsoi/openclaw-mesh), so a diploid agent can exchange messages with Hermes and OpenClaw agents using the same envelope and signatures.
@@ -295,6 +303,9 @@ responsibility lives in a focused module:
   - `turn_controller.py` — re-export shim for `turn/controller.py`.
   - `wake_queue.py` — persistent, multi-process wake event queue.
   - `timer_service.py` — background wake consumer posting timer events.
+  - `cron_service.py` — declarative cron scheduler materializing config-file
+    jobs into the TaskEngine.
+  - `cron_state.py` — JSONL-backed per-job cron state store.
   - `auto_continue.py` — auto-continue suppression state.
   - `event_bus.py` — in-memory runtime event bus.
   - `typing.py` — typing heartbeat for active tasks.
