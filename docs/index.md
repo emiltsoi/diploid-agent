@@ -16,22 +16,28 @@ This is the wiki for the `diploid-agent`.
 10. [Design decisions](design-decisions.md) — why the harness is built this way.
 11. [Hindsight API contract](hindsight-api-contract.md) — the external Hindsight server contract.
 12. [Background dispatches and continuation](dispatch.md) — run work in the background and resume the session when it completes.
-13. [Mesh integration](mesh.md) — agent-to-agent mesh messaging, reply semantics, and per-turn send caps.
+13. [Wake queue and proactive wake](wake.md) — persistent wake events and the `diploid-waker` poller.
+14. [Mesh integration](mesh.md) — agent-to-agent mesh messaging, reply semantics, and per-turn send caps.
 
 ## One-sentence summary
 
 The harness turns an ACP-compatible agent engine (default `devin acp`) into a
-persistent, chat-scoped service with a Telegram bot, model switching, pluggable
-memory, background dispatches and subagents that continue when work completes,
-a `ChatResult` outbox with a global Telegram `DeliveryWorker`, liveness heartbeat, stale-wake cleanup and
-a restart notice, optional MCP servers and reusable skills, robust ACP transport
-recovery with ACP session resume (bounded resume budget, hard-timeout transport
-reset, and a dedicated callback worker so the stdout reader is never starved),
-a per-harness ACP lifecycle audit log, proactive context-window sizing with a
-`fresh` compact soul mode and tiered prompt assembly, smart short-term
-summarization, a `/promote` pocket that survives `fresh` resets, Hindsight
-retain that slices off working narration and bundles several turns per document,
-wake-time continuity narrative, interrupted-turn anchoring with monotonic turn
-numbering, plugin hot-reload, plugin/body-state snapshot and restore,
-a bridge/SURFACE first-person handoff, a body/felt state layer, and a rich
-plugin lifecycle hook surface for intercepting and extending conversations.
+persistent, chat-scoped service with durable identity, memory, and session
+continuity.
+
+Highlights:
+
+- Telegram bot and FastAPI HTTP ingress, with a `ChatResult` outbox, global
+  `DeliveryWorker`, liveness heartbeat, and restart notice.
+- ACP session continuity: `session/resume`/`session/load` recovery, in-place or
+  fresh-session model switching, interrupted-turn anchoring, monotonic turn
+  numbering, and a per-harness lifecycle audit log.
+- Pluggable memory: file or Hindsight backend, smart short-term summarization,
+  a `/promote` pocket that survives `fresh` resets, turn-bundled retain, and a
+  `diploid-memory` MCP server.
+- Prompt assembly: live token calibration, `fresh` compact mode with tiered
+  prompt blocks, wake-time continuity narrative, a bridge/SURFACE first-person
+  handoff, and a body/felt state layer.
+- Extensibility: state plugins with a rich hook surface and hot-reload,
+  optional MCP servers, chat-scoped skills, background dispatches and
+  subagents, and agent-to-agent mesh messaging.

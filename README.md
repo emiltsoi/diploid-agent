@@ -12,9 +12,10 @@ retention to a Hindsight memory server.
 
 - Runs an ACP agent session with a persona loaded from `personas/<persona>`.
 - Remembers each conversation in `sessions/<chat_id>/chat_transcript.jsonl`.
-- Preserves context across **model switches** by starting a new agent session and
-  re-injecting the recent transcript + long-term memory.
-- Can switch models on the fly (`/model <name>`).
+- Preserves context across **model switches**: `/model <name>` starts a new
+  agent session and re-injects the recent transcript + long-term memory, while
+  `/model --in-place <name>` changes the model on the live ACP session via
+  `session/set_config_option`.
 - Can keep long-term memory either locally (`file`) or in a Hindsight server
   (`hindsight`).
 - Retains turns to Hindsight as bundled multi-turn documents containing only
@@ -26,7 +27,7 @@ retention to a Hindsight memory server.
 - Splits long or pausing Telegram replies into separate intermediate messages so
   tool-call gaps do not mash into one confusing block; each new message shows
   only the text that has not already been sent.
-- Supports background dispatches that continue the conversation when they complete (`/dispatch`, `/continue`) and harness-native background subagents (`/subagent`, `harness_subagent` MCP tool) that survive the parent turn being stopped.
+- Supports background dispatches that continue the conversation when they complete (`POST /dispatch`, `/continue`) and harness-native background subagents (`/subagent`, `harness_subagent` MCP tool) that survive the parent turn being stopped.
 - Supports live runtime configuration of task, waker, timer, notifications, and Telegram settings via HTTP and Telegram without restarting.
 - Supports state plugins with a rich lifecycle hook surface: plugins can intercept turns, sessions, dispatches, memory transitions, skill/MCP commands, retain/promote, and shutdown.
 - Hardens the ACP transport with typed error classification, restart backoff, a
@@ -69,8 +70,9 @@ retention to a Hindsight memory server.
   overflowing, avoiding unnecessary summarizer calls.
 - Records resume / load / new latency and outcome telemetry in the lifecycle log
   and exposes it in `/status`.
-- Runs a `diploid-memory` MCP server with `memory_recall`, `memory_retain`, and
-  `memory_promote` tools, plus a shared `memory` skill that lets the agent use them.
+- Runs a `diploid-memory` MCP server with `memory_recall`, `memory_retain`,
+  `memory_promote`, and `memory_status` tools, plus a shared `memory` skill
+  that lets the agent use them.
 - Supports agent-to-agent mesh messaging via [`diploid-mesh`](https://github.com/emiltsoi/diploid-mesh), with `reply=yes/no/end` semantics, DSN recording, and per-turn nudges/caps to prevent mesh-send loops.
 - Exposes a plugin framework for per-chat state plugins; the built-in state plugins
   live in [`diploid-plugins`](https://github.com/emiltsoi/diploid-plugins).
@@ -141,6 +143,9 @@ curl -X POST http://127.0.0.1:4003/switch-model \
   -d '{"chat_id": "test-1", "model": "glm-5-2"}'
 ```
 
+Pass `"in_place": true` to change the model on the live ACP session instead of
+starting a new one.
+
 ## Telegram commands
 
 - `/status` — current model, session id, working directory, context-window usage, ACP continuity state, and resume telemetry.
@@ -150,7 +155,7 @@ curl -X POST http://127.0.0.1:4003/switch-model \
 - `/plugin list | /plugin enable <name> | /plugin disable <name> | /plugin reload <name>` — manage state plugins; `reload` hot-swaps the plugin's code without a restart.
 - `/state <plugin> <event> [args...]` — dispatch a state event to a plugin.
 - `/models` — list available ACP models.
-- `/model <name>` — switch this chat to a new model.
+- `/model [--in-place] <name>` — switch this chat to a new model. `--in-place` changes the model on the live session instead of starting a new one.
 - `/new` — start a fresh session.
 - `/stop` — cancel the current turn and return a partial reply.
 - `/restart` — kill the ACP subprocess and start a fresh transport.
@@ -191,6 +196,7 @@ Browse the docs as a searchable site: **https://emiltsoi.github.io/diploid-agent
 - [Design decisions](docs/design-decisions.md)
 - [Hindsight API contract](docs/hindsight-api-contract.md)
 - [Background dispatches and continuation](docs/dispatch.md)
+- [Wake queue and proactive wake](docs/wake.md)
 - [Mesh integration](docs/mesh.md)
 - [Index of all documentation](docs/index.md)
 - [Plugin contract](docs/plugin-contract.md)
@@ -216,12 +222,17 @@ See [`docs/mesh.md`](docs/mesh.md) and the [`diploid-mesh` README](https://githu
   Devin Desktop when `provider: diploid`). The harness only works if the user
   running it is already authenticated, or if `WINDSURF_API_KEY` / `ACP_API_KEY` is
   supplied in `config/secrets.env`.
-- An ACP session's model is set at creation. Switching models starts a new
-  session, but the harness re-injects the conversation transcript + memory.
+- An ACP session's model is set at creation. `/model --in-place` updates it on
+  the live session via `session/set_config_option`; a normal `/model` switch
+  starts a new session and re-injects the conversation transcript + memory.
 - The HTTP ingress is intended for a trusted/private network (`127.0.0.1` by
   default). If you expose it externally, set `HARNESS_API_KEY` in
-  `config/secrets.env` and send it in the `X-API-Key` header on `POST` and live runtime config `GET`
-  requests (e.g. `/task/config`, `/waker/config`, `/timer/config`, `/notifications/config`). Other `GET` endpoints and Telegram's `/webhook` remain open.
+  `config/secrets.env` and send it in the `X-API-Key` header on all `POST`/`PATCH`
+  requests (including `PATCH /config` and the per-section `/task/config`,
+  `/waker/config`, `/timer/config`, `/notifications/config`). Read-only `GET`s
+  (including `GET /config`, which redacts secrets) and the inbound receiver
+  `POST`s (`/webhook`, `/mesh/receive`, `/plugins/openclaw-mesh/webhook`,
+  `/ingress/{protocol}`) remain open.
 - `TELEGRAM_BOT_TOKEN` lives in `config/secrets.env` only; that file is
   gitignored and the poller does not log the token.
 
@@ -266,26 +277,55 @@ responsibility lives in a focused module:
   turn orchestrator (the old `ConversationHarness`).
 - `diploid_agent/runtime/*.py` — focused runtime collaborators:
   - `store.py` — chat/session persistence.
+  - `state.py` — mutable scalar state shared by runtime components.
   - `metrics.py` — metrics, health, and prometheus formatting.
   - `config_manager.py` — live runtime configuration overrides.
   - `outbox.py` — outbox queue and notification delivery.
   - `mcp_skills.py` — MCP and skill enablement.
   - `plugins.py` — plugin lifecycle, incidents, and sandbox.
+  - `plugin_runtime.py` — stable runtime surface exposed to state plugins.
   - `prompts.py` — first/follow-up prompt building and model resolution.
   - `subagent.py` — background subagent start/completion/status.
   - `planning.py` — plan and dispatch wake helpers.
   - `actions.py` — public command-style actions.
+  - `ingress.py` — public turn-entry surface and transport ingress routing.
+  - `instance.py` — per-chat singleton guard with cross-process locking.
+  - `lifecycle.py` — startup, shutdown, restart notices, event-bus dispatch.
+  - `restart.py` — ACP-subprocess restart scheduling and drain coordination.
+  - `turn_controller.py` — re-export shim for `turn/controller.py`.
+  - `wake_queue.py` — persistent, multi-process wake event queue.
+  - `timer_service.py` — background wake consumer posting timer events.
+  - `auto_continue.py` — auto-continue suppression state.
+  - `event_bus.py` — in-memory runtime event bus.
+  - `typing.py` — typing heartbeat for active tasks.
 - `diploid_agent/turn/` — ACP per-turn engine:
   - `controller.py` — turn coordinator.
+  - `base.py` — shared base for the `Turn*` collaborator classes.
+  - `pipeline.py` — shared engine-invocation pipeline for process/dispatch.
   - `process.py` — main `process()` turn loop.
+  - `stream.py` — per-turn `on_chunk`/`on_update` stream callbacks.
   - `session.py` — new/resume/branch session management.
   - `rehydrate.py` — stale session recovery and ACP resume.
   - `dispatch.py` — background dispatch and continue-turn.
   - `notifier.py` — streaming `_NotifyStream` and `_OutboxHeartbeat`.
+  - `utils.py` — small shared helpers.
+- `diploid_agent/context/` — prompt assembly:
+  - `builder.py` — `ContextBuilder` first/follow-up prompt assembly.
+  - `pressure.py` — context-pressure decisions and soul-mode selection.
+  - `anchors.py` — continuation and interruption anchors.
+  - `wake_context.py` — wake-context narration from the lifecycle log.
+  - `token_estimator.py` — chars-per-token calibration and budget math.
+  - `reply_quote.py` — reply-to quote formatting.
 - `diploid_agent/acp_client/` — ACP JSON-RPC transport and process lifecycle:
   - `client.py` — public `AcpClient` session/prompt API.
+  - `sessions.py` — `AcpSessionOps`: `session/new`/`resume`/`load` and
+    `session/set_config_option` calls above the raw transport.
   - `transport.py` — low-level `AcpTransport` (subprocess, JSON-RPC reader).
+  - `callbacks.py` — `AcpCallbackPump`: serializes prompt callbacks off the
+    reader thread.
   - `watchdog.py` — `PromptWatchdog` stall detection and recovery.
+  - `lifecycle.py` — `acp-lifecycle.jsonl` audit log.
+  - `state.py` — shared mutable client state.
   - `control.py` — Unix-socket listener for agent restart requests.
   - `sandbox.py` — isolated `HOME` and fake `systemctl` wrappers.
   - `errors.py`, `types.py`, `utils.py` — shared helpers.
@@ -298,10 +338,28 @@ responsibility lives in a focused module:
   - `app.py` — `create_app`, `HttpTransport`, `main`.
   - `routes/*.py` — domain-grouped route handlers.
   - `models.py` — request/response Pydantic models.
-- `diploid_agent/memory.py` / `memory_mcp.py` — transcript and long-term memory.
-- `diploid_agent/mcp.py` — MCP server resolution and per-chat enablement.
-- `diploid_agent/skills.py` — skill discovery and chat-scoped skill loading.
+- `diploid_agent/memory*.py` — transcript and long-term memory:
+  - `memory.py` — `MemoryManager` facade.
+  - `memory_backends.py` — file and Hindsight backend implementations.
+  - `memory_retention.py` — turn-retain buffer and Hindsight bundling.
+  - `memory_short_term.py` — recent-turns window and summary cache.
+  - `memory_promoted.py` — `/promote` pocket and persona memory.
+  - `memory_models.py` — shared memory dataclasses.
+  - `memory_mcp.py` — the `diploid-memory` MCP server.
+- `diploid_agent/engine/` — engine adapters: `acp.py` (the `devin acp`
+  implementation), `base.py`/`factory.py`/`router.py`, `fake.py` for tests.
+- `diploid_agent/plan/` — background plan records and `PlanManager`.
+- `diploid_agent/task/` — background task engine and worker pool.
+- `diploid_agent/testing/` — `FakeRuntime` test double.
 - `diploid_agent/plugins/` — state plugin lifecycle and manager.
+- Top-level support modules: `config.py` (pydantic config schema),
+  `models.py` (session/turn records), `dispatch.py` (dispatch records),
+  `metrics.py`, `notifier.py`, `persona_composer.py`, `locking.py`,
+  `text.py`, `mcp.py` + `mcp_stdio.py` (MCP server resolution and per-chat
+  enablement), `skills.py` (skill discovery and chat-scoped loading),
+  `plugin_sandbox.py` + `plugin_incidents.py`, `harness.py` (compatibility
+  wrapper), and the `telegram_ingress.py` / `telegram_poll.py` legacy entry
+  shims.
 
 ## License
 

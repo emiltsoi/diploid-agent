@@ -34,7 +34,7 @@ harness therefore generates the "Now running on model X" text itself and uses
 direct HTTP callers.
 - The poller is a lightweight, replaceable client. A webhook can replace it
 without code changes.
-- `systemd/diploid-agent-run.sh` runs both under one unit and restarts them as a
+- `systemd/harness-run.sh` runs both under one unit and restarts them as a
 pair if either dies.
 
 ## Why spool on Hindsight retain failures
@@ -52,8 +52,9 @@ file backend summarization loop is disabled when `backend: hindsight`.
 
 ## Why the prompt is split into `first` vs `follow-up`
 
-- **First prompt** (new session / model switch): full persona + memory + user
-  message. This is the heavy context load.
+- **First prompt** (new session / fresh-session model switch — an `--in-place`
+  switch creates no prompt at all): full persona + memory + user message. This
+  is the heavy context load.
 - **Follow-up prompt** (resume): short identity anchor + user message. The ACP
   session already holds prior context.
 
@@ -110,16 +111,18 @@ restart the ACP transport only when the active MCP list actually changes.
 
 ## Why stale-session rehydration rebuilds the full prompt
 
-When an ACP session becomes stale, the harness falls back to `build_first`
-and creates a new ACP session on the existing transport. The new first prompt
+When an ACP session becomes stale, the harness first tries `session/resume` /
+`session/load` to recover the session server-side; only when resume fails or is
+rejected by the consistency check does it fall back to `build_first` and create
+a new ACP session on the existing transport. The new first prompt
 re-injects the persona, current memory, recalled transcript context, the
 optional continuation anchor, and first-prompt-only plugin blocks. It is built
 with `rehydrated=True`, so the model sees a rehydration notice and plugins such
 as `continuity` still run at the session boundary. This is a full context reload,
-not an incremental re-injection. It is a known cost of the stale-session fallback
-and is intentionally chosen over trying to resume a broken ACP session. If the new
-session also reports a stale or transport-level error, the harness restarts the
-ACP transport and retries once.
+not an incremental re-injection. It is a known cost of the stale-session
+fallback: cheaper than losing the conversation, heavier than a successful ACP
+resume. If the new session also reports a stale or transport-level error, the
+harness restarts the ACP transport and retries once.
 
 ## Why skills are files synced into the chat working directory
 

@@ -1,5 +1,49 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- In-place ACP model switching: `/model --in-place <name>` and
+  `POST /switch-model` with `"in_place": true` change the model on the live
+  session via `session/set_config_option`, keeping the session id and context.
+- `SessionRecord.disabled_mcp_servers` overlay: `/mcp disable` of a default
+  server now persists across `/new`, `/branch`, and implicit session
+  boundaries instead of being silently reverted by the defaults union.
+- `harness.memory` speaker-identity config (`retain_user_prefix`,
+  `retain_assistant_prefix`, `retain_context`) so retained transcripts carry
+  real speaker names for Hindsight fact attribution.
+- `hindsight.observation_scope` (`"chat"` / `"shared"`) mapped onto the
+  `observation_scopes` retain field so consolidated observations stay visible
+  to the chat-tagged recall filter.
+
+### Changed
+
+- ACP resume fast path: model drift is absorbed by resume's config re-apply
+  and MCP drift by a transport-restart resync; only skill drift or a previous
+  `timeout` stop forces `session/new`. Live-session MCP drift triggers a
+  resync `resume_session` before the next prompt (normal turns and dispatch
+  continuations).
+- Resumed ACP sessions no longer re-inject the short-term transcript tail —
+  the resumed session already holds those turns.
+- Memory backend protocol formalized: `MemoryBackend.file_store()` replaces
+  `isinstance` checks for discovering the file store.
+- Runtime collaborators now take explicit dependencies (`RuntimeState`,
+  `RuntimeIngress`, `RuntimeLifecycle`, `RuntimeRestart` extracted;
+  `RuntimeComponent` service-locator base removed; `ContextBuilder`
+  wake/pressure/anchor collaborators and `PluginHooks` dispatch split out;
+  `AcpCallbackPump` extracted from `AcpTransport`).
+
+### Fixed
+
+- `session_alive` probe is consistency-gated, and deliberate session
+  boundaries set `allow_resume=False`, so a transient `session/new` failure
+  can no longer resurrect an archived session.
+- Callback-pump generation handoff hardened: a stale pump or orphaned prompt
+  can no longer misroute updates into the next transport generation.
+- `memory_mcp` harness-call timeout raised to 150 s so `memory_recall` on a
+  large Hindsight bank (~35–40 s server-side) no longer times out at 30 s.
+
 ## 0.6.1 — 2026-09-10
 
 ### Summary

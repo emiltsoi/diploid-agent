@@ -45,7 +45,7 @@ There are three kinds of hook:
 | `before_session_archive` | Consult | Before the active session is archived | `SessionArchiveContext` |
 | `before_session_clear` | Consult | Before the active directory is cleared | `SessionClearContext` |
 | `before_session_start` | **Gate** | Before any new active session is created (`/new`, `/resume`, `/branch`, `/switch-model`; not fired for `--in-place` switches, which create no session) | `SessionStartContext` |
-| `after_session_active` | Notify | After the active record is stored and skills/MCP synced | `SessionActiveContext` |
+| `after_session_active` | Consult | After the active record is stored and skills/MCP synced; the returned context is applied | `SessionActiveContext` |
 
 #### Dispatch
 

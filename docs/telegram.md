@@ -9,7 +9,7 @@
    TELEGRAM_BOT_TOKEN=...
    ```
 
-3. Start the service. `systemd/diploid-agent-run.sh` starts both the ingress and
+3. Start the service. `systemd/harness-run.sh` starts both the ingress and
 the long-polling bot.
 
 The token is never logged. `httpx` request logging is suppressed to avoid
@@ -162,7 +162,7 @@ Every ask block has a default cancel button, so the user can dismiss the prompt 
 
 Do not include `"Other (please specify)"` as an option. If the options are not exhaustive, the cancel button is the escape hatch. If you truly need a custom open-ended answer, ask the user directly in a follow-up after they cancel, or set `cancellable: false` and make "Other" a regular option.
 
-If the user should be able to cancel the prompt without sending a turn, the default is already on. Set `cancellable: false` to make a forced-choice prompt with no cancel button, or provide an optional `cancel_label` (default `"Cancel"):
+If the user should be able to cancel the prompt without sending a turn, the default is already on. Set `cancellable: false` to make a forced-choice prompt with no cancel button, or provide an optional `cancel_label` (default `"Cancel"`):
 
 ````
 Should I continue? (forced choice)
@@ -215,6 +215,10 @@ message, so the conversation thread is visible.
 | `/skill disable <name>` | Disable a skill for this chat. |
 | `/skill create <name> <markdown>` | Create a chat-scoped skill. |
 | `/state <plugin> <event> [args...]` | Dispatch a state event to a plugin (e.g. `/state curriculum add_word hola hello`). |
+| `/plugin list` | List configured state plugins and enabled state. |
+| `/plugin enable <name>` | Enable a plugin for this chat. |
+| `/plugin disable <name>` | Disable a plugin for this chat. |
+| `/plugin reload <name>` | Hot-swap the plugin's code without a restart. |
 | `/memory` | Show per-chat memory. |
 | `/models` | List ACP model names. |
 | `/model [--in-place] <name>` | Switch this chat to a new model. `--in-place` changes the model on the live session instead of starting a new one. |
@@ -223,6 +227,7 @@ message, so the conversation thread is visible.
 | `/restart` | Kill the ACP subprocess and start a fresh transport. |
 | `/graceful-restart [service]` | Schedule a graceful `systemd-run` restart of the named service. If `service` is omitted, the current persona's `.service` unit is restarted. |
 | `/subagent <prompt>` | Start a background ACP subagent. The harness continues the chat with the result when it finishes. |
+| `/subagents` | List background subagents for this chat. |
 | `/continue` | Resume the previous turn after a partial reply or timeout. |
 | `/stream_thoughts on\|off` | Toggle the optional real-time thought stream. |
 | `/sessions` | List numbered sessions for this chat. |
@@ -230,7 +235,7 @@ message, so the conversation thread is visible.
 | `/branch <n>` | Branch from session `n` and make it the active session. |
 | `/summarize` | Trigger file-backend summarization. |
 | `/recall <query>` | Search memory for relevant context. |
-| `/promote <fact>` | Append a fact to the persona's global memory. |
+| `/promote <fact>` | Append a fact to this chat's promoted memory pocket. |
 | `/help` | Show the list of Telegram slash commands. |
 | `/config <section> <key>=<value> [key=value...]` | Update live runtime config (task, waker, timer, notifications, telegram) without restarting. |
 
@@ -250,7 +255,7 @@ You can adjust the harness's live runtime configuration directly from Telegram w
 /config <section> <key>=<value> [key=value...]
 ```
 
-`<section>` is one of `task`, `waker`, `timer`, `notifications`, or `telegram`. The poller parses each `key=value` pair and POSTs it to the corresponding `/config` endpoint on the ingress. For example:
+`<section>` is one of `task`, `waker`, `timer`, `notifications`, or `telegram`. The poller parses each `key=value` pair and applies it against the runtime. In the single-process deployment this happens in-process; when the poller talks to a remote harness it POSTs the fields to the corresponding `/{section}/config` endpoint. For example:
 
 ```
 /config task workers=5
@@ -271,7 +276,14 @@ For the `telegram` section, the following keys may be updated live:
 | `stream_chunk_interval` | seconds | Reserved; currently unused. |
 | `message_format` | `plain` / `markdown_v2` | How the final reply is formatted. |
 
-Because the Telegram poller is a separate process, live `telegram` config changes only take effect after the poller restarts. Other sections (`task`, `waker`, `timer`, `notifications`) take effect immediately on the running harness.
+In the single-process deployment `telegram` changes take effect immediately —
+the poller re-reads the runtime config on every message. In the two-process
+deployment `/config telegram` currently fails: there is no `/telegram/config`
+route (`PATCH /config` on the ingress is the closest equivalent), and the
+fields are poller-side rendering settings that a remote poller would not pick
+up without a restart anyway. The other sections (`task`, `waker`, `timer`,
+`notifications`) take effect immediately on the running harness in either
+mode.
 
 Invalid values are rejected with an error reply. Changes are persisted to `runtime-overrides.yaml` in the project root so they survive a harness restart.
 

@@ -33,7 +33,9 @@ consistency checks starts a fresh `session/new` with a full first prompt.
   `/resume 1`).
 - **Session record** — a JSON line in `sessions.jsonl` with `chat_id`,
   `session_number`, `session_id`, `model`, `cwd`, `created_at`, `updated_at`,
-  `turn_number`, `label`, and `parent`.
+  `turn_number`, `label`, and `parent`, plus the resume-relevant fields
+  `last_stop_reason`, `enabled_skills`, `enabled_mcp_servers`,
+  `disabled_mcp_servers`, `plugin_overrides`, and `pending_turn_number`.
 
 ## Commands
 
@@ -41,7 +43,7 @@ consistency checks starts a fresh `session/new` with a full first prompt.
 
 | Telegram | HTTP | Effect |
 |---|---|---|
-| `/new` | `POST /new/{chat_id}` | Archive the current active session and start a fresh one. The active workspace is cleared, but the chat-level ledger (`chat_transcript.jsonl`, `chat_MEMORY.md`, `hindsight-pending-retain.jsonl`) is preserved. |
+| `/new` | `POST /new/{chat_id}` | Archive the current active session and start a fresh one. The active workspace is cleared, but the chat-level ledger (`chat_transcript.jsonl`, `chat_MEMORY.md`, `chat_PROMOTED.md`, `chat_self_state.md`, `chat_body_state.json`, `hindsight-pending-retain.jsonl`) is preserved. |
 | `/stop` | `POST /stop` | Cancel the in-flight ACP turn and return the partial reply. |
 | `/stream_thoughts on\|off` | — | Toggle the optional real-time thought stream in Telegram. |
 | `/sessions` | `GET /sessions/{chat_id}` | List numbered sessions; active one is marked. |
@@ -75,25 +77,43 @@ follow-up on the resumed session.
 
 `/branch 1` starts a new diploid session number. By default it first attempts to
 resume the source ACP `session_id` so the new branch continues the same ACP
-message chain. If the source session cannot be resumed (incompatible model,
-MCP list, skills, or a previous timeout), it falls back to creating a new ACP
+message chain. If the source session cannot be resumed (a drifted skill set or
+a previous timeout — model and MCP drift are absorbed as described below), it
+falls back to creating a new ACP
 session seeded with the archived transcript and memory.
 
 ## ACP resume configuration
 
 ACP session resume is controlled by `engine.acp_resume_enabled` (also writable as `diploid.acp_resume_enabled`; default `true`). When enabled, the harness tries ACP `session/resume` (falling back to `session/load`) before rehydrating from a rebuilt prompt.
 
-Resume is only attempted when the active configuration matches the stored
-session:
+Resume is only attempted when the stored session is consistent with the active
+configuration:
 
-- The requested model must match the session's model.
-- The active MCP server list must match `record.enabled_mcp_servers`.
-- The active skill list must match `record.enabled_skills`.
-- The previous turn must not have stopped with `timeout` (timed-out sessions are
-  restarted from scratch).
+- The active skill list must match `record.enabled_skills` (skills are
+  discovered at session start, so a changed set cannot be retrofitted onto a
+  live ACP session).
+- The previous turn must not have stopped with `timeout` (timed-out sessions
+  are restarted from scratch).
 
-If any of these checks fail, or if ACP resume raises an error, the harness falls
-back to `session/new` with a full `build_first` prompt.
+Model drift does **not** block resume: the resumed session's model is
+re-applied via `session/set_config_option`. MCP drift does not block it
+either: resume runs on a restarted transport that loads the current
+`mcp_config.json` and recovers history through `session/load`. On a *live*
+session, an MCP default set that has grown since the record's last stamp
+triggers a resync `resume_session` before the next prompt instead of a
+`session/new` rebuild. A `None` value in `record.enabled_mcp_servers` or
+`record.enabled_skills` (legacy records) means "untracked" and is not treated
+as drift.
+
+`SessionRecord.disabled_mcp_servers` records `/mcp disable` of *default*
+servers so the choice survives `/new`, `/branch`, and implicit session
+boundaries; `/mcp enable` clears the entry.
+
+If the consistency checks fail, or if ACP resume raises an error, the harness
+falls back to `session/new` with a full `build_first` prompt. When ACP resume
+is disabled, a `session_alive` probe can still reuse a live session — but it
+is gated by the same consistency check, so a record that could not be resumed
+is never silently revived.
 
 The resume/load attempt is bounded by `engine.acp_resume_timeout` (default
 `120.0` s) as a *total* budget including the mode/model config re-apply. Each
@@ -132,7 +152,9 @@ sessions.jsonl               # append-only session registry
 
 Long-running ACP turns can be interrupted mid-flight:
 
-- **Soft timeout** — `devin.soft_timeout` is passed to every `session/prompt`
+- **Soft timeout** — `engine.soft_timeout` (writable as `diploid.soft_timeout` in
+  `config/harness.yaml`; there is no `/config` section for it) is passed to
+  every `session/prompt`
   when it is set to a positive value. The default is `600.0`, which auto-cancels
   after 10 minutes. `0.0` or `null` disables auto-cancel. When a soft timeout
   fires, `AcpClient` sends a `session/cancel` *notification* and returns the
@@ -214,7 +236,8 @@ switches `soul_mode` to `fresh` and asks for a new ACP session on the following
 turn. A `fresh` prompt:
 
 - Uses the identity anchor instead of the full persona memory.
-- Forces only the cheap `SOUL_SLOTS` (`self_narrative`, `self_state`, `body`, `wake`, `mesh`).
+- Forces only the cheap `SOUL_SLOTS` (`self_narrative`, `self_state`, `body`,
+  `authorship`, `wake`, `bridge`, `mesh`, `promoted`).
 - Loads on-disk chat memory but skips long-term `recall_context`.
 - Keeps the most recent `min_short_term_turns` raw and loads a pre-computed
   short-term compaction summary for the older turns.

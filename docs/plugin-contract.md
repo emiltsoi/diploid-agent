@@ -8,7 +8,11 @@ A valid `diploid-agent` plugin module:
 - Implements an optional `health()` method returning `{"healthy": bool, ...}` or `None`.
 - Provides an MCP server via `PluginConfig.mcp_server` or by overriding `StatePlugin.mcp_server()`.
 
-The harness wraps every plugin call in `BaseException` and records any failure to `plugin-incidents.jsonl`.
+The harness wraps every plugin call in `except Exception` (a `BaseException`
+such as `KeyboardInterrupt` propagates). Failures in lifecycle and plugin
+operations (`start`, `stop`, enable/disable, reload) are recorded to
+`plugin-incidents.jsonl`; hook-dispatch failures are logged but not recorded as
+incidents.
 
 ## Hot reload
 

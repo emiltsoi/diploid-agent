@@ -97,10 +97,13 @@ The dispatch result is retained to the chat memory with the tag `dispatch`. The
 continuation itself is recorded as a normal turn, so later turns can recall the
 outcome.
 
-If the ACP session is stale during the continuation, the harness rehydrates a
-new session on the existing transport from the local transcript and memory. If
-the transport itself is unresponsive, it restarts the ACP process and then
-rehydrates, just as it does for a normal turn.
+If the ACP session is stale during the continuation, the harness first attempts
+`session/resume` (falling back to `session/load`) exactly as a normal turn
+does; only when resume fails or is rejected by the consistency check does it
+rehydrate a new session on the existing transport from the local transcript
+and memory. A live-session MCP drift is likewise resynced before the
+continuation prompt. If the transport itself is unresponsive, it restarts the
+ACP process and then resumes or rehydrates, just as it does for a normal turn.
 
 ## Errors and guards
 

@@ -520,6 +520,8 @@ curl -X POST http://127.0.0.1:4003/promote \
 
 ## Plugin incidents
 
+All three require `X-API-Key` when `HARNESS_API_KEY` is configured.
+
 - `GET /plugin-incidents` — return recent plugin failures and recovery actions.
 - `GET /plugin-incidents/{plugin_name}` — incidents for one plugin.
 - `POST /plugin-incidents` — record a plugin incident (used by the watchdog).
@@ -528,8 +530,9 @@ curl -X POST http://127.0.0.1:4003/promote \
 ## Plugin lifecycle
 
 Add, remove, update, toggle, and roll back plugins at runtime. All endpoints
-require the `X-API-Key` header when `HARNESS_API_KEY` is configured and return a
-`ChatResponse` shape.
+require the `X-API-Key` header when `HARNESS_API_KEY` is configured — except
+`GET /plugins/{chat_id}` (read-only plugin listing), which is unauthenticated —
+and return a `ChatResponse` shape.
 
 The `module` field, when provided, must be a valid Python file module name
 matching `^[A-Za-z_][A-Za-z0-9_.]*$`, must not contain `..`, and must expose a
@@ -705,7 +708,11 @@ Valid commands: `list`, `enable`, `disable`. `name` is required for `enable` and
 Configured plugin MCP servers are listed automatically per chat. Notable servers:
 
 - `diploid-self-management` — list, sandbox, add, remove, toggle, and roll back plugins. Mutations require a per-chat approval token.
-- `acp-harness-watchdog` — systemd user service that polls `/health`, rolls back on failure, and restarts the harness only if rollback does not restore health.
+
+Separately, the `diploid-harness-watchdog` systemd user service
+(`probes/diploid_harness_watchdog.py`, `systemd/diploid-harness-watchdog.service.example`)
+polls `/health`, rolls back on failure, and restarts the harness only if
+rollback does not restore health. It is a supervisor, not an MCP server.
 
 ## `GET /skill/{chat_id}`
 
@@ -856,6 +863,21 @@ Response:
 }
 ```
 
+## Additional endpoints
+
+Less commonly used routes, all present on the same ingress:
+
+- `GET /config` — redacted live runtime configuration. Unauthenticated.
+- `PATCH /config` — partial update of `telegram` and/or `plugins` config. Requires `X-API-Key`.
+- `POST /timer` — enqueue a one-shot timer wake. Requires `X-API-Key`.
+- `GET /runtime/status`, `POST /runtime/start`, `POST /runtime/stop` — runtime lifecycle status and control. The `POST`s require `X-API-Key`; `GET` is unauthenticated.
+- `GET /prometheus` — Prometheus-format metrics. Unauthenticated.
+- `POST /plugin/enable`, `POST /plugin/reload`, `POST /plugins/create` — plugin enable/reload and chat-scoped plugin creation. Require `X-API-Key`.
+- `GET /plugins/{chat_id}` — list plugins enabled for a chat. Unauthenticated.
+- `GET /plan/list`, `GET /plan/{plan_id}` — plan listing. Unauthenticated. `POST /plan/task/start`, `POST /plan/task/done` — task lifecycle; require `X-API-Key`.
+- `POST /mesh/chat-map`, `POST /mesh/{chat_id}/notify` — mesh chat mapping and notification. Require `X-API-Key`.
+- `POST /mesh/receive`, `POST /plugins/openclaw-mesh/webhook`, `POST /ingress/{protocol}` — inbound mesh/webhook receivers. Unauthenticated (mesh payloads carry their own Ed25519 signatures).
+
 ## `POST /webhook`
 
 Telegram webhook. Expects a Telegram `Update` JSON payload and returns
@@ -864,7 +886,12 @@ its text is extracted and injected into the prompt as a quote.
 
 ## Runtime configuration
 
-These endpoints let you inspect and mutate the live `task`, `waker`, `timer`, and `notifications` configuration without restarting the harness. `GET` and `POST` are available for each section. They require the `X-API-Key` header when `HARNESS_API_KEY` is configured. Partial updates are supported: only the fields present in the request body are changed. Invalid values return `422`. Successful updates are persisted to `runtime-overrides.yaml` in the project root; a persistence failure returns `503`.
+These endpoints let you inspect and mutate the live `task`, `waker`, `timer`, and `notifications` configuration without restarting the harness. `GET` and `POST` are available for each section. `POST` requires the `X-API-Key` header when `HARNESS_API_KEY` is configured. Partial updates are supported: only the fields present in the request body are changed. Invalid values return `422`. Successful updates are persisted to `runtime-overrides.yaml` in the project root; a persistence failure returns `503`.
+
+The `telegram` and `plugins` sections are updated through the generic
+`PATCH /config` endpoint instead (`{"telegram": {...}}` / `{"plugins": [...]}`),
+which applies the same partial-update semantics and also requires `X-API-Key`.
+`GET /config` returns the redacted live configuration and is unauthenticated.
 
 The `acp_model` in `/task/config` is the default for ACP tasks. You can override it per ACP task with the `acp_model` field in `POST /plan/create` or in the planner's task JSON (`!plan`, `Plan:`, or `/plan` triggers); per-task values take precedence.
 

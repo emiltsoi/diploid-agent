@@ -5,16 +5,24 @@ The harness has two long-running processes:
 1. `telegram_ingress` — FastAPI server.
 2. `telegram_poll` — Telegram long-polling bot.
 
-They are started together by `systemd/diploid-agent-run.sh`. If either subprocess exits,
+They are started together by `systemd/harness-run.sh`. If either subprocess exits,
 the script exits and systemd restarts the pair.
 
 ## Run script
 
-`systemd/diploid-agent-run.sh`:
+`systemd/harness-run.sh <harness-yaml> <listen-port>` (defaults
+`config/harness.yaml` and `4003`):
 
 - Resolves the project root from the script's own path.
-- Loads `config/secrets.env` if present.
-- Starts the poller and the ingress as background subprocesses.
+- Unsets Windsurf IDE markers so `devin acp` uses the credentials file or
+  `WINDSURF_API_KEY` instead of waiting for an IDE host.
+- Puts `.venv/bin` first on `PATH` and builds a `PYTHONPATH` containing the
+  project sources plus any persona `plugin_paths` declared in the config.
+- Does **not** source `config/secrets.env` — secrets are loaded by the unit's
+  `EnvironmentFile` (or sourced manually before a manual run).
+- Starts the poller and the ingress as background subprocesses and forwards
+  `TERM` to both on stop, so the ingress can drain active turns under
+  `KillMode=mixed`.
 - Waits for either subprocess to exit, then kills the other and returns the failing
   subprocess's exit code.
 
@@ -39,7 +47,7 @@ After=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/home/USER/diploid-agent
-ExecStart=/home/USER/diploid-agent/systemd/diploid-agent-run.sh
+ExecStart=/home/USER/diploid-agent/systemd/harness-run.sh config/harness.yaml 4003
 Restart=on-failure
 RestartSec=10
 EnvironmentFile=-/home/USER/diploid-agent/config/secrets.env
@@ -81,9 +89,8 @@ of killing the unit directly:
   `systemctl --user restart <service>` and the harness intercepts it.
 
 In all cases the harness sends an acknowledgement, then schedules the actual
-restart with `systemd-run --user --on-active=5s` (or `10s` for subprocess-initiated
-restarts). This gives the HTTP/Telegram response time to be delivered before the
-service goes down.
+restart with `systemd-run --user --on-active=5s`. This gives the HTTP/Telegram
+response time to be delivered before the service goes down.
 
 When the service comes back up, `AgentRuntime.start` sends a direct
 `System: service was restarted.` message to every chat whose latest session was

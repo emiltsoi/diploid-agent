@@ -36,17 +36,23 @@ the agent to guess. Use `/status` as the source of truth.
 
 Persona files (`SOUL.md`, `AGENTS.md`, `MEMORY.md`, etc.) live under
 `personas/<persona>` in the repository by default. The harness reads them but
-does not write to them except via the explicit `/promote` command.
+never writes to them — `/promote` appends to the per-chat
+`sessions/<chat_id>/chat_PROMOTED.md` pocket, not the persona's `MEMORY.md`.
 
 ## HTTP/Telegram ingress
 
 The FastAPI ingress is intended to run on a trusted or private network
 (`127.0.0.1` by default). If you expose it externally, set `HARNESS_API_KEY` in
-`config/secrets.env` (or the environment) and include it in the `X-API-Key`
-header on every `POST` request and on `GET` requests to the live runtime config
-endpoints (`/task/config`, `/waker/config`, `/timer/config`,
-`/notifications/config`). Other `GET` endpoints and the Telegram `/webhook`
-remain unauthenticated so that Telegram updates and health checks still work.
+`config/secrets.env` (or the environment). When configured, mutating endpoints
+require the `X-API-Key` header: every `POST`/`PATCH`, including the live
+runtime config endpoints (`PATCH /config`, `/task/config`, `/waker/config`,
+`/timer/config`, `/notifications/config`).
+
+Read-only `GET`s are unauthenticated — including `GET /config`, which returns
+the live configuration with secrets redacted (it reveals config structure, not
+secret values) — and so are the inbound receiver `POST`s: Telegram `/webhook`,
+`/mesh/receive`, `/plugins/openclaw-mesh/webhook`, and `/ingress/{protocol}`
+(mesh payloads carry their own Ed25519 signatures).
 
 ## Sessions and runtime state
 

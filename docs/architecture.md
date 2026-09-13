@@ -120,10 +120,15 @@ Coordinates transcript, retention, summarization, and recall.
 
 ### `McpManager`
 
-Resolves configured MCP servers into the ACP `session/new` payload.
+Resolves the per-chat MCP server set for the ACP subprocess.
 
 - Stores MCP server definitions from `config/harness.yaml` under `harness.mcp.servers`.
-- Computes per-chat enabled set from the active `SessionRecord` or `harness.mcp.default_enabled`.
+- Computes per-chat enabled set from the active `SessionRecord` (defaults ∪
+  `enabled_mcp_servers` ∪ plugin defaults, minus `disabled_mcp_servers`).
+- Writes the active list into the isolated `mcp_config.json` in the ACP child's
+  temporary `HOME`; `session/new` itself passes `mcpServers: []` because
+  `devin acp` 3000.6.7+ loads servers from that file and rejects inline
+  definitions.
 - Provides `mcp_list`, `mcp_enable`, `mcp_disable` used by Telegram and HTTP commands.
 
 ### `SkillManager`
@@ -155,7 +160,7 @@ by the composer.
 The ACP per-turn engine, extracted from the former `runtime/turn_controller.py`.
 
 - `turn/controller.py` — thin turn coordinator; owns `TurnProcess`, `TurnSession`, `TurnRehydrate`, and `TurnDispatch`.
-- `turn/process.py` — main `process()` ACP turn loop, including `_NotifyStream` streaming and placeholder editing.
+- `turn/process.py` — main `process()` ACP turn loop, streaming and placeholder editing.
 - `turn/session.py` — `switch_model`, `new_session`, `resume_session`, `branch_session`, and session activation helpers.
 - `turn/rehydrate.py` — stale session recovery, ACP `session/resume` fallback, and prompt rehydration.
 - `turn/dispatch.py` — background dispatch `dispatch()` and `continue_turn()` when a subagent or background task completes.
@@ -189,12 +194,15 @@ The ACP per-turn engine, extracted from the former `runtime/turn_controller.py`.
   streamed text as a real message when it pauses after a complete sentence, then
   starts a fresh placeholder below it. This keeps tool-call gaps from mashing
   the pre-tool and post-tool text into one message.
-- New messages while a turn is running are queued as `user_request` wakes when
-  `outbox_delivery` is enabled, or cancel the active turn and start the next one
-  (steering) otherwise.
+- New messages while a turn is running are queued — as a high-priority
+  `user_request` wake at the runtime and in a per-chat deque at the poller —
+  and processed when the current turn finishes. `steer()` is reserved for
+  explicit stop/cancel signals (`/stop`, `/restart`, `/continue`); ordinary
+  messages never interrupt the active turn. `outbox_delivery` only controls how
+  results are delivered, not whether messages queue.
 - `/stream_thoughts on|off` toggles an optional second placeholder that edits
   with `agent_thought_chunk` text.
-- `systemd/diploid-agent-run.sh` starts both as a pair under one systemd unit.
+- `systemd/harness-run.sh` starts both as a pair under one systemd unit.
 
 ## Startup behavior
 
@@ -225,7 +233,9 @@ for details on `/new`, `/resume`, `/branch`, `/sessions`, and auto-recovery.
      current turn finishes.
    - Loads the active record from `sessions.jsonl`.
    - Determines model.
-   - If new, model changed, or the previous turn ended with a hard `timeout`:
+   - If new (`/new`, `/default`, fresh `/branch`), the model changed
+     (fresh-session `/model`, not `--in-place`), skills drifted, or the
+     previous turn ended with a hard `timeout`:
      builds `_first_prompt` = persona + chat memory + continuation anchor (for
      `Continue` triggers) + message.
    - If existing: builds `_follow_up_prompt` = identity anchor + continuation
@@ -317,7 +327,7 @@ no archive, no activation prompt.
 || `config/harness.yaml.example` | Generic config template | Yes |
 || `systemd/diploid-agent.service` | Local systemd unit | No (copy from `.example`) |
 || `systemd/diploid-agent.service.example` | Generic unit template | Yes |
-|| `systemd/diploid-agent-run.sh` | Supervisor that runs ingress + poller | Yes |
+|| `systemd/harness-run.sh` | Supervisor that runs ingress + poller | Yes |
 || `sessions/<chat_id>/` | Per-chat working directory | No (runtime) |
 || `sessions/<chat_id>/.devin/skills/` | Synced skills for the ACP process | No (runtime) |
 || `sessions/<chat_id>/chat_transcript.jsonl` | Durable turn log | No (runtime) |

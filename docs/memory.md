@@ -111,8 +111,8 @@ harness:
 The active `config/harness.yaml` (and `config/harness.yaml.example`) use
 `max_chat_memory_chars: 16384` and `max_short_term_chars: 6144` to give long
 conversations more room. The `MemoryConfig` defaults are lower (`8192` and
-`4096`). You can tune them live with `/config memory max_chat_memory_chars=...`
-or by editing `config/harness.yaml` and restarting.
+`6144`). Tune them by editing `config/harness.yaml` and restarting — memory is
+not one of the live `/config` sections.
 
 ### Summarization
 
@@ -186,7 +186,8 @@ harness:
       base_url: http://localhost:8888
       bank: example
       api_key: null
-      timeout: 30.0
+      timeout: 120.0
+      observation_scope: chat        # "chat" | "shared" | "" — see hindsight-api-contract.md
       max_recall_tokens: 1500
       recall_min_scores:
         semantic: 0.25
@@ -203,7 +204,11 @@ One bank per persona (`example`), with chat separation via the
 
 ### Retain
 
-Each completed turn produces a `User: … / Assistant: …` pair. Two controls
+Each completed turn produces a `User: … / Assistant: …` pair — the speaker
+labels are configurable via `harness.memory.retain_user_prefix` /
+`retain_assistant_prefix` (default `"User"` / `"Assistant"`), and
+`retain_context` adds a free-form context string, so Hindsight's fact
+extraction can attribute memories to the right person. Two controls
 shape what reaches Hindsight and how often:
 
 - **Final-segment retain** (`harness.memory.retain_final_segment`, default
@@ -245,24 +250,31 @@ POST /v1/default/banks/<bank>/memories/recall
 with `query`, `tags`, `max_tokens`, `types: ["world", "experience", "observation"]`,
 and `prefer_observations`. The result is capped to the remaining chat memory
 budget (after the short-term transcript is reserved) and the agent is warned if
-the cap was hit.
+the cap was hit. On a prompt that follows a successful ACP `session/resume` /
+`session/load`, the short-term transcript tail is skipped — the resumed session
+already holds those turns, so re-injecting them would be redundant.
 
 Hindsight is the long-term memory layer. It is not pruned by the harness.
 
-## Persona memory promotion
+## Promoted memory pocket
 
 `/promote <fact>` appends a bullet to:
 
 ```
-personas/<persona>/MEMORY.md
+sessions/<chat_id>/chat_PROMOTED.md
 ```
 
-When the backend is Hindsight, the fact is also retained as a `memory` item
-with `persona` and `promoted` tags, so it can be recalled across chats.
+This is a per-chat, user-curated pocket: it is always injected into the prompt
+(the `promoted` slot) and survives `fresh` compact mode. Entries are
+deduplicated and the pocket is capped at `max_promoted_lines` (default `20`)
+and tidied on append. Retained items tagged `promoted` — or matching
+`auto_promote_triggers` while `auto_promote_enabled` is on — are appended
+automatically as well.
 
-There is no automatic pruning. The first `max_persona_memory_chars` are loaded
-into the first turn of each session, and a `## System notice` is injected if
-the file exceeds that cap.
+The persona's `personas/<persona>/MEMORY.md` is loaded into the first turn of
+each session up to `max_persona_memory_chars`, with a `## System notice` if
+the file exceeds that cap. The harness never writes to it — only the agent or
+the operator edits it directly.
 
 ## Commands
 
@@ -271,7 +283,7 @@ the file exceeds that cap.
 | `/memory` | `GET /memory/{chat_id}` | Show per-chat memory. |
 | `/summarize` | `POST /summarize/{chat_id}` | Trigger file-backend summarization. |
 | `/recall <query>` | `POST /recall` | Search the memory backend. |
-| `/promote <fact>` | `POST /promote` | Append a fact to the persona's global memory. |
+| `/promote <fact>` | `POST /promote` | Append a fact to the chat's promoted pocket. |
 | — | `POST /retain` | Retain an observation in the active memory backend. |
 
 There is **no `/prune` command**. The agent handles pruning itself using file
@@ -289,11 +301,12 @@ tools when it sees a `## System notice`.
 
 ## Agent-facing memory tools
 
-The `diploid-memory` MCP server gives the agent three memory tools:
+The `diploid-memory` MCP server gives the agent four memory tools:
 
 - `memory_recall(query, tags, max_tokens)` — search prior turns and retained facts.
 - `memory_retain(content, tags, context)` — save an observation to the chat ledger.
-- `memory_promote(fact)` — promote a fact to the persona's `MEMORY.md` and Hindsight.
+- `memory_promote(fact)` — promote a fact to the chat's `chat_PROMOTED.md` pocket.
+- `memory_status()` — return the memory backend status (bank stats, pending operations).
 
 The `memory` shared skill triggers these tools when the user says things like "remember that", "what did we", or "promote to memory".
 

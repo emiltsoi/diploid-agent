@@ -24,11 +24,11 @@ Store one or more memory items.
       "metadata": {"role": "user"},
       "document_id": "mem-abc123",
       "tags": ["preference"],
-      "update_mode": "replace"
+      "update_mode": "replace",
+      "observation_scopes": [["chat:chat-123"]]
     }
   ],
-  "async": true,
-  "observation_scopes": [["chat:chat-123"]]
+  "async": true
 }
 ```
 
@@ -39,7 +39,7 @@ Store one or more memory items.
 - `document_id` (string, unique per document)
 - `tags` (list of strings)
 - `update_mode` (string, currently always `"replace"`)
-- `observation_scopes` (top-level request field, optional) — set only when
+- `observation_scopes` (per-item field, optional) — set on each item only when
   `hindsight.observation_scope` is configured. `"chat"` →
   `[["chat:<chat_id>"]]` (consolidates across sessions within a chat while
   staying visible to the `tags=["chat:<id>"]` recall filter); `"shared"` → the
@@ -92,7 +92,7 @@ Return bank statistics. The harness includes the returned JSON under a `backend:
 When the Hindsight server is unreachable, the harness:
 
 1. Writes validated items to `sessions/<chat_id>/hindsight-pending-retain.jsonl`.
-2. Replays the spool on the next `retain()` or `recall()` call once the server is healthy.
+2. Replays the spool on the next `retain()` call once the server is healthy.
 3. Dead-letters permanently rejected items to `hindsight-dead-letter.jsonl` with a reason and timestamp.
 
 If `fallback_to_file` is enabled, the file backend handles recall when Hindsight is down.
