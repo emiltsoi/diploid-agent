@@ -620,3 +620,216 @@ def test_rehydrate_stale_session_uses_full_resume_budget(monkeypatch, tmp_path: 
         assert resume_timeouts == [None]
     finally:
         harness.client.close()
+
+
+def test_process_stale_session_resumes_despite_mcp_drift(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """MCP drift is absorbed by resume (transport restart + session/load)."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root, acp_resume_enabled=True)
+    harness = ConversationHarness(config)
+
+    call_order: list[str] = []
+    resume_kwargs: list[dict[str, Any]] = []
+
+    def fake_create_session(prompt: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("create")
+        return AcpPromptResult(reply="Ready.", session_id=f"session-{len(call_order)}")
+
+    def fake_resume(session_id: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("resume")
+        resume_kwargs.append(kwargs)
+        return session_id
+
+    def fake_send_message(session_id: str, prompt: str, *, cwd=None, model=None, **kwargs):
+        if call_order.count("send") == 0:
+            call_order.append("send")
+            raise RuntimeError("ACP session/prompt failed: Session not found")
+        call_order.append("send")
+        return AcpPromptResult(reply="Follow-up after resume.", session_id=session_id)
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+    monkeypatch.setattr(harness.client, "send_message", fake_send_message)
+    monkeypatch.setattr(harness.client, "resume_session", fake_resume)
+
+    try:
+        result1 = harness.process("chat-mcp", "hello")
+        assert result1.session_id == "session-1"
+
+        # The default MCP set grows after the record's last stamp.
+        monkeypatch.setattr(
+            harness.runtime._mcp_skills,
+            "_active_mcp_server_names",
+            lambda chat_id: ["a-new-default"],
+        )
+
+        result2 = harness.process("chat-mcp", "follow-up")
+        assert result2.session_number == 1
+        assert result2.session_id == "session-1"
+        assert "resume" in call_order
+        assert call_order.count("create") == 1
+        # The active MCP list is passed through so the client can restart
+        # the transport and write the new mcp_config.json.
+        assert resume_kwargs and "mcp_servers" in resume_kwargs[0]
+    finally:
+        harness.client.close()
+
+
+@pytest.mark.parametrize("acp_resume_enabled", [True, False])
+def test_rehydrate_skips_alive_probe_on_consistency_failure(
+    monkeypatch, tmp_path: Path, acp_resume_enabled: bool
+) -> None:
+    """A record rejected by _can_resume_record must not be revived by the
+    session_alive probe — under either acp_resume_enabled value.
+
+    Drives _rehydrate directly: the normal process path catches skills
+    drift upstream via skills_changed, but continue_turn/dispatch wake
+    paths reach _rehydrate without that gate.
+    """
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root, acp_resume_enabled=acp_resume_enabled)
+    harness = ConversationHarness(config)
+
+    call_order: list[str] = []
+
+    def fake_create_session(prompt: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("create")
+        return AcpPromptResult(reply="Ready.", session_id=f"session-{len(call_order)}")
+
+    def fake_resume(session_id: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("resume")
+        return session_id
+
+    def fake_session_alive(session_id: str) -> bool:
+        call_order.append("alive")
+        return True
+
+    def fake_send_message(session_id: str, prompt: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("send")
+        return AcpPromptResult(reply="Fresh reply.", session_id=session_id)
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+    monkeypatch.setattr(harness.client, "send_message", fake_send_message)
+    monkeypatch.setattr(harness.client, "resume_session", fake_resume)
+    monkeypatch.setattr(harness.client, "session_alive", fake_session_alive)
+
+    try:
+        harness.process("chat-skill", "hello")
+
+        # Known skills drift: record tracks an empty set while a turn-matched
+        # skill remains active (record.enabled_skills is unioned into the
+        # active set, so drift requires a source outside the record).
+        record = harness._active_record("chat-skill")
+        record.enabled_skills = []
+        harness.runtime._mcp_skills._active_chat_skills["chat-skill"] = {"matched-skill"}
+
+        ret = harness.runtime.turn_controller._rehydrate(
+            "chat-skill",
+            "follow-up",
+            record,
+            "swe-1-7",
+            on_chunk=lambda chunk: None,
+            on_update=lambda update: None,
+        )
+        assert not isinstance(ret, ChatResult)
+        assert "alive" not in call_order
+        assert "resume" not in call_order
+        assert call_order.count("create") == 2
+    finally:
+        harness.client.close()
+
+
+def test_process_mcp_drift_resyncs_live_session(monkeypatch, tmp_path: Path) -> None:
+    """MCP drift on a live session resyncs via resume instead of session/new."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root, acp_resume_enabled=True)
+    harness = ConversationHarness(config)
+
+    call_order: list[str] = []
+    resume_kwargs: list[dict[str, Any]] = []
+
+    def fake_create_session(prompt: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("create")
+        return AcpPromptResult(reply="Ready.", session_id=f"session-{len(call_order)}")
+
+    def fake_resume(session_id: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("resume")
+        resume_kwargs.append(kwargs)
+        return session_id
+
+    def fake_send_message(session_id: str, prompt: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("send")
+        return AcpPromptResult(reply="Follow-up.", session_id=session_id)
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+    monkeypatch.setattr(harness.client, "send_message", fake_send_message)
+    monkeypatch.setattr(harness.client, "resume_session", fake_resume)
+
+    try:
+        result1 = harness.process("chat-mcp-live", "hello")
+        assert result1.session_id == "session-1"
+
+        monkeypatch.setattr(
+            harness.runtime._mcp_skills,
+            "_active_mcp_server_names",
+            lambda chat_id: ["a-new-default"],
+        )
+
+        result2 = harness.process("chat-mcp-live", "follow-up")
+        assert result2.session_number == 1
+        assert result2.session_id == "session-1"
+        assert "resume" in call_order
+        assert call_order.count("create") == 1
+        record = harness._active_record("chat-mcp-live")
+        assert record.enabled_mcp_servers == ["a-new-default"]
+    finally:
+        harness.client.close()
+
+
+def test_process_mcp_resync_failure_falls_back_to_new_session(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A failed MCP resync falls through the normal rehydrate path to
+    session/new rather than leaving stale MCP on the live session."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root, acp_resume_enabled=True)
+    harness = ConversationHarness(config)
+
+    call_order: list[str] = []
+
+    def fake_create_session(prompt: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("create")
+        return AcpPromptResult(reply="Ready.", session_id=f"session-{len(call_order)}")
+
+    def fake_resume(session_id: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("resume")
+        raise RuntimeError("ACP session/prompt failed: Session not found")
+
+    def fake_session_alive(session_id: str) -> bool:
+        call_order.append("alive")
+        return False
+
+    def fake_send_message(session_id: str, prompt: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("send")
+        return AcpPromptResult(reply="Follow-up.", session_id=session_id)
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+    monkeypatch.setattr(harness.client, "send_message", fake_send_message)
+    monkeypatch.setattr(harness.client, "resume_session", fake_resume)
+    monkeypatch.setattr(harness.client, "session_alive", fake_session_alive)
+
+    try:
+        harness.process("chat-mcp-fail", "hello")
+
+        monkeypatch.setattr(
+            harness.runtime._mcp_skills,
+            "_active_mcp_server_names",
+            lambda chat_id: ["a-new-default"],
+        )
+
+        result2 = harness.process("chat-mcp-fail", "follow-up")
+        assert result2.session_id != "session-1"
+        assert call_order.count("create") == 2
+    finally:
+        harness.client.close()

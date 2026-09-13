@@ -131,7 +131,7 @@ class TurnRehydrate(TurnComponent):
                 )
 
         resumed_id: str | None = None
-        can_resume = self.controller.session._can_resume_record(chat_id, old_record, use_model)
+        can_resume = self.controller.session._can_resume_record(chat_id, old_record)
         if self.runtime.config.engine.acp_resume_enabled and can_resume:
             assert old_record is not None  # can_resume implies a record with session_id
             self.runtime._restore_plugin_states(chat_id)

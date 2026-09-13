@@ -59,6 +59,7 @@ class TurnPipeline(TurnComponent):
         old_record: SessionRecord | None,
         is_new: bool,
         force_new_session: bool,
+        session_resync: bool = False,
         active: ActiveTurn,
         stream: TurnStream,
         memory_flags: dict[str, bool],
@@ -122,6 +123,28 @@ class TurnPipeline(TurnComponent):
                     active.session_id = result.session_id
                     session_id = result.session_id
                 else:
+                    if session_resync:
+                        # MCP drift on a live session: resume_session restarts
+                        # the transport when the server list differs and
+                        # reloads the session via session/resume→load, so the
+                        # new MCP set applies without losing history. On
+                        # failure the except path below rehydrates as usual.
+                        self.runtime.call_engine_unlocked(
+                            self.runtime.engine.resume_session,
+                            old_record.session_id,
+                            cwd=self.runtime._chat_dir(chat_id),
+                            model=use_model,
+                            mcp_servers=self.runtime._mcp_skills._active_mcp_servers(
+                                chat_id
+                            ),
+                            timeout=self.runtime.config.engine.acp_resume_timeout,
+                        )
+                        if self.runtime.lifecycle_log is not None:
+                            self.runtime.lifecycle_log.write(
+                                "session.resync",
+                                chat_id=chat_id,
+                                session_id=old_record.session_id,
+                            )
                     result = self.runtime.call_engine_unlocked(
                         self.runtime.engine.prompt,
                         call_ctx.request,

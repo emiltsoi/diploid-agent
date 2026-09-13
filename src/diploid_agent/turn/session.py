@@ -52,23 +52,22 @@ class TurnSession(TurnComponent):
         finally:
             self.runtime._session_ops.discard(chat_id)
 
-    def _can_resume_record(self, chat_id: str, record: SessionRecord, use_model: str) -> bool:
-        """Return True if the ACP session for this record can be resumed."""
+    def _can_resume_record(self, chat_id: str, record: SessionRecord) -> bool:
+        """Return True if the ACP session for this record can be resumed.
+
+        Model drift is absorbed by the mode/model re-apply resume performs
+        (``session/set_config_option``), and MCP drift by the transport
+        restart ``resume_session`` triggers when the server list differs.
+        Only a skills-set change — skills are discovered at session start —
+        or a prior hard timeout still forces ``session/new``.
+        """
         if not record or not record.session_id:
-            return False
-        if record.model and record.model != use_model:
             return False
         if record.last_stop_reason == "timeout":
             return False
-        current_mcp = sorted(self.runtime._mcp_skills._active_mcp_server_names(chat_id))
+        current_skills = sorted(self.runtime._mcp_skills._active_skill_names(chat_id))
         # None means the field predates tracking — "unknown", not "empty" —
         # so it cannot prove drift; only a known mismatch blocks resume.
-        if (
-            record.enabled_mcp_servers is not None
-            and sorted(record.enabled_mcp_servers) != current_mcp
-        ):
-            return False
-        current_skills = sorted(self.runtime._mcp_skills._active_skill_names(chat_id))
         return record.enabled_skills is None or sorted(record.enabled_skills) == current_skills
 
     def _finalize_session_activation(
@@ -611,7 +610,7 @@ class TurnSession(TurnComponent):
 
         resumed_id: str | None = None
         if self.runtime.config.engine.acp_resume_enabled and self._can_resume_record(
-            chat_id, source, use_model
+            chat_id, source
         ):
             try:
                 logger.debug("Attempting ACP session resume for branch of %s", source.session_id)
