@@ -254,8 +254,7 @@ class TurnProcess(TurnPipeline):
                 old_record=old_record,
                 is_new=is_new,
                 force_new_session=force_new_session,
-                session_resync=mcp_changed
-                and self.runtime.config.engine.acp_resume_enabled,
+                session_resync=mcp_changed and self.runtime.config.engine.acp_resume_enabled,
                 active=active,
                 stream=stream,
                 memory_flags=memory_flags,

@@ -430,9 +430,7 @@ def test_model_switch_in_place_same_model_is_noop(monkeypatch, tmp_path: Path) -
         harness.client.close()
 
 
-def test_model_switch_in_place_without_session_falls_back(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_model_switch_in_place_without_session_falls_back(monkeypatch, tmp_path: Path) -> None:
     """With no live session, an in-place switch falls back to a fresh session."""
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
     config = _make_config(tmp_path, fixture_root)
@@ -455,9 +453,7 @@ def test_model_switch_in_place_without_session_falls_back(
         harness.client.close()
 
 
-def test_model_switch_in_place_during_turn_is_refused(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_model_switch_in_place_during_turn_is_refused(monkeypatch, tmp_path: Path) -> None:
     """An in-place switch is refused while a turn is running for the chat."""
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
     config = _make_config(tmp_path, fixture_root)
@@ -491,9 +487,7 @@ def test_model_switch_in_place_during_turn_is_refused(
         harness.client.close()
 
 
-def test_model_switch_in_place_engine_error_leaves_record(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_model_switch_in_place_engine_error_leaves_record(monkeypatch, tmp_path: Path) -> None:
     """A failed in-place switch reports the error and keeps the old model."""
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
     config = _make_config(tmp_path, fixture_root)

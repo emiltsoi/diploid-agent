@@ -319,9 +319,7 @@ class TurnSession(TurnComponent):
         record.model = applied or desired
         record.updated_at = time.time()
         self.runtime._append_record(record)
-        self.runtime.record_system_note(
-            chat_id, f"[model switched to {record.model} in place]"
-        )
+        self.runtime.record_system_note(chat_id, f"[model switched to {record.model} in place]")
         if self.runtime.lifecycle_log is not None:
             self.runtime.lifecycle_log.write(
                 "model.switch_in_place",
@@ -422,18 +420,14 @@ class TurnSession(TurnComponent):
             # session_id) must not be revived by the probe. The source is
             # judged by its own skill baseline: its skills are the set the
             # session actually ran with.
-            can_probe = self._can_resume_record(
-                chat_id, source, expected_skills=source_skill_names
-            )
+            can_probe = self._can_resume_record(chat_id, source, expected_skills=source_skill_names)
             if can_probe:
                 try:
                     alive = self.runtime._call_unlocked(
                         self.runtime.engine.session_alive, source.session_id
                     )
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "Failed to probe ACP session %s: %s", source.session_id, exc
-                    )
+                    logger.warning("Failed to probe ACP session %s: %s", source.session_id, exc)
                     alive = False
             else:
                 alive = False

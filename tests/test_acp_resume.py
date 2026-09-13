@@ -481,9 +481,7 @@ def test_send_message_does_not_reconfigure_after_set_session_model(
     assert calls == ["session/set_config_option"]
 
 
-def test_set_session_model_failure_drops_cached_model(
-    client: AcpClient, monkeypatch
-) -> None:
+def test_set_session_model_failure_drops_cached_model(client: AcpClient, monkeypatch) -> None:
     """On failure the cached model is dropped so send_message re-pins it."""
 
     async def failing_call(method: str, params: dict[str, Any], **kwargs: Any) -> Any:
@@ -624,9 +622,7 @@ def test_rehydrate_stale_session_uses_full_resume_budget(monkeypatch, tmp_path: 
         harness.client.close()
 
 
-def test_process_stale_session_resumes_despite_mcp_drift(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_process_stale_session_resumes_despite_mcp_drift(monkeypatch, tmp_path: Path) -> None:
     """MCP drift is absorbed by resume (transport restart + session/load)."""
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
     config = _make_config(tmp_path, fixture_root, acp_resume_enabled=True)
@@ -789,9 +785,7 @@ def test_process_mcp_drift_resyncs_live_session(monkeypatch, tmp_path: Path) -> 
         harness.client.close()
 
 
-def test_process_mcp_resync_failure_falls_back_to_new_session(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_process_mcp_resync_failure_falls_back_to_new_session(monkeypatch, tmp_path: Path) -> None:
     """A failed MCP resync falls through the normal rehydrate path to
     session/new rather than leaving stale MCP on the live session.
 
@@ -845,9 +839,7 @@ def test_process_mcp_resync_failure_falls_back_to_new_session(
         harness.client.close()
 
 
-def test_model_boundary_does_not_resurrect_archived_session(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_model_boundary_does_not_resurrect_archived_session(monkeypatch, tmp_path: Path) -> None:
     """A transient session/new failure after a deliberate model boundary
     must not resume the archived session — the user asked for a fresh
     context, so _rehydrate runs with allow_resume=False."""
@@ -874,9 +866,7 @@ def test_model_boundary_does_not_resurrect_archived_session(
     monkeypatch.setattr(harness.client, "create_session", fake_create_session)
     monkeypatch.setattr(harness.client, "resume_session", fake_resume)
     monkeypatch.setattr(harness.client, "session_alive", fake_session_alive)
-    monkeypatch.setattr(
-        harness.client, "restart_transport", lambda reason=None, chat_id=None: None
-    )
+    monkeypatch.setattr(harness.client, "restart_transport", lambda reason=None, chat_id=None: None)
 
     try:
         result1 = harness.process("chat-boundary", "hello")
@@ -958,9 +948,7 @@ def test_resume_session_runs_as_background(client: AcpClient, monkeypatch) -> No
     assert captured["background"] is True
 
 
-def test_mcp_disable_default_does_not_trigger_spurious_resync(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_mcp_disable_default_does_not_trigger_spurious_resync(monkeypatch, tmp_path: Path) -> None:
     """Disabling a default MCP server must not look like drift — the
     disabled overlay keeps the effective set equal to the record stamp,
     so follow-ups do not waste a resync restart, and /new keeps the
@@ -1014,9 +1002,7 @@ def test_mcp_disable_default_does_not_trigger_spurious_resync(
         harness.client.close()
 
 
-def test_process_mcp_resync_transport_failure_is_stale_class(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_process_mcp_resync_transport_failure_is_stale_class(monkeypatch, tmp_path: Path) -> None:
     """A transport-class resync failure is reclassified as stale, not
     transport-unhealthy: no restart_first, no second resume attempt, no
     alive probe — straight to session/new on the existing transport."""
@@ -1089,9 +1075,7 @@ def test_implicit_boundary_preserves_mcp_disable(monkeypatch, tmp_path: Path) ->
     send_calls = [0]
 
     def fake_create_session(prompt: str, *, cwd=None, model=None, **kwargs):
-        return AcpPromptResult(
-            reply="Ready.", session_id=f"session-{len(send_calls) + 1}"
-        )
+        return AcpPromptResult(reply="Ready.", session_id=f"session-{len(send_calls) + 1}")
 
     def fake_send_message(session_id: str, prompt: str, *, cwd=None, model=None, **kwargs):
         send_calls[0] += 1
@@ -1109,9 +1093,7 @@ def test_implicit_boundary_preserves_mcp_disable(monkeypatch, tmp_path: Path) ->
     monkeypatch.setattr(harness.client, "create_session", fake_create_session)
     monkeypatch.setattr(harness.client, "send_message", fake_send_message)
     monkeypatch.setattr(harness.client, "resume_session", fake_resume)
-    monkeypatch.setattr(
-        harness.client, "session_alive", lambda session_id: False
-    )
+    monkeypatch.setattr(harness.client, "session_alive", lambda session_id: False)
 
     try:
         harness.process("chat-disable-boundary", "hello")
@@ -1124,9 +1106,7 @@ def test_implicit_boundary_preserves_mcp_disable(monkeypatch, tmp_path: Path) ->
         assert record.disabled_mcp_servers == ["github"]
         assert record.enabled_mcp_servers == []
         # And the effective set stays empty — no phantom drift next turn.
-        assert not harness.runtime._mcp_skills._mcp_record_drifted(
-            "chat-disable-boundary", record
-        )
+        assert not harness.runtime._mcp_skills._mcp_record_drifted("chat-disable-boundary", record)
     finally:
         harness.client.close()
 
@@ -1199,9 +1179,6 @@ def test_can_resume_record_expected_skills_baseline(monkeypatch, tmp_path: Path)
 
         session = harness.runtime.turn_controller.session
         assert session._can_resume_record("chat-br", record) is False
-        assert (
-            session._can_resume_record("chat-br", record, expected_skills={"skill-a"})
-            is True
-        )
+        assert session._can_resume_record("chat-br", record, expected_skills={"skill-a"}) is True
     finally:
         harness.client.close()

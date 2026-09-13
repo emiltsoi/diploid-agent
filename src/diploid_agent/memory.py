@@ -175,9 +175,7 @@ class MemoryManager:
         if len(text) <= cap:
             return text
         trimmed = _trim_to_last_section(text, cap)
-        archive = fb.memory_path.with_name(
-            f"{fb.memory_path.stem}_archive{fb.memory_path.suffix}"
-        )
+        archive = fb.memory_path.with_name(f"{fb.memory_path.stem}_archive{fb.memory_path.suffix}")
         if archive.exists():
             trimmed += (
                 f"\n\n[Older sections are archived in {archive.name} — "

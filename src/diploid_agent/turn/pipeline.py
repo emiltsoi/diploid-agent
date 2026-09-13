@@ -153,16 +153,12 @@ class TurnPipeline(TurnComponent):
                                 old_record.session_id,
                                 cwd=self.runtime._chat_dir(chat_id),
                                 model=use_model,
-                                mcp_servers=self.runtime._mcp_skills._active_mcp_servers(
-                                    chat_id
-                                ),
+                                mcp_servers=self.runtime._mcp_skills._active_mcp_servers(chat_id),
                                 timeout=self.runtime.config.engine.acp_resume_timeout,
                             )
                         except (RuntimeError, TimeoutError) as exc:
                             resync_failed = True
-                            logger.warning(
-                                "ACP session resync failed for %s: %s", chat_id, exc
-                            )
+                            logger.warning("ACP session resync failed for %s: %s", chat_id, exc)
                             if self.runtime.lifecycle_log is not None:
                                 self.runtime.lifecycle_log.write(
                                     "session.resync.failure",
@@ -176,11 +172,7 @@ class TurnPipeline(TurnComponent):
                                 # rather than poisoning a healthy transport.
                                 raise AcpSessionStaleError(
                                     "session/resume",
-                                    {
-                                        "message": (
-                                            f"session resync failed for {chat_id}: {exc}"
-                                        )
-                                    },
+                                    {"message": (f"session resync failed for {chat_id}: {exc}")},
                                 ) from exc
                             raise
                         if self.runtime.lifecycle_log is not None:
@@ -192,9 +184,7 @@ class TurnPipeline(TurnComponent):
                     result = self.runtime.call_engine_unlocked(
                         self.runtime.engine.prompt,
                         call_ctx.request,
-                        session_id=call_ctx.session_id
-                        or resumed_id
-                        or old_record.session_id,
+                        session_id=call_ctx.session_id or resumed_id or old_record.session_id,
                         on_chunk=call_ctx.on_chunk,
                         on_update=call_ctx.on_update,
                     )
@@ -402,9 +392,7 @@ class TurnPipeline(TurnComponent):
                     # disabled MCP and plugin toggles silently reset. Copy
                     # rather than alias: the old record's containers must not
                     # be mutated by later writes on the new record.
-                    record.disabled_mcp_servers = list(
-                        old_record.disabled_mcp_servers or []
-                    )
+                    record.disabled_mcp_servers = list(old_record.disabled_mcp_servers or [])
                     record.plugin_overrides = dict(old_record.plugin_overrides or {})
                 self.runtime._chat_state(chat_id).sessions[record.session_number] = record
             else:

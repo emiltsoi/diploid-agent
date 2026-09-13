@@ -242,7 +242,9 @@ def test_hindsight_observation_scope_chat_injected(tmp_path: Path, monkeypatch) 
         def json(self) -> dict:
             return {"success": True}
 
-    monkeypatch.setattr(backend._client, "post", lambda *a, **k: posted.append(k["json"]["items"]) or OKResp())
+    monkeypatch.setattr(
+        backend._client, "post", lambda *a, **k: posted.append(k["json"]["items"]) or OKResp()
+    )
     backend.retain([MemoryItem(content="fact")])
 
     assert posted[0][0]["observation_scopes"] == [["chat:chat-1"]]
@@ -265,7 +267,9 @@ def test_hindsight_observation_scope_unset_by_default(tmp_path: Path, monkeypatc
         def json(self) -> dict:
             return {"success": True}
 
-    monkeypatch.setattr(backend._client, "post", lambda *a, **k: posted.append(k["json"]["items"]) or OKResp())
+    monkeypatch.setattr(
+        backend._client, "post", lambda *a, **k: posted.append(k["json"]["items"]) or OKResp()
+    )
     backend.retain([MemoryItem(content="fact")])
 
     assert "observation_scopes" not in posted[0][0]
@@ -340,7 +344,6 @@ def test_record_turn_document_id_is_unique_per_session(tmp_path: Path) -> None:
     assert "session:1" in items[0]["tags"]
     assert "session:2" in items[1]["tags"]
     assert "persona:test-persona" in items[0]["tags"]
-
 
 
 def test_memory_manager_file_backend_recall(tmp_path: Path) -> None:

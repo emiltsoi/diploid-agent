@@ -200,8 +200,7 @@ class RuntimeMcpSkills:
         return (
             record is not None
             and record.enabled_mcp_servers is not None
-            and sorted(record.enabled_mcp_servers)
-            != sorted(self._active_mcp_server_names(chat_id))
+            and sorted(record.enabled_mcp_servers) != sorted(self._active_mcp_server_names(chat_id))
         )
 
     def _default_active_skills(self) -> set[str]:

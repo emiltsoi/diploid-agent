@@ -1171,7 +1171,9 @@ def test_harness_config_http_telegram_uses_patch_config() -> None:
 
     poller._local.client = _PatchRecorder({})
     result = poller._harness_config(12345, "telegram message_format=markdown_v2")
-    assert calls == [("PATCH", "http://localhost/config", {"telegram": {"message_format": "markdown_v2"}})]
+    assert calls == [
+        ("PATCH", "http://localhost/config", {"telegram": {"message_format": "markdown_v2"}})
+    ]
     assert "restart" in result
 
 
