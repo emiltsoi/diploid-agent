@@ -207,9 +207,13 @@ def test_build_follow_up_includes_recall_when_enabled(tmp_path: Path, monkeypatc
     builder = _make_builder(tmp_path)
     builder.config.harness.memory.recall_on_follow_up = True
     calls: list[str] = []
+    kwargs_seen: list[dict[str, Any]] = []
 
-    def fake_recall(_self, user_message: str, model: str | None = None) -> RecallResult:
+    def fake_recall(
+        _self, user_message: str, model: str | None = None, **kwargs: Any
+    ) -> RecallResult:
         calls.append(user_message)
+        kwargs_seen.append(kwargs)
         return _fake_recall_result()
 
     monkeypatch.setattr(MemoryManager, "recall_context", fake_recall)
@@ -219,6 +223,95 @@ def test_build_follow_up_includes_recall_when_enabled(tmp_path: Path, monkeypatc
     assert "RECALL" in pctx.prompt
     assert pctx.slots.get("recall") == ["## Chat memory\n\n### Recalled\n\nRECALL"]
     assert "### Recalled" in pctx.prompt
+    # Without a rehydration reason the short-term tail is still requested.
+    assert kwargs_seen[0].get("include_short_term") is True
+
+
+def test_build_follow_up_resumed_rehydration_skips_short_term_tail(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A resumed ACP session already holds the transcript, so the tail is not re-sent."""
+    builder = _make_builder(tmp_path)
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def fake_recall_context(
+        self, user_message: str, model: str | None = None, **kwargs: Any
+    ) -> RecallResult:
+        calls.append((user_message, kwargs))
+        return RecallResult(
+            text="LONG-TERM RECALL",
+            truncated=False,
+            memory_path=None,
+            limit=0,
+            loaded=16,
+            total=16,
+        )
+
+    monkeypatch.setattr(MemoryManager, "recall_context", fake_recall_context)
+
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="session-1",
+        model="swe-1-7",
+        persona="test-pilot",
+        cwd=str(tmp_path),
+        created_at=time.time(),
+        updated_at=time.time(),
+        turn_number=1,
+    )
+    pctx = builder.build_follow_up(
+        "chat-1",
+        "next step?",
+        record=record,
+        rehydrated=True,
+        rehydration_reason=RehydrationReason.RESUMED,
+    )
+
+    assert calls
+    assert calls[0][1].get("include_short_term") is False
+    # Long-term recall still runs; only the transcript tail is gated off.
+    assert "LONG-TERM RECALL" in pctx.prompt
+
+
+def test_build_follow_up_non_resumed_rehydration_keeps_short_term_tail(tmp_path: Path) -> None:
+    """Non-RESUMED rehydration (a fresh child) still injects the transcript tail."""
+    builder = _make_builder(tmp_path)
+    mgr = builder.memory_factory("chat-1")
+    mgr._append_transcript("earlier question about deploys", "earlier answer about deploys")
+
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="session-1",
+        model="swe-1-7",
+        persona="test-pilot",
+        cwd=str(tmp_path),
+        created_at=time.time(),
+        updated_at=time.time(),
+        turn_number=1,
+    )
+    pctx = builder.build_follow_up(
+        "chat-1",
+        "next step?",
+        record=record,
+        rehydrated=True,
+        rehydration_reason=RehydrationReason.STALE,
+    )
+
+    assert "Recent conversation:" in pctx.prompt
+    assert "earlier question about deploys" in pctx.prompt
+
+    # The same transcript is withheld when the child resumed with its history.
+    pctx_resumed = builder.build_follow_up(
+        "chat-1",
+        "next step?",
+        record=record,
+        rehydrated=True,
+        rehydration_reason=RehydrationReason.RESUMED,
+    )
+    assert "Recent conversation:" not in pctx_resumed.prompt
+    assert "earlier question about deploys" not in pctx_resumed.prompt
 
 
 def test_build_first_prompt_trims_reply_quote_and_injects_continuation(tmp_path: Path) -> None:

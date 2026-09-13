@@ -240,6 +240,7 @@ class ContextBuilder:
         effective_model: str,
         is_compact: bool,
         soul_mode: str,
+        include_short_term: bool = True,
     ) -> tuple[RecallResult, str]:
         """Load recall and short-term context for first or follow-up prompts.
 
@@ -249,6 +250,10 @@ class ContextBuilder:
         - fresh compact mode: tiny auto recall plus a short-term tail;
         - full soul or ``recall_on_follow_up``: full long-term recall;
         - everything else: no recall.
+
+        ``include_short_term`` is forwarded to the full-recall branch so a
+        resumed ACP session (which kept its transcript) is not re-primed with
+        a short-term tail it already has.
         """
         is_fresh_memory_query = is_compact and self._wants_memory_recall(formatted)
         if is_fresh_memory_query:
@@ -285,7 +290,14 @@ class ContextBuilder:
                 )
             return recall, short_term
         if soul_mode == "full" or self.config.harness.memory.recall_on_follow_up:
-            return mgr.recall_context(formatted, model=effective_model), ""
+            return (
+                mgr.recall_context(
+                    formatted,
+                    model=effective_model,
+                    include_short_term=include_short_term,
+                ),
+                "",
+            )
         return (
             RecallResult(
                 text="",
@@ -1016,8 +1028,15 @@ class ContextBuilder:
 
         anchor = identity_anchor(self.config.persona)
         mgr = self.memory_factory(chat_id)
+        # A successfully resumed ACP session kept its transcript, so the
+        # short-term tail would be a duplicate — ask recall for long-term only.
         recall, short_term = self._load_recall_and_short_term(
-            mgr, formatted, effective_model, is_compact, soul_mode
+            mgr,
+            formatted,
+            effective_model,
+            is_compact,
+            soul_mode,
+            include_short_term=(resolved_reason != RehydrationReason.RESUMED),
         )
         chat_status = mgr.chat_memory_status()
 
