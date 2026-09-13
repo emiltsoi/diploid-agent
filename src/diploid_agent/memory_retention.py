@@ -80,6 +80,7 @@ class TurnRetainBuffer:
         turn_number: int,
         session_number: int,
         model: str,
+        context: str | None = None,
     ) -> None:
         """Buffer a turn pair and flush when the bundle size is reached."""
         if self.entries and self.entries[0]["session"] != session_number:
@@ -90,6 +91,7 @@ class TurnRetainBuffer:
                 "turn": turn_number,
                 "session": session_number,
                 "model": model,
+                "context": context,
                 "timestamp": datetime.now(UTC).isoformat(),
             }
         )
@@ -119,8 +121,10 @@ class TurnRetainBuffer:
             else:
                 document_id = f"turn-{self._chat_id}-{session:06d}-{turns[0]:06d}"
                 role = "pair"
+            context = next((e.get("context") for e in entries if e.get("context")), None)
             item = MemoryItem(
                 content="\n\n---\n\n".join(e["content"] for e in entries),
+                context=context,
                 timestamp=entries[-1].get("timestamp") or datetime.now(UTC).isoformat(),
                 document_id=document_id,
                 session_number=session,

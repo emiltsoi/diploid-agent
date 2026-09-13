@@ -396,12 +396,15 @@ class MemoryManager:
         ):
             retain_content = final_segment.lstrip("\n")
 
-        pair_content = f"User: {user_message}\n\nAssistant: {retain_content}"
+        user_prefix = self.memory_config.retain_user_prefix
+        assistant_prefix = self.memory_config.retain_assistant_prefix
+        pair_content = f"{user_prefix}: {user_message}\n\n{assistant_prefix}: {retain_content}"
         self._retain_buffer.append(
             pair_content,
             turn_number=turn_number,
             session_number=session_number,
             model=model,
+            context=self.memory_config.retain_context or None,
         )
 
         if extra_items:

@@ -277,6 +277,11 @@ class MemoryConfig(BaseModel):
     retain_final_segment: bool = False  # retain only the post-last-tool reply segment
     retain_min_final_chars: int = 200  # fall back to the full reply when the segment is shorter
     retain_bundle_turns: int = 1  # turn pairs bundled per retained document (1 = per-turn retain)
+    # Speaker labels and context passed to the long-term memory backend.
+    # Hindsight uses these to attribute facts to the right person.
+    retain_user_prefix: str = "User"
+    retain_assistant_prefix: str = "Assistant"
+    retain_context: str = ""
     # Cap for the "Recent turns" tail carried into a *new* ACP session prompt
     # (fresh/compact session-boundary builds). The new session starts with an
     # empty context window, so this can be much larger than the compact caps —
