@@ -100,6 +100,7 @@ class ContextBuilder:
         "authorship",
         "mesh",
         "metrics",
+        "cron",
         "skills",
         "continuation",
         "user",

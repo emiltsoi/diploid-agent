@@ -64,6 +64,7 @@ class RuntimeLifecycle:
         instance_manager: InstanceManager,
         task_engine: TaskEngine,
         timer_service: TimerService,
+        cron_service: Any | None = None,
         typing: RuntimeTyping,
         restart: RuntimeRestart,
         outbox: RuntimeOutbox,
@@ -87,6 +88,7 @@ class RuntimeLifecycle:
         self._instance_manager = instance_manager
         self._task_engine = task_engine
         self._timer_service = timer_service
+        self._cron_service = cron_service
         self._typing = typing
         self._restart = restart
         self._outbox = outbox
@@ -153,6 +155,8 @@ class RuntimeLifecycle:
 
         if self._config.harness.timer.enabled:
             self._timer_service.start()
+        if self._cron_service is not None:
+            self._cron_service.start()
         self._instance_manager.start_heartbeat()
         self._load_mesh_ingress()
         self._outbox._send_restart_notices()
@@ -178,6 +182,8 @@ class RuntimeLifecycle:
         except Exception:
             logger.exception("Failed to drain active turns during shutdown")
         self._timer_service.stop()
+        if self._cron_service is not None:
+            self._cron_service.stop()
         self._typing.stop()
         try:
             self._event_bus.unsubscribe(self._on_event)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -91,7 +92,7 @@ class PersonaConfig(BaseModel):
 
 
 class AuthorshipConfig(BaseModel):
-    """Per-plugin toggles for self-wake, self-inference, and felt authorship.
+    """Per-plugin toggles for self-wake, self-inference, felt authorship, cron.
 
     The master on/off switch is the plugin's own ``enabled`` flag.  These
     settings live inside ``PluginConfig.config`` so the contract is owned by
@@ -101,6 +102,7 @@ class AuthorshipConfig(BaseModel):
     self_wake_enabled: bool = False
     self_inference_enabled: bool = False
     felt_authorship_enabled: bool = False
+    cron_enabled: bool = False
     user_override: list[str] = Field(default_factory=list)
 
     @field_validator("user_override", mode="before")
@@ -411,6 +413,122 @@ class TimerConfig(BaseModel):
     self_wake_max_delay_seconds: float = Field(default=604800.0, gt=0, le=31536000)
 
 
+_CRON_JOB_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
+class CronScheduleSpec(BaseModel):
+    """When a cron job fires. Exactly one field must be set."""
+
+    cron: str | None = None  # 5-field cron expression (croniter)
+    every_seconds: float | None = None
+    at_daily: str | None = None  # "HH:MM" local wall-clock
+
+    @field_validator("at_daily")
+    @classmethod
+    def _check_at_daily(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        if not re.fullmatch(r"[0-2]\d:[0-5]\d", v):
+            raise ValueError("at_daily must be 'HH:MM' (local wall-clock)")
+        hour = int(v.split(":")[0])
+        if hour > 23:
+            raise ValueError("at_daily hour must be 00-23")
+        return v
+
+    @model_validator(mode="after")
+    def _exactly_one(self) -> CronScheduleSpec:
+        set_fields = [
+            name
+            for name in ("cron", "every_seconds", "at_daily")
+            if getattr(self, name) is not None
+        ]
+        if len(set_fields) != 1:
+            raise ValueError(
+                "schedule requires exactly one of cron / every_seconds / at_daily"
+            )
+        return self
+
+
+class CronCallSpec(BaseModel):
+    """What a cron job runs: a subprocess script or a phantom LLM turn."""
+
+    type: Literal["script", "llm"]
+    command: str | None = None  # script
+    cwd: str | None = None  # default: persona dir
+    persona: str | None = None  # llm — default: this service's persona
+    prompt: str | None = None  # llm
+    model: str | None = None  # llm model override
+    timeout_seconds: float | None = None
+
+    @model_validator(mode="after")
+    def _required_fields(self) -> CronCallSpec:
+        if self.type == "script" and not (self.command or "").strip():
+            raise ValueError("script call requires command")
+        if self.type == "llm" and not (self.prompt or "").strip():
+            raise ValueError("llm call requires prompt")
+        return self
+
+
+class CronJobSpec(BaseModel):
+    """One declarative scheduled job from a crons.yaml file."""
+
+    id: str
+    enabled: bool = True
+    schedule: CronScheduleSpec
+    call: CronCallSpec
+    delivery: Literal["silent", "digest", "turn"] = "silent"
+    chat_id: str | None = None  # owning chat; persona jobs default to theirs
+    overlap: Literal["skip", "queue"] = "skip"
+    catchup: Literal["once", "skip"] = "once"
+    max_consecutive_failures: int = Field(default=3, ge=1, le=100)
+
+    @field_validator("id")
+    @classmethod
+    def _check_id(cls, v: str) -> str:
+        if not _CRON_JOB_ID_RE.fullmatch(v):
+            raise ValueError("job id must be a slug: [a-z0-9][a-z0-9_-]*")
+        return v
+
+    @field_validator("delivery")
+    @classmethod
+    def _no_turn_yet(cls, v: str) -> str:
+        if v == "turn":
+            raise ValueError("delivery 'turn' is not supported until Wave B")
+        return v
+
+
+class CronFileSpec(BaseModel):
+    """Parsed contents of one crons.yaml file."""
+
+    jobs: list[CronJobSpec] = Field(default_factory=list)
+
+
+class CronConfig(BaseModel):
+    """Declarative cron scheduler configuration (``harness.cron.*``)."""
+
+    enabled: bool = True
+    tick_seconds: float = Field(default=5.0, gt=0, le=3600)
+    global_file: Path | None = Path("config/crons.yaml")
+    persona_filename: str = "crons.yaml"
+    state_path: Path | None = None  # default: next to wake_store_path
+    max_jobs_per_persona: int = Field(default=8, ge=0, le=100)
+    max_jobs_global: int = Field(default=16, ge=0, le=500)
+    min_interval_seconds: float = Field(default=300.0, ge=0, le=86400)
+    max_llm_timeout_seconds: float = Field(default=600.0, gt=0, le=86400)
+    max_script_timeout_seconds: float = Field(default=300.0, gt=0, le=86400)
+    turn_delivery_max_per_day: int = Field(default=4, ge=0, le=100)
+    results_dirname: str = "cron"  # sessions/<chat>/cron/
+    digest_max_jobs: int = Field(default=8, ge=1, le=100)
+    phantom_persona_max_chars: int = Field(default=6000, ge=0)
+    phantom_memory_max_chars: int = Field(default=4000, ge=0)
+    phantom_promoted_max_chars: int = Field(default=1500, ge=0)
+
+    @field_validator("global_file", "state_path")
+    @classmethod
+    def _expand_cron_paths(cls, v: Path | None) -> Path | None:
+        return v.expanduser() if v is not None else None
+
+
 class ConversationBudget(BaseModel):
     """Per-conversation token budget."""
 
@@ -526,6 +644,7 @@ class HarnessConfig(BaseModel):
     task: TaskConfig = Field(default_factory=TaskConfig)
     waker: WakerConfig = Field(default_factory=WakerConfig)
     timer: TimerConfig = Field(default_factory=TimerConfig)
+    cron: CronConfig = Field(default_factory=CronConfig)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     mesh: MeshConfig = Field(default_factory=MeshConfig)
     prompt_blocks: PromptBlocksConfig = Field(default_factory=PromptBlocksConfig)
@@ -536,6 +655,8 @@ class HarnessConfig(BaseModel):
             self.dispatch_store_path = self.session_store_path.parent / "dispatch_store.jsonl"
         if self.wake_store_path is None:
             self.wake_store_path = self.session_store_path.parent / "wake_queue.jsonl"
+        if self.cron.state_path is None:
+            self.cron.state_path = self.session_store_path.parent / "cron_state.jsonl"
         return self
 
     @field_validator("plugin_paths")

@@ -43,6 +43,7 @@ class AuthorshipPlugin(StatePlugin):
             f"- self-wake: {'on' if authorship.self_wake_enabled else 'off'}",
             f"- self-inference: {'on' if authorship.self_inference_enabled else 'off'}",
             f"- felt-authorship: {'on' if authorship.felt_authorship_enabled else 'off'}",
+            f"- cron: {'on' if authorship.cron_enabled else 'off'}",
             "",
             f"user-override guard: {guard}",
             "",

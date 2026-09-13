@@ -12,5 +12,6 @@
 - [Hindsight API contract](hindsight-api-contract.md)
 - [Background dispatches](dispatch.md)
 - [Wake queue](wake.md)
+- [Cron scheduler](cron.md)
 - [Mesh integration](mesh.md)
 - [Plugin contract](plugin-contract.md)

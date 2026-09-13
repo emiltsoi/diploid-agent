@@ -52,6 +52,17 @@ harness:
     self_wake_max_pending: 3          # max armed self-wakes per chat
     self_wake_min_interval_seconds: 300  # min seconds between arming calls
     self_wake_max_delay_seconds: 604800  # max scheduling horizon (7 days)
+  cron:
+    # Declarative scheduled jobs from config/crons.yaml (operator) and
+    # <persona>/crons.yaml (agent-authored, gated by the authorship
+    # plugin's cron_enabled toggle). See docs/cron.md.
+    enabled: true
+    tick_seconds: 5.0
+    max_jobs_per_persona: 8
+    max_jobs_global: 16
+    min_interval_seconds: 300         # jobs firing faster are dropped
+    max_llm_timeout_seconds: 600      # phantom turn cap
+    max_script_timeout_seconds: 300
   plan:
     root: plans
     store_filename: plans.jsonl
@@ -179,6 +190,15 @@ harness:
       prompt_order: 90
       state_file: chat_self_state.md
       max_prompt_chars: 512
+    # Uncomment to surface cron last-run results as a bounded prompt slot
+    # (delivery: digest jobs write sessions/<chat>/cron/*.last).
+    # - name: cron
+    #   enabled: true
+    #   module: diploid_plugins.cron
+    #   prompt_slot: cron
+    #   first_prompt_only: false
+    #   prompt_order: 96
+    #   max_prompt_chars: 768
     - name: self_management
       enabled: true
       module: diploid_plugins.self_management

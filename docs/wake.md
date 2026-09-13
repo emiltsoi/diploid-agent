@@ -12,6 +12,10 @@ A separate `diploid-waker` process polls the queue and calls `POST /wake`.
 process the same chat at once. A wake with `silent=True` runs the turn but
 does not send an outbound message.
 
+The wake queue is for one-shot events. Recurring, config-declared jobs —
+housekeeping, phantom LLM runs, digests — belong to the
+[cron scheduler](cron.md): two substrates, one durable on-disk queue each.
+
 ## HTTP endpoints
 
 - `POST /wake` — body `{"chat_id": "...", "reason": "...", "event_id": "...", "silent": ...}`. Returns the turn result and consumes the queued event on success.

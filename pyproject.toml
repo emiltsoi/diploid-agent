@@ -24,6 +24,7 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn>=0.30",
     "python-telegram-bot>=21.0",
+    "croniter>=6.2.4,<7",
 ]
 
 [project.optional-dependencies]

@@ -43,6 +43,7 @@ from diploid_agent.plugins import PluginManager
 from diploid_agent.runtime.actions import RuntimeActions
 from diploid_agent.runtime.auto_continue import RuntimeAutoContinue
 from diploid_agent.runtime.config_manager import RuntimeConfigManager
+from diploid_agent.runtime.cron_service import CronService
 from diploid_agent.runtime.event_bus import EventBus
 from diploid_agent.runtime.ingress import RuntimeIngress
 from diploid_agent.runtime.instance import InstanceManager
@@ -191,6 +192,14 @@ class AgentRuntime(RuntimeAPI):
             self.wake_queue,
             self.event_bus,
             config=self.config.harness.timer,
+        )
+
+        self.cron_service = CronService(
+            config=config,
+            plan_manager=self.plan_manager,
+            task_engine=self.task_engine,
+            event_bus=self.event_bus,
+            sessions_root=self.sessions_root,
         )
 
         self._outbox = RuntimeOutbox(
@@ -387,6 +396,7 @@ class AgentRuntime(RuntimeAPI):
             instance_manager=self.instance_manager,
             task_engine=self.task_engine,
             timer_service=self.timer_service,
+            cron_service=self.cron_service,
             typing=self._typing,
             restart=self._restart,
             outbox=self._outbox,

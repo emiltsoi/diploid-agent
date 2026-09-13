@@ -872,6 +872,7 @@ Less commonly used routes, all present on the same ingress:
 - `POST /timer` — enqueue a one-shot timer wake. Requires `X-API-Key`. Events with `reason` starting `self_wake` are agent-initiated self-wakes: they require the authorship plugin's `self_wake_enabled` toggle (403 otherwise) and are budget-limited by `timer.self_wake_max_pending` / `self_wake_min_interval_seconds` / `self_wake_max_delay_seconds` (429/422 on violation).
 - `GET /timer/pending?chat_id=&reason=` — list armed wake events for a chat (metadata only; payloads are not returned). Requires `X-API-Key`.
 - `POST /timer/cancel` — retract one armed wake by `{"chat_id", "event_id"}`. Requires `X-API-Key`.
+- `GET /cron` — merged cron job list plus per-job state (`next_due_at`, `last_status`, `consecutive_failures`, `running`, `auto_disabled`) and reload warnings. See [Cron](cron.md).
 - `GET /runtime/status`, `POST /runtime/start`, `POST /runtime/stop` — runtime lifecycle status and control. The `POST`s require `X-API-Key`; `GET` is unauthenticated.
 - `GET /prometheus` — Prometheus-format metrics. Unauthenticated.
 - `POST /plugin/enable`, `POST /plugin/reload`, `POST /plugins/create` — plugin enable/reload and chat-scoped plugin creation. Require `X-API-Key`.

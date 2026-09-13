@@ -4,6 +4,17 @@
 
 ### Added
 
+- Declarative cron scheduler (`harness.cron`): `config/crons.yaml` (operator)
+  and `<persona>/crons.yaml` (agent-authored, gated by the authorship
+  `cron_enabled` toggle) declare recurring jobs — `script` subprocess or
+  `llm` phantom (fresh isolated ACP child, persona files + promoted pocket,
+  empty MCP list) materialized into the TaskEngine through a standing
+  `__cron__` plan. `CronService` ticks on its own thread, reloads files on
+  mtime with last-good fallback, keeps `cron_state.jsonl` (overlap,
+  catchup-once, consecutive-failure auto-disable), and writes
+  `sessions/<chat>/cron/` result files. `delivery: silent|digest` in Wave A
+  (`turn` rejected until Wave B); `GET /cron` exposes merged jobs + state.
+  See `docs/cron.md`. New dependency: `croniter>=6.2.4,<7`.
 - Pre-pressure handoff turn: when the proactive context-pressure check would
   force a fresh session, `harness.pressure_handoff_enabled` (default `true`)
   first grants one bounded turn on the live session so the agent can author
