@@ -76,6 +76,7 @@ class TurnPipeline(TurnComponent):
         rehydrate_kwargs = rehydrate_kwargs or {}
         rehydrate_notice: str | None = None
         session_id: str | None = None
+        request: TurnRequest | None = None
         reply = ""
         # A deliberate session boundary (model/skills change, context-pressure
         # fresh) means old_record was already abandoned — rehydrate must not
@@ -131,7 +132,15 @@ class TurnPipeline(TurnComponent):
                     session_id = result.session_id
                 else:
                     resumed_id: str | None = None
-                    if session_resync and old_record is not None:
+                    if (
+                        session_resync
+                        and old_record is not None
+                        and old_record.session_id
+                        # A plugin may redirect the prompt to a different
+                        # session — resyncing old_record's session then would
+                        # only waste a transport restart.
+                        and call_ctx.session_id in (None, old_record.session_id)
+                    ):
                         # MCP drift on a live session: resume_session restarts
                         # the transport when the server list differs and
                         # reloads the session via session/resume→load, so the
@@ -303,7 +312,7 @@ class TurnPipeline(TurnComponent):
             is_new=is_new,
             rehydrate_notice=rehydrate_notice,
             memory_flags=memory_flags,
-            prompt_chars=len(request.prompt) if request.prompt else 0,
+            prompt_chars=len(request.prompt) if request and request.prompt else 0,
         )
 
     def _finalize_turn(
@@ -390,9 +399,13 @@ class TurnPipeline(TurnComponent):
                 if old_record is not None:
                     # Per-chat config survives implicit session boundaries —
                     # otherwise the next turn's default union re-adds a
-                    # disabled MCP and plugin toggles silently reset.
-                    record.disabled_mcp_servers = old_record.disabled_mcp_servers
-                    record.plugin_overrides = old_record.plugin_overrides
+                    # disabled MCP and plugin toggles silently reset. Copy
+                    # rather than alias: the old record's containers must not
+                    # be mutated by later writes on the new record.
+                    record.disabled_mcp_servers = list(
+                        old_record.disabled_mcp_servers or []
+                    )
+                    record.plugin_overrides = dict(old_record.plugin_overrides or {})
                 self.runtime._chat_state(chat_id).sessions[record.session_number] = record
             else:
                 record = old_record

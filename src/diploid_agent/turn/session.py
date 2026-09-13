@@ -220,9 +220,10 @@ class TurnSession(TurnComponent):
         new_record.enabled_mcp_servers = self.runtime._mcp_skills._active_mcp_server_names(chat_id)
         # Per-chat MCP disables are explicit config (like plugin_overrides)
         # and survive the session boundary — otherwise the default-server
-        # union in _active_mcp_server_names would re-add them.
+        # union in _active_mcp_server_names would re-add them. Copy the list
+        # so later writes can't mutate the archived record.
         if record is not None:
-            new_record.disabled_mcp_servers = record.disabled_mcp_servers
+            new_record.disabled_mcp_servers = list(record.disabled_mcp_servers or [])
         new_record.enabled_skills = sorted(self.runtime._mcp_skills._active_skill_names(chat_id))
         # The synthetic activation prompt is the first sample of this ACP
         # session's context; stash it so _chars_per_token can calibrate from a
@@ -235,9 +236,9 @@ class TurnSession(TurnComponent):
                 "prompt_chars": len(prompt),
             }
         if plugin_overrides is not None:
-            new_record.plugin_overrides = plugin_overrides
-        elif record is not None:
-            new_record.plugin_overrides = record.plugin_overrides
+            new_record.plugin_overrides = dict(plugin_overrides)
+        elif record is not None and record.plugin_overrides is not None:
+            new_record.plugin_overrides = dict(record.plugin_overrides)
 
         self.runtime._chat_state(chat_id).sessions[new_record.session_number] = new_record
         return self._finalize_session_activation(
@@ -721,9 +722,9 @@ class TurnSession(TurnComponent):
             label=f"branch of {session_number}",
         )
         new_record.enabled_mcp_servers = source_mcp_names
-        new_record.disabled_mcp_servers = source.disabled_mcp_servers
+        new_record.disabled_mcp_servers = list(source.disabled_mcp_servers or [])
         new_record.enabled_skills = sorted(source_skill_names)
-        new_record.plugin_overrides = source.plugin_overrides
+        new_record.plugin_overrides = dict(source.plugin_overrides or {})
         self.runtime._chat_state(chat_id).sessions[new_record.session_number] = new_record
         return self._finalize_session_activation(
             chat_id,
