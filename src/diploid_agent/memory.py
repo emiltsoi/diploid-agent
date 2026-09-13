@@ -124,19 +124,15 @@ class MemoryManager:
             legacy_transcript.rename(self._transcript_path)
         fb = self._file_backend
         if fb:
-            legacy_memory = fb._memory_path.with_name("MEMORY.md")
-            if legacy_memory.exists() and not fb._memory_path.exists():
-                legacy_memory.rename(fb._memory_path)
+            legacy_memory = fb.memory_path.with_name("MEMORY.md")
+            if legacy_memory.exists() and not fb.memory_path.exists():
+                legacy_memory.rename(fb.memory_path)
         self._short_term.migrate_cache()
         self._short_term.prune_cache()
 
     @property
     def _file_backend(self) -> FileMemoryBackend | None:
-        if isinstance(self.backend, FileMemoryBackend):
-            return self.backend
-        if isinstance(self.backend, HindsightMemoryBackend) and self.backend._fallback:
-            return self.backend._fallback
-        return None
+        return self.backend.file_store()
 
     @property
     def _transcript_path(self) -> Path:
@@ -172,15 +168,15 @@ class MemoryManager:
         fb = self._file_backend
         if not fb:
             return None
-        text = fb._load_memory_text()
+        text = fb.load_memory_text()
         if not text:
             return None
         cap = max_chars or self.memory_config.max_chat_memory_chars
         if len(text) <= cap:
             return text
         trimmed = _trim_to_last_section(text, cap)
-        archive = fb._memory_path.with_name(
-            f"{fb._memory_path.stem}_archive{fb._memory_path.suffix}"
+        archive = fb.memory_path.with_name(
+            f"{fb.memory_path.stem}_archive{fb.memory_path.suffix}"
         )
         if archive.exists():
             trimmed += (
@@ -194,7 +190,7 @@ class MemoryManager:
         """Path to the local chat memory file, if any."""
         fb = self._file_backend
         if fb:
-            return fb._memory_path
+            return fb.memory_path
         return None
 
     @property
@@ -492,8 +488,8 @@ class MemoryManager:
         """Return the raw per-chat memory for /memory display."""
         fb = self._file_backend
         if fb:
-            return fb._load_memory_text() or "No memory saved for this chat yet."
-        return "Memory is stored in Hindsight; use recall to inspect."
+            return fb.load_memory_text() or "No memory saved for this chat yet."
+        return "Memory is not file-backed for this chat; use recall to inspect."
 
     def stats(self) -> dict[str, Any]:
         return self.backend.stats()

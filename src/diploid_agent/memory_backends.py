@@ -53,6 +53,10 @@ class MemoryBackend(abc.ABC):
     def close(self) -> None:
         """Release any resources held by the backend."""
 
+    def file_store(self) -> FileMemoryBackend | None:
+        """The file-backed store behind this backend, if any."""
+        return None
+
 
 def _trim_to_section(text: str, limit: int) -> str:
     """Return the first `limit` characters, rounded down to a section break."""
@@ -105,8 +109,8 @@ class FileMemoryBackend(MemoryBackend):
         if legacy_transcript.exists() and not self._transcript_path.exists():
             legacy_transcript.rename(self._transcript_path)
         legacy_memory = self._session_dir / "MEMORY.md"
-        if legacy_memory.exists() and not self._memory_path.exists():
-            legacy_memory.rename(self._memory_path)
+        if legacy_memory.exists() and not self.memory_path.exists():
+            legacy_memory.rename(self.memory_path)
 
     @property
     def _session_dir(self) -> Path:
@@ -118,17 +122,25 @@ class FileMemoryBackend(MemoryBackend):
         return self._session_dir / "chat_transcript.jsonl"
 
     @property
-    def _memory_path(self) -> Path:
+    def memory_path(self) -> Path:
         return self._session_dir / "chat_MEMORY.md"
 
     @property
+    def _memory_path(self) -> Path:
+        """Alias for ``memory_path`` kept for existing callers."""
+        return self.memory_path
+
+    @property
     def _archive_path(self) -> Path:
-        return self._memory_path.with_name(
-            f"{self._memory_path.stem}_archive{self._memory_path.suffix}"
+        return self.memory_path.with_name(
+            f"{self.memory_path.stem}_archive{self.memory_path.suffix}"
         )
 
     def health(self) -> bool:
         return True
+
+    def file_store(self) -> FileMemoryBackend | None:
+        return self
 
     def load_transcript(self) -> list[dict[str, Any]]:
         path = self._transcript_path
@@ -168,14 +180,18 @@ class FileMemoryBackend(MemoryBackend):
             tag_str = ", ".join(item.tags)
             blocks.append(f"## {ts} ({tag_str})\n\n{item.content}\n")
         if blocks:
-            with open(self._memory_path, "a") as f:
+            with open(self.memory_path, "a") as f:
                 f.write("\n".join(blocks) + "\n")
 
-    def _load_memory_text(self) -> str:
-        path = self._memory_path
+    def load_memory_text(self) -> str:
+        path = self.memory_path
         if not path.exists():
             return ""
         return path.read_text()
+
+    def _load_memory_text(self) -> str:
+        """Alias for ``load_memory_text`` kept for existing callers."""
+        return self.load_memory_text()
 
     def _load_archive_text(self) -> str:
         path = self._archive_path
@@ -210,7 +226,7 @@ class FileMemoryBackend(MemoryBackend):
             if score > 0:
                 candidates.append((text, score))
 
-        memory_text = self._load_memory_text()
+        memory_text = self.load_memory_text()
         if memory_text:
             for block in memory_text.split("\n## "):
                 if block.strip():
@@ -242,7 +258,7 @@ class FileMemoryBackend(MemoryBackend):
 
     def stats(self) -> dict[str, Any]:
         transcript = self.load_transcript()
-        memory_size = self._memory_path.stat().st_size if self._memory_path.exists() else 0
+        memory_size = self.memory_path.stat().st_size if self.memory_path.exists() else 0
         archive_size = self._archive_path.stat().st_size if self._archive_path.exists() else 0
         return {
             "backend": "file",
@@ -331,6 +347,9 @@ class HindsightMemoryBackend(MemoryBackend):
         except Exception as exc:  # noqa: BLE001
             logger.debug("Hindsight health check failed: %s", exc)
             return False
+
+    def file_store(self) -> FileMemoryBackend | None:
+        return self._fallback
 
     def _flush_spool(self) -> None:
         if not self._spool_path.exists():

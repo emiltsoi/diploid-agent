@@ -7,6 +7,7 @@ from typing import Any
 from diploid_agent.memory import (
     FileMemoryBackend,
     HindsightMemoryBackend,
+    MemoryBackend,
     MemoryItem,
     MemoryManager,
     RecallResult,
@@ -83,6 +84,32 @@ def test_file_backend_recall_archive_no_match(tmp_path: Path) -> None:
     backend._archive_path.write_text("## 2026-09-01 (memory)\n\nold project used SQLite\n")
     result = backend.recall("completely unrelated")
     assert result == ""
+
+
+def test_file_backend_file_store_returns_self(tmp_path: Path) -> None:
+    backend = FileMemoryBackend(tmp_path, "chat-1")
+    assert backend.file_store() is backend
+
+
+def test_hindsight_file_store_returns_fallback(tmp_path: Path) -> None:
+    backend = HindsightMemoryBackend(
+        base_url="http://127.0.0.1:1",
+        bank="test",
+        chat_id="chat-1",
+        sessions_root=tmp_path,
+        spool_path=tmp_path / "spool.jsonl",
+    )
+    assert backend.file_store() is backend._fallback
+
+    no_fallback = HindsightMemoryBackend(
+        base_url="http://127.0.0.1:1",
+        bank="test",
+        chat_id="chat-2",
+        sessions_root=tmp_path,
+        spool_path=tmp_path / "spool2.jsonl",
+        fallback_to_file=False,
+    )
+    assert no_fallback.file_store() is None
 
 
 def test_hindsight_spool_when_unhealthy(tmp_path: Path) -> None:
@@ -1045,3 +1072,61 @@ def test_final_segment_reply_all_post_tool_returns_reply() -> None:
 
     result = _fake_result([{"sessionUpdate": "tool_call"}, _msg("whole reply")])
     assert final_segment_reply(result, "whole reply") == "whole reply"
+
+
+class _NonFileBackend(MemoryBackend):
+    """Minimal MemoryBackend with no file store behind it."""
+
+    def __init__(self) -> None:
+        self.items: list[MemoryItem] = []
+
+    def health(self) -> bool:
+        return True
+
+    def retain(self, items: list[MemoryItem]) -> None:
+        self.items.extend(items)
+
+    def recall(
+        self,
+        query: str,
+        *,
+        tags: list[str] | None = None,
+        max_tokens: int = 1500,
+    ) -> str:
+        return "\n".join(item.content for item in self.items)
+
+    def stats(self) -> dict[str, Any]:
+        return {"backend": "fake"}
+
+
+def test_memory_manager_non_file_backend_contract(tmp_path: Path) -> None:
+    """A backend whose file_store() is None gets backend-neutral handling."""
+    from diploid_agent.config import MemoryConfig, PersonaConfig
+
+    class FakeClient:
+        pass
+
+    persona = PersonaConfig(name="test-persona", profile_root=tmp_path / "persona")
+    persona.profile_root.mkdir(parents=True, exist_ok=True)
+    config = MemoryConfig(backend="file")
+    manager = MemoryManager(
+        config=config,
+        persona=persona,
+        sessions_root=tmp_path,
+        chat_id="chat-1",
+        devin_client=FakeClient(),
+    )
+    backend = _NonFileBackend()
+    manager.backend = backend
+
+    assert manager._file_backend is None
+    assert manager.chat_memory_path is None
+    assert manager.memory_content() == (
+        "Memory is not file-backed for this chat; use recall to inspect."
+    )
+
+    # A retain/recall round-trip goes through the backend only; no memory file.
+    manager.retain("the deploy window is Friday")
+    assert any("deploy window" in item.content for item in backend.items)
+    assert "deploy window" in manager.recall_context("deploy").text
+    assert not (tmp_path / "chat-1" / "chat_MEMORY.md").exists()
