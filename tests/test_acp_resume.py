@@ -22,6 +22,8 @@ from diploid_agent.config import (
     DiploidConfig,
     EngineConfig,
     HarnessConfig,
+    McpConfig,
+    McpServerConfig,
     PersonaConfig,
     Secrets,
 )
@@ -791,7 +793,11 @@ def test_process_mcp_resync_failure_falls_back_to_new_session(
     monkeypatch, tmp_path: Path
 ) -> None:
     """A failed MCP resync falls through the normal rehydrate path to
-    session/new rather than leaving stale MCP on the live session."""
+    session/new rather than leaving stale MCP on the live session.
+
+    The resync failure marks the session unreachable, so _rehydrate must
+    not re-attempt resume or the session_alive probe — that would double
+    the stall."""
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
     config = _make_config(tmp_path, fixture_root, acp_resume_enabled=True)
     harness = ConversationHarness(config)
@@ -831,5 +837,371 @@ def test_process_mcp_resync_failure_falls_back_to_new_session(
         result2 = harness.process("chat-mcp-fail", "follow-up")
         assert result2.session_id != "session-1"
         assert call_order.count("create") == 2
+        # Exactly one resume attempt (the resync) — no second attempt or
+        # alive probe inside _rehydrate.
+        assert call_order.count("resume") == 1
+        assert "alive" not in call_order
+    finally:
+        harness.client.close()
+
+
+def test_model_boundary_does_not_resurrect_archived_session(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A transient session/new failure after a deliberate model boundary
+    must not resume the archived session — the user asked for a fresh
+    context, so _rehydrate runs with allow_resume=False."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root, acp_resume_enabled=True)
+    harness = ConversationHarness(config)
+
+    call_order: list[str] = []
+
+    def fake_create_session(prompt: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("create")
+        if call_order.count("create") == 2:
+            raise AcpTransportError("session/new", msg="connection lost")
+        return AcpPromptResult(reply=f"Ready-{model}", session_id=f"session-{len(call_order)}")
+
+    def fake_resume(session_id: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("resume")
+        return session_id
+
+    def fake_session_alive(session_id: str) -> bool:
+        call_order.append("alive")
+        return True
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+    monkeypatch.setattr(harness.client, "resume_session", fake_resume)
+    monkeypatch.setattr(harness.client, "session_alive", fake_session_alive)
+    monkeypatch.setattr(
+        harness.client, "restart_transport", lambda reason=None, chat_id=None: None
+    )
+
+    try:
+        result1 = harness.process("chat-boundary", "hello")
+        assert result1.session_id == "session-1"
+
+        result2 = harness.process("chat-boundary", "hi", model="glm-5-2")
+        # The archived session-1 must not be revived: no resume attempt,
+        # no alive probe — just a fresh session/new after the restart.
+        assert "resume" not in call_order
+        assert "alive" not in call_order
+        assert call_order.count("create") == 3
+        assert result2.session_id == "session-3"
+        assert result2.session_id != "session-1"
+    finally:
+        harness.client.close()
+
+
+def test_continue_turn_resyncs_mcp_drift(monkeypatch, tmp_path: Path) -> None:
+    """Dispatch continuations resync MCP drift like normal turns — without
+    it the continuation prompts against stale MCP config and _finalize_turn
+    restamps the record, silently masking the drift."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root, acp_resume_enabled=True)
+    harness = ConversationHarness(config)
+
+    call_order: list[str] = []
+
+    def fake_create_session(prompt: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("create")
+        return AcpPromptResult(reply="Ready.", session_id="session-1")
+
+    def fake_resume(session_id: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("resume")
+        return session_id
+
+    def fake_send_message(session_id: str, prompt: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("send")
+        return AcpPromptResult(reply="Done.", session_id=session_id)
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+    monkeypatch.setattr(harness.client, "send_message", fake_send_message)
+    monkeypatch.setattr(harness.client, "resume_session", fake_resume)
+
+    try:
+        harness.process("chat-dispatch", "Please dispatch")
+        chat_result = harness.dispatch("chat-dispatch")
+
+        monkeypatch.setattr(
+            harness.runtime._mcp_skills,
+            "_active_mcp_server_names",
+            lambda chat_id: ["a-new-default"],
+        )
+
+        result = harness.continue_turn(chat_result.dispatch_id, "worker done")
+        assert result.session_id == "session-1"
+        assert "resume" in call_order
+        # The continuation prompt went to the resynced session.
+        assert call_order[-1] == "send"
+        record = harness._active_record("chat-dispatch")
+        assert record.enabled_mcp_servers == ["a-new-default"]
+    finally:
+        harness.client.close()
+
+
+def test_resume_session_runs_as_background(client: AcpClient, monkeypatch) -> None:
+    """resume_session marks its _run background — an opportunistic resume
+    budget expiring must not mark the shared transport unhealthy."""
+    captured: dict[str, Any] = {}
+
+    def fake_run(coro: Any, timeout: float | None = None, background: bool = False):
+        captured["background"] = background
+        coro.close()
+        return "s-1"
+
+    monkeypatch.setattr(client, "_ensure_started", lambda mcp_servers=None: None)
+    monkeypatch.setattr(client, "_run", fake_run)
+
+    assert client.resume_session("s-1") == "s-1"
+    assert captured["background"] is True
+
+
+def test_mcp_disable_default_does_not_trigger_spurious_resync(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Disabling a default MCP server must not look like drift — the
+    disabled overlay keeps the effective set equal to the record stamp,
+    so follow-ups do not waste a resync restart, and /new keeps the
+    disable instead of the default union silently re-adding it."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root, acp_resume_enabled=True)
+    config.harness.mcp = McpConfig(
+        servers=[McpServerConfig(name="github", command="npx", args=["-y"], env=[])],
+        default_enabled=["github"],
+    )
+    harness = ConversationHarness(config)
+
+    call_order: list[str] = []
+
+    def fake_create_session(prompt: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("create")
+        return AcpPromptResult(reply="Ready.", session_id="session-1")
+
+    def fake_resume(session_id: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("resume")
+        return session_id
+
+    def fake_send_message(session_id: str, prompt: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("send")
+        return AcpPromptResult(reply="Follow-up.", session_id=session_id)
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+    monkeypatch.setattr(harness.client, "send_message", fake_send_message)
+    monkeypatch.setattr(harness.client, "resume_session", fake_resume)
+
+    try:
+        harness.process("chat-mcp-off", "hello")
+        record = harness._active_record("chat-mcp-off")
+        assert record.enabled_mcp_servers == ["github"]
+
+        harness.mcp_disable("chat-mcp-off", "github")
+        assert record.enabled_mcp_servers == []
+        assert record.disabled_mcp_servers == ["github"]
+        assert harness.runtime._mcp_skills._active_mcp_server_names("chat-mcp-off") == []
+
+        result = harness.process("chat-mcp-off", "follow-up")
+        assert "resume" not in call_order  # effective set unchanged — no resync
+        assert result.session_id == "session-1"
+
+        # The disable is per-chat config and survives the session boundary.
+        harness.new_session("chat-mcp-off")
+        record2 = harness._active_record("chat-mcp-off")
+        assert record2.disabled_mcp_servers == ["github"]
+        assert harness.runtime._mcp_skills._active_mcp_server_names("chat-mcp-off") == []
+    finally:
+        harness.client.close()
+
+
+def test_process_mcp_resync_transport_failure_is_stale_class(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A transport-class resync failure is reclassified as stale, not
+    transport-unhealthy: no restart_first, no second resume attempt, no
+    alive probe — straight to session/new on the existing transport."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root, acp_resume_enabled=True)
+    harness = ConversationHarness(config)
+
+    call_order: list[str] = []
+    restarts: list[None] = []
+
+    def fake_create_session(prompt: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("create")
+        return AcpPromptResult(reply="Ready.", session_id=f"session-{len(call_order)}")
+
+    def fake_resume(session_id: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("resume")
+        raise AcpTransportError("session/resume", msg="resume budget expired")
+
+    def fake_session_alive(session_id: str) -> bool:
+        call_order.append("alive")
+        return True
+
+    def fake_send_message(session_id: str, prompt: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("send")
+        return AcpPromptResult(reply="Follow-up.", session_id=session_id)
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+    monkeypatch.setattr(harness.client, "send_message", fake_send_message)
+    monkeypatch.setattr(harness.client, "resume_session", fake_resume)
+    monkeypatch.setattr(harness.client, "session_alive", fake_session_alive)
+    monkeypatch.setattr(
+        harness.client,
+        "restart_transport",
+        lambda reason=None, chat_id=None: restarts.append(None),
+    )
+
+    try:
+        harness.process("chat-mcp-transport", "hello")
+
+        monkeypatch.setattr(
+            harness.runtime._mcp_skills,
+            "_active_mcp_server_names",
+            lambda chat_id: ["a-new-default"],
+        )
+
+        result2 = harness.process("chat-mcp-transport", "follow-up")
+        assert result2.session_id != "session-1"
+        assert call_order.count("create") == 2
+        assert call_order.count("resume") == 1
+        assert "alive" not in call_order
+        # Stale-class, not transport-class: the rehydrate path does not
+        # restart the transport first.
+        assert not restarts
+    finally:
+        harness.client.close()
+
+
+def test_implicit_boundary_preserves_mcp_disable(monkeypatch, tmp_path: Path) -> None:
+    """A stale-rehydrate session/new must carry disabled_mcp_servers onto
+    the new record — otherwise the next turn's default union re-adds the
+    disabled server and fakes MCP drift (a pointless resync restart)."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root, acp_resume_enabled=True)
+    config.harness.mcp = McpConfig(
+        servers=[McpServerConfig(name="github", command="npx", args=["-y"], env=[])],
+        default_enabled=["github"],
+    )
+    harness = ConversationHarness(config)
+
+    send_calls = [0]
+
+    def fake_create_session(prompt: str, *, cwd=None, model=None, **kwargs):
+        return AcpPromptResult(
+            reply="Ready.", session_id=f"session-{len(send_calls) + 1}"
+        )
+
+    def fake_send_message(session_id: str, prompt: str, *, cwd=None, model=None, **kwargs):
+        send_calls[0] += 1
+        if send_calls[0] == 1:
+            raise AcpSessionStaleError(
+                "session/prompt", {"code": -32002, "message": "Session not found"}
+            )
+        return AcpPromptResult(reply="Follow-up.", session_id=session_id)
+
+    def fake_resume(session_id: str, *, cwd=None, model=None, **kwargs):
+        raise AcpSessionStaleError(
+            "session/resume", {"code": -32002, "message": "Session not found"}
+        )
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+    monkeypatch.setattr(harness.client, "send_message", fake_send_message)
+    monkeypatch.setattr(harness.client, "resume_session", fake_resume)
+    monkeypatch.setattr(
+        harness.client, "session_alive", lambda session_id: False
+    )
+
+    try:
+        harness.process("chat-disable-boundary", "hello")
+        harness.mcp_disable("chat-disable-boundary", "github")
+
+        # The stale send forces rehydrate → session/new → new record.
+        result = harness.process("chat-disable-boundary", "follow-up")
+        record = harness._active_record("chat-disable-boundary")
+        assert result.session_id != "session-1"
+        assert record.disabled_mcp_servers == ["github"]
+        assert record.enabled_mcp_servers == []
+        # And the effective set stays empty — no phantom drift next turn.
+        assert not harness.runtime._mcp_skills._mcp_record_drifted(
+            "chat-disable-boundary", record
+        )
+    finally:
+        harness.client.close()
+
+
+def test_resume_command_probe_is_consistency_gated(monkeypatch, tmp_path: Path) -> None:
+    """`/resume` keeps its explicit resume attempt, but a timeout-flagged
+    source must not be silently revived by the session_alive probe."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root, acp_resume_enabled=False)
+    harness = ConversationHarness(config)
+
+    call_order: list[str] = []
+
+    def fake_create_session(prompt: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("create")
+        return AcpPromptResult(reply="Ready.", session_id=f"session-{len(call_order)}")
+
+    def fake_session_alive(session_id: str) -> bool:
+        call_order.append("alive")
+        return True
+
+    def fake_send_message(session_id: str, prompt: str, *, cwd=None, model=None, **kwargs):
+        call_order.append("send")
+        return AcpPromptResult(reply="Follow-up.", session_id=session_id)
+
+    monkeypatch.setattr(harness.client, "create_session", fake_create_session)
+    monkeypatch.setattr(harness.client, "send_message", fake_send_message)
+    monkeypatch.setattr(harness.client, "session_alive", fake_session_alive)
+
+    try:
+        harness.process("chat-resume-cmd", "hello")
+        harness.new_session("chat-resume-cmd")
+
+        # The archived session-1 record carries a timeout stop reason —
+        # consistency rules say it must not be revived.
+        state = harness.runtime._chat_state("chat-resume-cmd")
+        source = state.sessions[1]
+        source.last_stop_reason = "timeout"
+
+        harness.resume_session("chat-resume-cmd", 1)
+        assert "alive" not in call_order
+        # Rehydration fell through to a fresh session under session 1.
+        assert source.session_id != "session-1"
+    finally:
+        harness.client.close()
+
+
+def test_can_resume_record_expected_skills_baseline(monkeypatch, tmp_path: Path) -> None:
+    """_can_resume_record(expected_skills=...) compares the record against
+    the given baseline — /branch must judge the source session by the
+    source's own skill set, not the active record's."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root)
+    harness = ConversationHarness(config)
+
+    monkeypatch.setattr(
+        harness.client,
+        "create_session",
+        lambda prompt, *, cwd=None, model=None, **kwargs: AcpPromptResult(
+            reply="Ready.", session_id="session-1"
+        ),
+    )
+
+    try:
+        harness.process("chat-br", "hello")
+        record = harness._active_record("chat-br")
+        record.enabled_skills = ["skill-a"]
+        # The active set drifts from the source's own skills.
+        harness.runtime._mcp_skills._active_chat_skills["chat-br"] = {"skill-b"}
+
+        session = harness.runtime.turn_controller.session
+        assert session._can_resume_record("chat-br", record) is False
+        assert (
+            session._can_resume_record("chat-br", record, expected_skills={"skill-a"})
+            is True
+        )
     finally:
         harness.client.close()

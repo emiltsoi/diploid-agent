@@ -35,6 +35,7 @@ class SessionRecord:
     last_turn_metrics: dict[str, Any] | None = None
     first_turn_metrics: dict[str, Any] | None = None
     enabled_mcp_servers: list[str] | None = None
+    disabled_mcp_servers: list[str] | None = None
     enabled_skills: list[str] | None = None
     disabled_skills: list[str] | None = None
     plugin_overrides: dict[str, bool] | None = None
@@ -64,6 +65,7 @@ class SessionRecord:
             last_turn_metrics=data.get("last_turn_metrics"),
             first_turn_metrics=data.get("first_turn_metrics"),
             enabled_mcp_servers=data.get("enabled_mcp_servers"),
+            disabled_mcp_servers=data.get("disabled_mcp_servers"),
             enabled_skills=data.get("enabled_skills"),
             disabled_skills=data.get("disabled_skills"),
             plugin_overrides=data.get("plugin_overrides"),

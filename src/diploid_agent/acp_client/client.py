@@ -378,6 +378,9 @@ class AcpClient:
                 timeout=effective_timeout,
             ),
             timeout=effective_timeout + 30.0 if effective_timeout is not None else None,
+            # A resume timeout is our own budget expiring on an opportunistic
+            # optimization — not a wedged transport. Don't poison the child.
+            background=True,
         )
 
     def cancel(self, session_id: str) -> None:

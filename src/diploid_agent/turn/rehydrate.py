@@ -88,8 +88,14 @@ class TurnRehydrate(TurnComponent):
         restart_first: bool = False,
         log_prefix: str = "Rehydrating",
         rehydration_reason: RehydrationReason | None = None,
+        allow_resume: bool = True,
     ) -> tuple[TurnResult, str, PromptContext] | ChatResult:
-        """Resume a persisted ACP session if possible, otherwise start a new one."""
+        """Resume a persisted ACP session if possible, otherwise start a new one.
+
+        ``allow_resume=False`` skips both the resume attempt and the
+        session_alive probe — used when the caller already crossed a
+        deliberate session boundary or knows the session is unreachable.
+        """
         if rehydration_reason is None:
             if restart_first:
                 rehydration_reason = RehydrationReason.RESTART
@@ -131,7 +137,9 @@ class TurnRehydrate(TurnComponent):
                 )
 
         resumed_id: str | None = None
-        can_resume = self.controller.session._can_resume_record(chat_id, old_record)
+        can_resume = allow_resume and self.controller.session._can_resume_record(
+            chat_id, old_record
+        )
         if self.runtime.config.engine.acp_resume_enabled and can_resume:
             assert old_record is not None  # can_resume implies a record with session_id
             self.runtime._restore_plugin_states(chat_id)

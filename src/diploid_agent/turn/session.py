@@ -52,7 +52,13 @@ class TurnSession(TurnComponent):
         finally:
             self.runtime._session_ops.discard(chat_id)
 
-    def _can_resume_record(self, chat_id: str, record: SessionRecord) -> bool:
+    def _can_resume_record(
+        self,
+        chat_id: str,
+        record: SessionRecord,
+        *,
+        expected_skills: set[str] | None = None,
+    ) -> bool:
         """Return True if the ACP session for this record can be resumed.
 
         Model drift is absorbed by the mode/model re-apply resume performs
@@ -60,12 +66,20 @@ class TurnSession(TurnComponent):
         restart ``resume_session`` triggers when the server list differs.
         Only a skills-set change — skills are discovered at session start —
         or a prior hard timeout still forces ``session/new``.
+
+        ``expected_skills`` overrides the baseline the record is compared
+        against (e.g. ``/branch`` compares the source session's skill set,
+        not the active record's).
         """
         if not record or not record.session_id:
             return False
         if record.last_stop_reason == "timeout":
             return False
-        current_skills = sorted(self.runtime._mcp_skills._active_skill_names(chat_id))
+        current_skills = sorted(
+            expected_skills
+            if expected_skills is not None
+            else self.runtime._mcp_skills._active_skill_names(chat_id)
+        )
         # None means the field predates tracking — "unknown", not "empty" —
         # so it cannot prove drift; only a known mismatch blocks resume.
         return record.enabled_skills is None or sorted(record.enabled_skills) == current_skills
@@ -204,6 +218,11 @@ class TurnSession(TurnComponent):
             label=label,
         )
         new_record.enabled_mcp_servers = self.runtime._mcp_skills._active_mcp_server_names(chat_id)
+        # Per-chat MCP disables are explicit config (like plugin_overrides)
+        # and survive the session boundary — otherwise the default-server
+        # union in _active_mcp_server_names would re-add them.
+        if record is not None:
+            new_record.disabled_mcp_servers = record.disabled_mcp_servers
         new_record.enabled_skills = sorted(self.runtime._mcp_skills._active_skill_names(chat_id))
         # The synthetic activation prompt is the first sample of this ACP
         # session's context; stash it so _chars_per_token can calibrate from a
@@ -369,7 +388,7 @@ class TurnSession(TurnComponent):
         source_mcp_names = (
             source.enabled_mcp_servers
             if source.enabled_mcp_servers is not None
-            else sorted(self.runtime.mcp.default_enabled_names())
+            else self.runtime._mcp_skills._default_mcp_names()
         )
         source_skill_names = (
             set(source.enabled_skills)
@@ -397,13 +416,25 @@ class TurnSession(TurnComponent):
                 logger.warning("Failed to resume ACP session %s: %s", source.session_id, exc)
 
         if not resumed_id:
-            # Fall back to the legacy probe/rehydrate path.
-            try:
-                alive = self.runtime._call_unlocked(
-                    self.runtime.engine.session_alive, source.session_id
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Failed to probe ACP session %s: %s", source.session_id, exc)
+            # Fall back to the legacy probe/rehydrate path — but a record
+            # rejected by the consistency rules (timeout-flagged, no
+            # session_id) must not be revived by the probe. The source is
+            # judged by its own skill baseline: its skills are the set the
+            # session actually ran with.
+            can_probe = self._can_resume_record(
+                chat_id, source, expected_skills=source_skill_names
+            )
+            if can_probe:
+                try:
+                    alive = self.runtime._call_unlocked(
+                        self.runtime.engine.session_alive, source.session_id
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "Failed to probe ACP session %s: %s", source.session_id, exc
+                    )
+                    alive = False
+            else:
                 alive = False
 
             if alive:
@@ -584,7 +615,7 @@ class TurnSession(TurnComponent):
                     chat_id,
                     source.enabled_mcp_servers
                     if source.enabled_mcp_servers is not None
-                    else sorted(self.runtime.mcp.default_enabled_names()),
+                    else self.runtime._mcp_skills._default_mcp_names(),
                 ),
             ),
         )
@@ -598,7 +629,7 @@ class TurnSession(TurnComponent):
             if start_ctx.mcp_servers is not None
             else source.enabled_mcp_servers
             if source.enabled_mcp_servers is not None
-            else sorted(self.runtime.mcp.default_enabled_names())
+            else self.runtime._mcp_skills._default_mcp_names()
         )
         source_skill_names = (
             start_ctx.skill_names
@@ -610,7 +641,7 @@ class TurnSession(TurnComponent):
 
         resumed_id: str | None = None
         if self.runtime.config.engine.acp_resume_enabled and self._can_resume_record(
-            chat_id, source
+            chat_id, source, expected_skills=source_skill_names
         ):
             try:
                 logger.debug("Attempting ACP session resume for branch of %s", source.session_id)
@@ -690,6 +721,7 @@ class TurnSession(TurnComponent):
             label=f"branch of {session_number}",
         )
         new_record.enabled_mcp_servers = source_mcp_names
+        new_record.disabled_mcp_servers = source.disabled_mcp_servers
         new_record.enabled_skills = sorted(source_skill_names)
         new_record.plugin_overrides = source.plugin_overrides
         self.runtime._chat_state(chat_id).sessions[new_record.session_number] = new_record

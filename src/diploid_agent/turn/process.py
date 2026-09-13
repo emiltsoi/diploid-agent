@@ -119,13 +119,8 @@ class TurnProcess(TurnPipeline):
             skills_changed = record is not None and previous_skills != active_skill_names
             # MCP drift on a live session is resolved in _call_engine via a
             # resume-based resync (transport restart + session/load) rather
-            # than a session/new rebuild. None means untracked — not drift.
-            mcp_changed = (
-                record is not None
-                and record.enabled_mcp_servers is not None
-                and sorted(record.enabled_mcp_servers)
-                != sorted(self.runtime._mcp_skills._active_mcp_server_names(chat_id))
-            )
+            # than a session/new rebuild.
+            mcp_changed = self.runtime._mcp_skills._mcp_record_drifted(chat_id, record)
             force_new_session = False
 
             continue_word = (

@@ -256,6 +256,7 @@ class RuntimeActions:
                 "cumulative_metrics": record.cumulative_metrics,
                 "context_usage": context_usage,
                 "enabled_mcp_servers": record.enabled_mcp_servers,
+                "disabled_mcp_servers": record.disabled_mcp_servers,
                 "enabled_skills": record.enabled_skills,
                 "disabled_skills": record.disabled_skills,
                 "background_tasks": background_tasks,

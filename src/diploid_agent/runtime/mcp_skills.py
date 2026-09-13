@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
     from diploid_agent.config import Config
     from diploid_agent.mcp import McpManager
+    from diploid_agent.models import SessionRecord
     from diploid_agent.plugins import PluginManager
     from diploid_agent.runtime.store import ChatSessionStore
     from diploid_agent.skills import SkillManager
@@ -62,9 +63,15 @@ class RuntimeMcpSkills:
                 McpCommandContext(chat_id=chat_id, server_name=name, enabled=True, record=record),
             )
             name = ctx.server_name
-            names = set(record.enabled_mcp_servers or self.mcp.default_enabled_names())
+            # Seed from the live effective set (defaults ∪ plugins ∪ record
+            # minus disabled), not just default_enabled_names — otherwise the
+            # stamp drops plugin-default MCPs and looks like drift next turn.
+            names = set(self._active_mcp_server_names(chat_id))
             names.add(name)
             record.enabled_mcp_servers = sorted(names)
+            disabled = set(record.disabled_mcp_servers or [])
+            disabled.discard(name)
+            record.disabled_mcp_servers = sorted(disabled)
             self._chat_store._append_record(record)
             self._plugins.after_mcp_enabled(
                 chat_id,
@@ -82,9 +89,12 @@ class RuntimeMcpSkills:
                 McpCommandContext(chat_id=chat_id, server_name=name, enabled=False, record=record),
             )
             name = ctx.server_name
-            names = set(record.enabled_mcp_servers or self.mcp.default_enabled_names())
+            names = set(self._active_mcp_server_names(chat_id))
             names.discard(name)
             record.enabled_mcp_servers = sorted(names)
+            disabled = set(record.disabled_mcp_servers or [])
+            disabled.add(name)
+            record.disabled_mcp_servers = sorted(disabled)
             self._chat_store._append_record(record)
             self._plugins.after_mcp_disabled(
                 chat_id,
@@ -153,23 +163,46 @@ class RuntimeMcpSkills:
             self.skills.create_chat_skill(chat_id, name, content)
             return f"Created chat skill /{name}. It will be available after /new."
 
+    def _default_mcp_names(self) -> list[str]:
+        """Default MCP server names — config defaults plus plugin-provided."""
+        return sorted(
+            set(self.mcp.default_enabled_names()) | set(self._plugins.default_mcp_names())
+        )
+
     def _active_mcp_server_names(self, chat_id: str) -> list[str]:
         if self._plugins is None or self.mcp is None:
             return []
         record = self._chat_store._active_record(chat_id)
         # Merge the chat record with the current default set so new default
         # servers (e.g. diploid-mesh) become available in older sessions.
-        names: set[str] = set(self.mcp.default_enabled_names()) | set(
-            self._plugins.default_mcp_names()
-        )
+        names: set[str] = set(self._default_mcp_names())
         if record and record.enabled_mcp_servers is not None:
             names |= set(record.enabled_mcp_servers)
+        if record and record.disabled_mcp_servers:
+            # Per-chat disables win over the default union — without this a
+            # /mcp disable of a default server would be silently reverted.
+            names -= set(record.disabled_mcp_servers)
         return sorted(names)
 
     def _active_mcp_servers(self, chat_id: str) -> list[dict[str, Any]]:
         if self.mcp is None:
             return []
         return self.mcp.enabled_servers(chat_id, self._active_mcp_server_names(chat_id))
+
+    def _mcp_record_drifted(self, chat_id: str, record: SessionRecord | None) -> bool:
+        """Return True when the session record's MCP set provably differs from
+        the currently active set. ``None`` means untracked — not drift.
+
+        ``record`` must be the chat's active record: the live set is derived
+        from ``_active_mcp_server_names(chat_id)``, which reads the active
+        record — passing an archived/source record would compare it against
+        a baseline derived from a different session."""
+        return (
+            record is not None
+            and record.enabled_mcp_servers is not None
+            and sorted(record.enabled_mcp_servers)
+            != sorted(self._active_mcp_server_names(chat_id))
+        )
 
     def _default_active_skills(self) -> set[str]:
         """Return skills that should be active for a brand-new chat."""

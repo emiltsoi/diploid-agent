@@ -15,6 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from diploid_agent.acp_client import AcpSessionStaleError
 from diploid_agent.engine import TurnRequest, TurnResult
 from diploid_agent.models import ActiveTurn, ChatResult, SessionRecord, final_segment_reply
 from diploid_agent.plugins.base import TurnInfo
@@ -76,6 +77,12 @@ class TurnPipeline(TurnComponent):
         rehydrate_notice: str | None = None
         session_id: str | None = None
         reply = ""
+        # A deliberate session boundary (model/skills change, context-pressure
+        # fresh) means old_record was already abandoned — rehydrate must not
+        # resurrect it. A failed resync means the session is unreachable, so
+        # re-attempting resume inside rehydrate only stalls.
+        resync_failed = False
+        allow_resume = not (is_new or force_new_session)
         try:
             request = TurnRequest(
                 prompt=prompt,
@@ -123,22 +130,50 @@ class TurnPipeline(TurnComponent):
                     active.session_id = result.session_id
                     session_id = result.session_id
                 else:
-                    if session_resync:
+                    resumed_id: str | None = None
+                    if session_resync and old_record is not None:
                         # MCP drift on a live session: resume_session restarts
                         # the transport when the server list differs and
                         # reloads the session via session/resume→load, so the
                         # new MCP set applies without losing history. On
-                        # failure the except path below rehydrates as usual.
-                        self.runtime.call_engine_unlocked(
-                            self.runtime.engine.resume_session,
-                            old_record.session_id,
-                            cwd=self.runtime._chat_dir(chat_id),
-                            model=use_model,
-                            mcp_servers=self.runtime._mcp_skills._active_mcp_servers(
-                                chat_id
-                            ),
-                            timeout=self.runtime.config.engine.acp_resume_timeout,
-                        )
+                        # failure the session is unreachable — fall through to
+                        # rehydrate without re-attempting resume.
+                        try:
+                            resumed_id = self.runtime.call_engine_unlocked(
+                                self.runtime.engine.resume_session,
+                                old_record.session_id,
+                                cwd=self.runtime._chat_dir(chat_id),
+                                model=use_model,
+                                mcp_servers=self.runtime._mcp_skills._active_mcp_servers(
+                                    chat_id
+                                ),
+                                timeout=self.runtime.config.engine.acp_resume_timeout,
+                            )
+                        except (RuntimeError, TimeoutError) as exc:
+                            resync_failed = True
+                            logger.warning(
+                                "ACP session resync failed for %s: %s", chat_id, exc
+                            )
+                            if self.runtime.lifecycle_log is not None:
+                                self.runtime.lifecycle_log.write(
+                                    "session.resync.failure",
+                                    chat_id=chat_id,
+                                    session_id=old_record.session_id,
+                                    detail={"error": str(exc)},
+                                )
+                            if self.runtime.engine.is_transport_error(exc):
+                                # A resync timeout is our own budget expiring —
+                                # treat it as "session unusable" (stale-class)
+                                # rather than poisoning a healthy transport.
+                                raise AcpSessionStaleError(
+                                    "session/resume",
+                                    {
+                                        "message": (
+                                            f"session resync failed for {chat_id}: {exc}"
+                                        )
+                                    },
+                                ) from exc
+                            raise
                         if self.runtime.lifecycle_log is not None:
                             self.runtime.lifecycle_log.write(
                                 "session.resync",
@@ -148,7 +183,9 @@ class TurnPipeline(TurnComponent):
                     result = self.runtime.call_engine_unlocked(
                         self.runtime.engine.prompt,
                         call_ctx.request,
-                        session_id=call_ctx.session_id or old_record.session_id,
+                        session_id=call_ctx.session_id
+                        or resumed_id
+                        or old_record.session_id,
                         on_chunk=call_ctx.on_chunk,
                         on_update=call_ctx.on_update,
                     )
@@ -209,6 +246,7 @@ class TurnPipeline(TurnComponent):
                 on_update=stream.on_update,
                 restart_first=restart_first,
                 log_prefix=log_prefix,
+                allow_resume=allow_resume and not resync_failed,
                 **rehydrate_kwargs,
             )
             if isinstance(ret, ChatResult):
@@ -240,6 +278,11 @@ class TurnPipeline(TurnComponent):
                 on_update=stream.on_update,
                 restart_first=False,
                 log_prefix="ACP empty-reply rehydration",
+                # Only the still-active session may be resumed — a prior
+                # rehydrate that produced a new session means old_record's
+                # session was already superseded.
+                allow_resume=allow_resume
+                and session_id == (old_record.session_id if old_record else None),
                 **rehydrate_kwargs,
             )
             if isinstance(ret, ChatResult):
@@ -344,6 +387,12 @@ class TurnPipeline(TurnComponent):
                 record.pending_turn_number = turn_number
                 record.enabled_mcp_servers = mcp_names
                 record.enabled_skills = sorted(skill_names)
+                if old_record is not None:
+                    # Per-chat config survives implicit session boundaries —
+                    # otherwise the next turn's default union re-adds a
+                    # disabled MCP and plugin toggles silently reset.
+                    record.disabled_mcp_servers = old_record.disabled_mcp_servers
+                    record.plugin_overrides = old_record.plugin_overrides
                 self.runtime._chat_state(chat_id).sessions[record.session_number] = record
             else:
                 record = old_record

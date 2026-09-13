@@ -160,6 +160,13 @@ class TurnDispatch(TurnPipeline):
             is_new = False
             old_record = record
             session_number = record.session_number
+            # A timeout-flagged session is likely wedged — skip the resync
+            # resume and let the prompt fail into normal rehydration.
+            session_resync = (
+                self.runtime._mcp_skills._mcp_record_drifted(chat_id, record)
+                and self.runtime.config.engine.acp_resume_enabled
+                and record.last_stop_reason != "timeout"
+            )
 
             # Reserve a turn number up front and persist it.
             previous_updated_at = record.updated_at if record.turn_number > 0 else 0.0
@@ -178,6 +185,7 @@ class TurnDispatch(TurnPipeline):
                 old_record=old_record,
                 is_new=is_new,
                 force_new_session=False,
+                session_resync=session_resync,
                 active=active,
                 stream=stream,
                 memory_flags=memory_flags,
