@@ -645,9 +645,7 @@ def test_timer_pending_lists_and_filters(client: TestClient) -> None:
     assert {e["reason"] for e in events} == {"self_wake", "other"}
     assert all("payload" not in e for e in events)
 
-    resp = client.get(
-        "/timer/pending", params={"chat_id": "chat-1", "reason": "self_wake"}
-    )
+    resp = client.get("/timer/pending", params={"chat_id": "chat-1", "reason": "self_wake"})
     events = resp.json()["events"]
     assert len(events) == 1
     assert events[0]["reason"] == "self_wake"
@@ -669,20 +667,14 @@ def test_timer_cancel(client: TestClient) -> None:
     event_id = resp.json()["event_id"]
 
     # Wrong chat cannot retract it.
-    resp = client.post(
-        "/timer/cancel", json={"chat_id": "chat-2", "event_id": event_id}
-    )
+    resp = client.post("/timer/cancel", json={"chat_id": "chat-2", "event_id": event_id})
     assert resp.status_code == 404
 
-    resp = client.post(
-        "/timer/cancel", json={"chat_id": "chat-1", "event_id": event_id}
-    )
+    resp = client.post("/timer/cancel", json={"chat_id": "chat-1", "event_id": event_id})
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
 
-    resp = client.post(
-        "/timer/cancel", json={"chat_id": "chat-1", "event_id": event_id}
-    )
+    resp = client.post("/timer/cancel", json={"chat_id": "chat-1", "event_id": event_id})
     assert resp.status_code == 404
 
 
