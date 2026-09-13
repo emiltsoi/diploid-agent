@@ -826,7 +826,7 @@ def test_summarize_mirrors_to_file_backend(tmp_path: Path, monkeypatch) -> None:
     assert any("We agreed on Postgres." in line for line in spool_lines)
 
 
-class _RecordingBackend:
+class _RecordingBackend(MemoryBackend):
     """Minimal backend stub that records retained items."""
 
     def __init__(self) -> None:

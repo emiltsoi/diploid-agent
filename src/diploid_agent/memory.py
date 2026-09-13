@@ -286,9 +286,10 @@ class MemoryManager:
         transcript is appended so recent context is always visible. The
         `truncated` flag is set if the long-term recall had to be trimmed.
 
-        Set `include_short_term=False` to get the long-term recall slice only,
-        which is useful when the caller already provides a compact short-term
-        summary and wants to keep the two under separate headings.
+        Set `include_short_term=False` to get the long-term recall slice only —
+        e.g. when the caller already provides a compact short-term summary, or
+        when the ACP session was resumed and the child still holds the
+        transcript (re-injecting it would duplicate context).
         """
         short = self._short_term_context(model) if include_short_term else ""
         cap = self.memory_config.max_chat_memory_chars

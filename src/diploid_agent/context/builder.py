@@ -984,6 +984,10 @@ class ContextBuilder:
         body, wake, mesh, self_narrative) are forced into the prompt. When the
         window is very full, the full soul (persona memory, chat memory, recall)
         is re-injected and a fresh ACP session is requested for the next turn.
+
+        When ``rehydration_reason`` is ``RESUMED`` the ACP child kept its
+        transcript, so full recall asks for the long-term slice only
+        (``include_short_term=False``) rather than duplicating the tail.
         """
         formatted = self.format_user_message(
             user_message,

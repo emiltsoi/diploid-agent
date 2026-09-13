@@ -133,10 +133,7 @@ class TurnRehydrate(TurnComponent):
         resumed_id: str | None = None
         can_resume = self.controller.session._can_resume_record(chat_id, old_record, use_model)
         if self.runtime.config.engine.acp_resume_enabled and can_resume:
-            if old_record is None:
-                raise RuntimeError(
-                    f"_can_resume_record returned true but old_record is None for chat {chat_id}"
-                )
+            assert old_record is not None  # can_resume implies a record with session_id
             self.runtime._restore_plugin_states(chat_id)
             # After a transport restart the old session is likely gone from the
             # fresh child; give session/load a short budget instead of stalling
@@ -216,7 +213,8 @@ class TurnRehydrate(TurnComponent):
         # A live session can be reused without running prompt rehydration —
         # but only when the record passed consistency checks; a session that
         # failed them (e.g. skills drift, prior timeout) must not be revived.
-        if can_resume and not resumed_id and old_record is not None and old_record.session_id:
+        # can_resume implies old_record carries a session_id.
+        if can_resume and not resumed_id:
             try:
                 logger.warning(
                     "%s; probing ACP session %s for %s",
