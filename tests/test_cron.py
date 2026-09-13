@@ -216,30 +216,21 @@ def test_fast_cron_expression_dropped(tmp_path: Path) -> None:
 
 
 def test_persona_file_gated_by_toggle(tmp_path: Path) -> None:
-    config = _make_config(
-        tmp_path, cron_enabled=False, persona_crons={"jobs": [_script_job()]}
-    )
+    config = _make_config(tmp_path, cron_enabled=False, persona_crons={"jobs": [_script_job()]})
     svc = _make_service(config, tmp_path)
     assert svc._jobs == {}
     assert any("cron_enabled" in w for w in svc._warnings)
 
 
 def test_global_file_ungated(tmp_path: Path) -> None:
-    config = _make_config(
-        tmp_path, cron_enabled=False, global_crons={"jobs": [_script_job()]}
-    )
+    config = _make_config(tmp_path, cron_enabled=False, global_crons={"jobs": [_script_job()]})
     svc = _make_service(config, tmp_path)
     assert "tidy" in svc._jobs
 
 
 def test_per_persona_job_cap(tmp_path: Path) -> None:
-    jobs = [
-        _script_job(id=f"job-{i}", schedule={"every_seconds": 10 + i})
-        for i in range(5)
-    ]
-    config = _make_config(
-        tmp_path, max_jobs_per_persona=2, persona_crons={"jobs": jobs}
-    )
+    jobs = [_script_job(id=f"job-{i}", schedule={"every_seconds": 10 + i}) for i in range(5)]
+    config = _make_config(tmp_path, max_jobs_per_persona=2, persona_crons={"jobs": jobs})
     svc = _make_service(config, tmp_path)
     assert len(svc._jobs) == 2
     assert any("cap" in w for w in svc._warnings)
@@ -360,9 +351,7 @@ def test_consecutive_failures_auto_disable(tmp_path: Path) -> None:
                 payload={"plan_id": plan.id, "task_id": task.id},
             )
         )
-        svc._on_event(
-            Event(type="task.failed", payload={"plan_id": plan.id, "task_id": task.id})
-        )
+        svc._on_event(Event(type="task.failed", payload={"plan_id": plan.id, "task_id": task.id}))
         state = svc._state.get("tidy")
 
     assert state.disabled is True

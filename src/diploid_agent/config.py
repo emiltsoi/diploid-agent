@@ -443,9 +443,7 @@ class CronScheduleSpec(BaseModel):
             if getattr(self, name) is not None
         ]
         if len(set_fields) != 1:
-            raise ValueError(
-                "schedule requires exactly one of cron / every_seconds / at_daily"
-            )
+            raise ValueError("schedule requires exactly one of cron / every_seconds / at_daily")
         return self
 
 

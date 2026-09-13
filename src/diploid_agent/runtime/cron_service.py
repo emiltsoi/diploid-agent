@@ -112,9 +112,7 @@ class CronService:
         cron_cfg = self._config.harness.cron
         watches: list[_CronFileWatch] = []
         if cron_cfg.global_file is not None:
-            watches.append(
-                _CronFileWatch(path=cron_cfg.global_file, label="global")
-            )
+            watches.append(_CronFileWatch(path=cron_cfg.global_file, label="global"))
         persona = self._config.persona
         if persona is not None:
             watches.append(
@@ -195,9 +193,7 @@ class CronService:
                 warnings.append(watch.error)
             if watch.label == "persona" and not persona_permitted:
                 if watch.jobs:
-                    warnings.append(
-                        f"{watch.path}: ignored — authorship cron_enabled is off"
-                    )
+                    warnings.append(f"{watch.path}: ignored — authorship cron_enabled is off")
                 continue
             cap = (
                 cron_cfg.max_jobs_global
@@ -257,16 +253,12 @@ class CronService:
         # Resolve persona for llm calls and cwd defaults.
         persona = self._resolve_persona(spec.call.persona)
         if spec.call.type == "llm" and persona is None:
-            warnings.append(
-                f"job {spec.id}: persona {spec.call.persona!r} not found — dropped"
-            )
+            warnings.append(f"job {spec.id}: persona {spec.call.persona!r} not found — dropped")
             return None
         persona_dir = persona.profile_root if persona is not None else None
         chat_id = spec.chat_id or self._config.harness.mesh.fallback_chat_id
         if not chat_id:
-            warnings.append(
-                f"job {spec.id}: no chat_id and no mesh fallback configured — dropped"
-            )
+            warnings.append(f"job {spec.id}: no chat_id and no mesh fallback configured — dropped")
             return None
         return _ResolvedJob(
             spec=spec,
@@ -394,9 +386,7 @@ class CronService:
         for state in self._state.all().values():
             if state.running_task_id is None:
                 continue
-            task = self._plan_manager.get_task(
-                state.running_plan_id or "", state.running_task_id
-            )
+            task = self._plan_manager.get_task(state.running_plan_id or "", state.running_task_id)
             if task is None:
                 state.running_task_id = None
                 state.running_plan_id = None
@@ -423,16 +413,12 @@ class CronService:
                     datetime.fromtimestamp(base).astimezone(),
                 ).get_next(float)
             lt = time.localtime(base)
-            candidate = time.mktime(
-                (lt.tm_year, lt.tm_mon, lt.tm_mday, hour, minute, 0, 0, 0, -1)
-            )
+            candidate = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, hour, minute, 0, 0, 0, -1))
             if candidate <= base:
                 candidate += 86400.0
             return candidate
         if sched.cron is not None and croniter is not None:
-            return croniter(
-                sched.cron, datetime.fromtimestamp(base).astimezone()
-            ).get_next(float)
+            return croniter(sched.cron, datetime.fromtimestamp(base).astimezone()).get_next(float)
         return base + 86400.0  # unreachable: validators require one field
 
     def _cron_plan_id(self, chat_id: str) -> str:
@@ -466,8 +452,7 @@ class CronService:
         task = Task(
             name=f"cron:{spec.id}",
             description=(
-                f"cron job {spec.id} ({resolved.source_label}"
-                f"{', catchup' if catchup else ''})"
+                f"cron job {spec.id} ({resolved.source_label}{', catchup' if catchup else ''})"
             ),
             chat_id=resolved.chat_id,
             cwd=cwd,
@@ -501,9 +486,7 @@ class CronService:
             self._task_engine.start_task(plan_id, added.id)
         except Exception as exc:  # noqa: BLE001 — leave no orphaned READY task
             logger.warning("Cron job %s failed to start: %s", spec.id, exc)
-            self._plan_manager.fail_task(
-                plan_id, added.id, log=f"cron could not start: {exc}"
-            )
+            self._plan_manager.fail_task(plan_id, added.id, log=f"cron could not start: {exc}")
             state.running_task_id = None
             state.running_plan_id = None
             state.last_status = "failed"
@@ -562,11 +545,7 @@ class CronService:
                 state.consecutive_failures = 0
             else:
                 state.consecutive_failures += 1
-                max_failures = (
-                    resolved.spec.max_consecutive_failures
-                    if resolved is not None
-                    else 3
-                )
+                max_failures = resolved.spec.max_consecutive_failures if resolved is not None else 3
                 if state.consecutive_failures >= max_failures:
                     state.disabled = True
                     state.last_status = "disabled"

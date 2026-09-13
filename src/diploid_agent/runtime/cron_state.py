@@ -68,9 +68,7 @@ class CronStateStore:
 
     def _save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        lines = [
-            state.model_dump_json() + "\n" for state in self._in_memory.values()
-        ]
+        lines = [state.model_dump_json() + "\n" for state in self._in_memory.values()]
         tmp = self._path.with_suffix(self._path.suffix + ".new")
         tmp.write_text("".join(lines))
         tmp.replace(self._path)
