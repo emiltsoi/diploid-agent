@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.5 — 2026-09-14
+## 0.6.6 — 2026-09-14
 
 ### Added
 
@@ -18,6 +18,11 @@
   behavior, and `attachments_dirname` renames the subfolder. Because the
   inbox sits inside the session dir, a `session:` cron `file` trigger can
   watch it.
+
+## 0.6.5 — 2026-09-14
+
+### Added
+
 - Cron Wave C: `trigger:` jobs — event-driven siblings of `schedule:` on
   the same registry. `trigger.type: file` watches a path's mtime (first
   sight adopts without firing; a change inside `cooldown_seconds` stays
