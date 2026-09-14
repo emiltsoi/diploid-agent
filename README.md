@@ -33,6 +33,15 @@ retention to a Hindsight memory server.
   saved path so the agent can `read` the file like any workspace file;
   `harness.telegram.attachments_*` controls enablement, byte cap, and folder
   name, and a `session:` cron `file` trigger can watch the inbox.
+- Transcribes voice/audio/video-note attachments at ingest (`stt_provider`:
+  `none`, `faster-whisper`, or an external `command`), appending a
+  `[transcript:]` annotation alongside the saved file.
+- Speaks replies: a fenced ` ```say ` block is synthesized via `tts_provider`
+  (`piper` or `command`) and sent as a Telegram voice note, falling back to a
+  `[say] ...` text line when TTS is off or fails.
+- Sends files back: a fenced ` ```file ` block uploads a workspace-confined
+  file via `sendPhoto`/`sendAnimation`/`sendVideo`/`sendDocument`, with an
+  optional caption and a `[file] ...` text fallback.
 - Supports background dispatches that continue the conversation when they complete (`POST /dispatch`, `/continue`) and harness-native background subagents (`/subagent`, `harness_subagent` MCP tool) that survive the parent turn being stopped.
 - Supports live runtime configuration of task, waker, timer, notifications, and Telegram settings via HTTP and Telegram without restarting.
 - Supports state plugins with a rich lifecycle hook surface: plugins can intercept turns, sessions, dispatches, memory transitions, skill/MCP commands, retain/promote, and shutdown.

@@ -9,7 +9,7 @@ This is the wiki for the `diploid-agent`.
 3. [State plugins](state.md) — pluggable per-chat state, lifecycle hooks, and custom plugins.
 4. [Model switching](model-switching.md) — why sessions reset and how context is kept.
 5. [Session management](session-management.md) — multi-session, resume, branch, and pruning.
-6. [Telegram integration](telegram.md) — bot setup and commands.
+6. [Telegram integration](telegram.md) — bot setup, commands, attachments, and voice (STT/TTS).
 7. [HTTP API](api.md) — endpoint reference.
 8. [systemd service](systemd.md) — running as a daemon.
 9. [Security](security.md) — tokens, secrets, and repository hygiene.
@@ -29,7 +29,9 @@ continuity.
 Highlights:
 
 - Telegram bot and FastAPI HTTP ingress, with a `ChatResult` outbox, global
-  `DeliveryWorker`, liveness heartbeat, and restart notice.
+  `DeliveryWorker`, liveness heartbeat, and restart notice. Media flows both
+  ways: inbound attachments land in the chat workspace (with optional
+  transcription), and `say`/`file` blocks send voice notes and files back.
 - ACP session continuity: `session/resume`/`session/load` recovery, in-place or
   fresh-session model switching, interrupted-turn anchoring, monotonic turn
   numbering, and a per-harness lifecycle audit log.
