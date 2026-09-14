@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.6 — 2026-09-14
+## 0.6.7 — 2026-09-15
 
 ### Added
 
@@ -31,6 +31,11 @@
   `[transcript unavailable]` and keep the file. Also fixes the standalone
   poller entrypoint never threading the `attachments_*` fields through
   `TelegramPoller`'s kwargs — they were unreachable from YAML.
+
+## 0.6.6 — 2026-09-14
+
+### Added
+
 - Telegram attachments: messages carrying a photo, document, voice, video,
   video note, sticker, or animation are now downloaded on the turn worker via
   `getFile` + the file endpoint into the chat's ACP workspace at
