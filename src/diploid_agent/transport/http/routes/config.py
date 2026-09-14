@@ -16,6 +16,7 @@ from diploid_agent.config import (
     WakerConfig,
 )
 from diploid_agent.models import WakeEvent
+from diploid_agent.runtime.wake_queue import WAKE_BUDGET_REASON_PREFIXES
 from diploid_agent.transport.base import RuntimeAPI
 from diploid_agent.transport.command_handler import CommandHandler
 from diploid_agent.transport.http.models import *
@@ -236,7 +237,7 @@ def register_config(
             self_wakes = [
                 e
                 for e in runtime.wake_queue.pending(chat_id=req.chat_id)
-                if e.reason.startswith(SELF_WAKE_REASON)
+                if e.reason.startswith(WAKE_BUDGET_REASON_PREFIXES)
             ]
             if len(self_wakes) >= timer_cfg.self_wake_max_pending:
                 raise HTTPException(

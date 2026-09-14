@@ -4,6 +4,22 @@
 
 ### Added
 
+- Cron Wave B: `delivery: turn` now validates and enqueues a wake
+  (`reason=cron:<id>`, `payload.user_message` = status + summary) that opens
+  a real turn on the owning chat. Turn deliveries share the self-wake
+  budgets — a full pending queue or an exhausted
+  `harness.cron.turn_delivery_max_per_day` degrades to file delivery
+  (`delivery_result: turn_suppressed: <why>` in `.last`); a recent arm only
+  defers the wake. `POST /cron/<id>/run` fires a job immediately (API-key
+  door; ignores `enabled`/auto-`disabled`, a successful manual run
+  re-enables, `409` while in flight, schedule not consumed).
+  `harness_cron_list` (diploid-plugins `diploid-harness` MCP tool) renders
+  `GET /cron` for the agent; there is deliberately no agent-facing run tool.
+  Hot-edit rules: a run belongs to the spec that fired it (`fired_spec` /
+  `fired_chat_id` persisted at materialize, restart-proof through
+  `_reconcile_running`); a schedule edit reseeds the next fire — on the
+  reload tick for idle jobs, at finalize for in-flight runs; a job deleted
+  mid-run still delivers under its firing spec, then its state row drops.
 - Agent-initiated restart governance: the ACP control-socket restart channel
   (and the new `harness_restart` `diploid-harness` MCP tool) now converge on a
   policy gate in `RuntimeRestart._on_service_restart` — the authorship

@@ -34,7 +34,7 @@ jobs:
       command: "scripts/x.sh"  # script only
       cwd: "~"                 # default: persona dir
       timeout_seconds: 300
-    delivery: silent           # silent | digest (turn arrives in Wave B)
+    delivery: silent           # silent | digest | turn
     chat_id: "7945905361"      # owning chat; defaults to mesh fallback
     overlap: skip              # skip | queue
     catchup: once              # once | skip — fire once on boot if missed
@@ -74,7 +74,32 @@ job always surfaces — silence must not hide a broken job.
   `diploid_plugins.cron` plugin, `prompt_slot="cron"`) renders bounded
   last-run lines: `job … ok 2h ago — summary`. Parse/budget warnings land
   in `cron/service.last` and render as `! service:` lines.
-- **`turn`** — reserved for Wave B; rejected at validation today.
+- **`turn`** — files plus a wake (`reason=cron:<id>`,
+  `payload.user_message` = status + summary) through the normal wake path:
+  the result opens a real turn and the agent responds with judgment.
+  Turn deliveries share the self-wake budgets (`self_wake_max_pending`,
+  `self_wake_min_interval_seconds`): a full pending queue or an exhausted
+  `turn_delivery_max_per_day` cap degrades the delivery to the files —
+  `delivery_result` in `.last` records `turn_suppressed: <why>` — while a
+  recent arm merely defers the wake (`turn_deferred: <n>s`). The `.last`
+  payload's `delivery_result` field records the outcome for every mode.
+
+## Hot edits
+
+Files reload on mtime mid-run, so the service defines who owns a run:
+
+- **A run belongs to the spec that fired it.** The firing spec and chat are
+  persisted on the state row at materialize time (`fired_spec`,
+  `fired_chat_id`), so a delivery, prompt, or chat edit mid-run does not
+  reroute a result that is already in flight — and the rule survives a
+  restart through `_reconcile_running`.
+- **A schedule edit reseeds the next fire.** Idle jobs reseed on the
+  reload tick; a job edited while running reseeds from the new spec at
+  finalize (the in-flight slot is left alone).
+- **A deleted job still lands its result** under the firing spec, then its
+  state row is dropped. A queued re-fire (`overlap: queue`) is not owed to
+  a deleted job.
+- `enabled: false` edits stop future fires; the in-flight run completes.
 
 ## Scheduling semantics
 
@@ -105,7 +130,7 @@ job always surfaces — silence must not hide a broken job.
 | `min_interval_seconds` | `300` | minimum fire interval per job |
 | `max_llm_timeout_seconds` | `600` | phantom turn cap |
 | `max_script_timeout_seconds` | `300` | script job validation ceiling |
-| `turn_delivery_max_per_day` | `4` | Wave B budget (reserved) |
+| `turn_delivery_max_per_day` | `4` | daily cap on turn deliveries |
 | `digest_max_jobs` | `8` | lines the digest slot renders |
 
 Persona-authored files only load while the persona's authorship
@@ -115,4 +140,15 @@ Persona-authored files only load while the persona's authorship
 
 `GET /cron` returns the merged job list plus per-job state
 (`next_due_at`, `last_status`, `consecutive_failures`, `running`,
-`auto_disabled`) and the current reload warnings.
+`auto_disabled`, `turns_today`) and the current reload warnings.
+
+`POST /cron/<id>/run` fires a job immediately — the operator door for
+testing and recovery. It requires the API key like every mutating route,
+ignores `enabled` and auto-`disabled` (a successful manual run re-enables
+the job), refuses with `409` while a run is in flight, and does not
+consume the schedule — `next_due_at` is left untouched.
+
+The `harness_cron_list` `diploid-harness` MCP tool renders `GET /cron`
+for the agent: job ids, schedules, next due, last status, `running`, and
+`turns_today`. Manual firing stays operator-only — there is deliberately
+no `harness_cron_run` tool.

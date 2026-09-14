@@ -488,13 +488,6 @@ class CronJobSpec(BaseModel):
             raise ValueError("job id must be a slug: [a-z0-9][a-z0-9_-]*")
         return v
 
-    @field_validator("delivery")
-    @classmethod
-    def _no_turn_yet(cls, v: str) -> str:
-        if v == "turn":
-            raise ValueError("delivery 'turn' is not supported until Wave B")
-        return v
-
 
 class CronFileSpec(BaseModel):
     """Parsed contents of one crons.yaml file."""

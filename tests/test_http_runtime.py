@@ -22,7 +22,7 @@ from diploid_agent.config import (
     TimerConfig,
     WakerConfig,
 )
-from diploid_agent.models import ChatResult
+from diploid_agent.models import ChatResult, WakeEvent
 from diploid_agent.runtime.agent_runtime import AgentRuntime
 from diploid_agent.transport.http import create_app
 
@@ -614,6 +614,38 @@ def test_timer_self_wake_horizon(tmp_path: Path) -> None:
     )
     assert resp.status_code == 422
     assert "too far out" in resp.json()["detail"]
+
+
+def test_timer_cron_wakes_share_self_wake_budget(tmp_path: Path) -> None:
+    """A pending cron turn-delivery occupies the same pool a self-wake arm
+    draws on — one accounting number in both directions."""
+    client, runtime = _budgeted_client(
+        tmp_path,
+        self_wake_min_interval_seconds=0.0,
+        self_wake_max_pending=1,
+    )
+    runtime.wake_queue.enqueue(
+        WakeEvent(
+            id="",
+            chat_id="chat-1",
+            reason="cron:tidy",
+            priority=1,
+            scheduled_at=time.time(),
+            payload={},
+            created_at=time.time(),
+            ready=True,
+        )
+    )
+    resp = client.post(
+        "/timer",
+        json={
+            "chat_id": "chat-1",
+            "reason": "self_wake",
+            "scheduled_at": time.time() + 3600,
+        },
+    )
+    assert resp.status_code == 429
+    assert "budget" in resp.json()["detail"]
 
 
 def test_timer_non_self_wake_reasons_are_not_gated(client: TestClient) -> None:

@@ -24,11 +24,13 @@ from diploid_agent.config import (
     Secrets,
     TaskConfig,
 )
+from diploid_agent.models import WakeEvent
 from diploid_agent.plan.manager import PlanManager
 from diploid_agent.plan.models import TaskStatus
 from diploid_agent.runtime.cron_service import CronService
 from diploid_agent.runtime.cron_state import CronStateStore
 from diploid_agent.runtime.event_bus import Event, EventBus
+from diploid_agent.runtime.wake_queue import WakeQueue
 from diploid_agent.task.engine import TaskEngine
 from diploid_agent.transport.http import create_app
 
@@ -115,6 +117,7 @@ def _make_service(config: Config, tmp_path: Path) -> CronService:
         task_engine=engine,
         event_bus=bus,
         sessions_root=config.harness.sessions_root,
+        wake_queue=WakeQueue(tmp_path / "wake_queue.jsonl"),
     )
 
 
@@ -154,14 +157,14 @@ def test_call_required_fields() -> None:
         CronCallSpec(type="llm")
 
 
-def test_turn_delivery_rejected() -> None:
-    with pytest.raises(ValueError, match="Wave B"):
-        CronJobSpec(
-            id="job",
-            schedule={"every_seconds": 60},
-            call={"type": "script", "command": "true"},
-            delivery="turn",
-        )
+def test_turn_delivery_accepted() -> None:
+    spec = CronJobSpec(
+        id="job",
+        schedule={"every_seconds": 60},
+        call={"type": "script", "command": "true"},
+        delivery="turn",
+    )
+    assert spec.delivery == "turn"
 
 
 def test_job_id_must_be_slug() -> None:
@@ -571,3 +574,259 @@ def test_catchup_task_description_tagged(tmp_path: Path) -> None:
     assert state.last_task_id is not None
     task = svc._plan_manager.get_task(state.running_plan_id or "", state.last_task_id)
     assert task is not None and "catchup" in task.description
+
+
+# ------------------------------------------------------------------ Wave B
+
+
+def _run_to_done(svc: CronService, job_id: str = "tidy"):
+    """Force-fire a job and route its task completion through the cron handler."""
+    svc._tick()
+    state = svc._state.get(job_id)
+    state.next_due_at = time.time() - 1
+    svc._state.update(state)
+    svc._tick()
+    state = svc._state.get(job_id)
+    assert state.running_task_id is not None
+    deadline = time.time() + 5
+    task = None
+    while time.time() < deadline:
+        task = svc._plan_manager.get_task(state.running_plan_id, state.running_task_id)
+        if task.status in (TaskStatus.DONE, TaskStatus.FAILED):
+            break
+        time.sleep(0.05)
+    assert task is not None and task.status == TaskStatus.DONE
+    svc._on_event(
+        Event(
+            type="task.completed",
+            payload={"plan_id": state.running_plan_id, "task_id": task.id},
+        )
+    )
+    return task
+
+
+def _last_file(tmp_path: Path, job_id: str = "tidy") -> dict:
+    return json.loads((tmp_path / "sessions" / "chat-1" / "cron" / f"{job_id}.last").read_text())
+
+
+def test_turn_delivery_enqueues_wake(tmp_path: Path) -> None:
+    config = _make_config(tmp_path, persona_crons={"jobs": [_script_job(delivery="turn")]})
+    svc = _make_service(config, tmp_path)
+    _run_to_done(svc)
+    events = [e for e in svc._wake_queue.pending(chat_id="chat-1") if e.reason == "cron:tidy"]
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.silent is False
+    assert ev.payload["notify"] is True
+    assert "[cron: tidy finished — ok]" in ev.payload["user_message"]
+    data = _last_file(tmp_path)
+    assert data["delivery_result"] == "turn"
+    assert svc._state.get("tidy").turn_count == 1
+
+
+def test_turn_delivery_pending_cap_degrades(tmp_path: Path) -> None:
+    config = _make_config(tmp_path, persona_crons={"jobs": [_script_job(delivery="turn")]})
+    svc = _make_service(config, tmp_path)
+    max_pending = config.harness.timer.self_wake_max_pending
+    for _ in range(max_pending):
+        svc._wake_queue.enqueue(
+            WakeEvent(
+                id="",
+                chat_id="chat-1",
+                reason="self_wake",
+                priority=1,
+                scheduled_at=time.time(),
+                payload={},
+                created_at=time.time() - 3600,
+                ready=True,
+            )
+        )
+    _run_to_done(svc)
+    events = [e for e in svc._wake_queue.pending(chat_id="chat-1") if e.reason == "cron:tidy"]
+    assert not events
+    assert _last_file(tmp_path)["delivery_result"].startswith("turn_suppressed")
+
+
+def test_turn_delivery_min_interval_defers(tmp_path: Path) -> None:
+    config = _make_config(tmp_path, persona_crons={"jobs": [_script_job(delivery="turn")]})
+    svc = _make_service(config, tmp_path)
+    svc._wake_queue.enqueue(
+        WakeEvent(
+            id="",
+            chat_id="chat-1",
+            reason="self_wake",
+            priority=1,
+            scheduled_at=time.time(),
+            payload={},
+            created_at=time.time(),
+            ready=True,
+        )
+    )
+    _run_to_done(svc)
+    events = [e for e in svc._wake_queue.pending(chat_id="chat-1") if e.reason == "cron:tidy"]
+    assert len(events) == 1
+    min_interval = config.harness.timer.self_wake_min_interval_seconds
+    assert events[0].scheduled_at > time.time() + min_interval - 30
+    assert _last_file(tmp_path)["delivery_result"].startswith("turn_deferred")
+
+
+def test_turn_delivery_daily_cap(tmp_path: Path) -> None:
+    config = _make_config(
+        tmp_path,
+        persona_crons={"jobs": [_script_job(delivery="turn")]},
+        turn_delivery_max_per_day=1,
+    )
+    svc = _make_service(config, tmp_path)
+    _run_to_done(svc)
+    _run_to_done(svc)
+    events = [e for e in svc._wake_queue.pending(chat_id="chat-1") if e.reason == "cron:tidy"]
+    assert len(events) == 1
+    assert _last_file(tmp_path)["delivery_result"] == "turn_suppressed: daily cap reached"
+
+
+def test_run_now_fires_and_keeps_schedule(tmp_path: Path) -> None:
+    config = _make_config(
+        tmp_path,
+        persona_crons={"jobs": [_script_job(schedule={"every_seconds": 3600})]},
+    )
+    svc = _make_service(config, tmp_path)
+    svc._tick()
+    due_before = svc._state.get("tidy").next_due_at
+    out = svc.run_now("tidy")
+    assert out["status"] == "started"
+    state = svc._state.get("tidy")
+    assert state.running_task_id is not None
+    assert state.next_due_at == due_before  # schedule not consumed
+    with pytest.raises(RuntimeError, match="already running"):
+        svc.run_now("tidy")
+    with pytest.raises(KeyError):
+        svc.run_now("ghost")
+
+
+def test_manual_run_success_reenables(tmp_path: Path) -> None:
+    config = _make_config(tmp_path, persona_crons={"jobs": [_script_job()]})
+    svc = _make_service(config, tmp_path)
+    state = svc._state.ensure("tidy")
+    state.disabled = True
+    state.consecutive_failures = 3
+    svc._state.update(state)
+    svc._tick()
+    assert svc._state.get("tidy").running_task_id is None  # disabled: no fire
+    assert svc.run_now("tidy")["status"] == "started"
+    state = svc._state.get("tidy")
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        task = svc._plan_manager.get_task(state.running_plan_id, state.running_task_id)
+        if task.status in (TaskStatus.DONE, TaskStatus.FAILED):
+            break
+        time.sleep(0.05)
+    svc._on_event(
+        Event(
+            type="task.completed",
+            payload={"plan_id": state.running_plan_id, "task_id": state.running_task_id},
+        )
+    )
+    state = svc._state.get("tidy")
+    assert state.disabled is False
+    assert state.consecutive_failures == 0
+
+
+def test_run_now_route(tmp_path: Path) -> None:
+    job = _script_job(call={"type": "script", "command": "sleep 2"})
+    config = _make_config(tmp_path, persona_crons={"jobs": [job]})
+    from diploid_agent.runtime.agent_runtime import AgentRuntime
+
+    runtime = AgentRuntime(config)
+    with TestClient(create_app(config, runtime)) as client:
+        assert client.post("/cron/ghost/run").status_code == 404
+        resp = client.post("/cron/tidy/run")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["job_id"] == "tidy" and body["status"] == "started"
+        # The in-flight run is a conflict.
+        assert client.post("/cron/tidy/run").status_code == 409
+
+
+def test_hot_edit_schedule_reseeds_on_finalize(tmp_path: Path) -> None:
+    crons = tmp_path / "persona" / "crons.yaml"
+    job = _script_job(
+        schedule={"every_seconds": 60},
+        call={"type": "script", "command": "sleep 2"},
+    )
+    config = _make_config(tmp_path, persona_crons={"jobs": [job]})
+    svc = _make_service(config, tmp_path)
+    svc._tick()
+    state = svc._state.get("tidy")
+    state.next_due_at = time.time() - 1
+    svc._state.update(state)
+    svc._tick()
+    state = svc._state.get("tidy")
+    assert state.running_task_id is not None
+    # Hot-edit the schedule while the run is in flight.
+    crons.write_text(yaml.safe_dump({"jobs": [_script_job(schedule={"every_seconds": 3600})]}))
+    svc._tick()  # reload: drift seen, in-flight slot kept
+    state = svc._state.get("tidy")
+    assert state.running_task_id is not None
+    # Finish and finalize — the new schedule owns the next fire.
+    deadline = time.time() + 5
+    task = None
+    while time.time() < deadline:
+        task = svc._plan_manager.get_task(state.running_plan_id, state.running_task_id)
+        if task.status in (TaskStatus.DONE, TaskStatus.FAILED):
+            break
+        time.sleep(0.05)
+    svc._on_event(
+        Event(
+            type="task.completed",
+            payload={"plan_id": state.running_plan_id, "task_id": task.id},
+        )
+    )
+    state = svc._state.get("tidy")
+    assert state.next_due_at > time.time() + 3000
+
+
+def test_hot_edit_idle_job_reseeds_next_due(tmp_path: Path) -> None:
+    crons = tmp_path / "persona" / "crons.yaml"
+    config = _make_config(
+        tmp_path,
+        persona_crons={"jobs": [_script_job(schedule={"every_seconds": 3600})]},
+    )
+    svc = _make_service(config, tmp_path)
+    svc._tick()
+    before = svc._state.get("tidy").next_due_at
+    assert before > time.time() + 3000
+    crons.write_text(yaml.safe_dump({"jobs": [_script_job(schedule={"every_seconds": 60})]}))
+    svc._tick()
+    after = svc._state.get("tidy").next_due_at
+    assert after < before
+    assert after <= time.time() + 60
+
+
+def test_removed_job_midrun_still_delivers(tmp_path: Path) -> None:
+    crons = tmp_path / "persona" / "crons.yaml"
+    job = _script_job(delivery="digest", call={"type": "script", "command": "sleep 2"})
+    config = _make_config(tmp_path, persona_crons={"jobs": [job]})
+    svc = _make_service(config, tmp_path)
+    svc._tick()
+    state = svc._state.get("tidy")
+    state.next_due_at = time.time() - 1
+    svc._state.update(state)
+    svc._tick()
+    state = svc._state.get("tidy")
+    plan_id, task_id = state.running_plan_id, state.running_task_id
+    # Delete the job from the file while the run is in flight.
+    crons.write_text(yaml.safe_dump({"jobs": []}))
+    svc._tick()
+    assert "tidy" not in svc._jobs
+    assert svc._state.get("tidy") is not None  # kept while running
+    deadline = time.time() + 5
+    task = None
+    while time.time() < deadline:
+        task = svc._plan_manager.get_task(plan_id, task_id)
+        if task.status in (TaskStatus.DONE, TaskStatus.FAILED):
+            break
+        time.sleep(0.05)
+    svc._on_event(Event(type="task.completed", payload={"plan_id": plan_id, "task_id": task.id}))
+    # Result files still land under the firing spec; the row is then dropped.
+    assert _last_file(tmp_path)["job_id"] == "tidy"
+    assert svc._state.get("tidy") is None

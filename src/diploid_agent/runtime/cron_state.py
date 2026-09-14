@@ -35,6 +35,11 @@ class CronJobState(BaseModel):
     last_summary: str = ""
     last_task_id: str | None = None  # survives restart for reconciliation
     queued_due: bool = False  # overlap=queue: a due fire is owed
+    schedule_key: str = ""  # schedule spec last seen — drift detection
+    fired_spec: str = ""  # spec json that owns the in-flight run
+    fired_chat_id: str = ""  # owning chat at fire time
+    turn_count: int = 0  # turn deliveries on turn_date (local day)
+    turn_date: str = ""  # YYYY-MM-DD the counter belongs to
     updated_at: float = Field(default_factory=time.time)
 
 
@@ -115,3 +120,8 @@ class CronStateStore:
             for job_id in list(self._in_memory):
                 if job_id not in job_ids and self._in_memory[job_id].running_task_id is None:
                     del self._in_memory[job_id]
+
+    def drop(self, job_id: str) -> None:
+        """Drop one job's state outright (e.g. removed while its run finished)."""
+        with self._transaction():
+            self._in_memory.pop(job_id, None)

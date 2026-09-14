@@ -200,6 +200,7 @@ class AgentRuntime(RuntimeAPI):
             task_engine=self.task_engine,
             event_bus=self.event_bus,
             sessions_root=self.sessions_root,
+            wake_queue=self.wake_queue,
         )
 
         self._outbox = RuntimeOutbox(

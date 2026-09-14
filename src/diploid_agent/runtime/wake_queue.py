@@ -16,6 +16,11 @@ from diploid_agent.models import WakeEvent
 
 logger = logging.getLogger(__name__)
 
+# Reasons whose pending events draw on the shared self-wake budget: agent
+# self-wakes and cron turn deliveries are one accounting pool, so neither
+# can stack armed interrupts on top of the other.
+WAKE_BUDGET_REASON_PREFIXES = ("self_wake", "cron:")
+
 
 class WakeQueue:
     """JSONL-backed queue of wake events with cross-process locking.

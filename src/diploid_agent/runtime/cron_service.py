@@ -33,14 +33,17 @@ from diploid_agent.config import (
     PersonaConfig,
 )
 from diploid_agent.memory_promoted import PromotedMemory
+from diploid_agent.models import WakeEvent
 from diploid_agent.persona_composer import _trim_to_section, compose_persona
 from diploid_agent.plan.models import Task, TaskStatus, TaskType
 from diploid_agent.runtime.cron_state import CronJobState, CronStateStore
 from diploid_agent.runtime.event_bus import Event
+from diploid_agent.runtime.wake_queue import WAKE_BUDGET_REASON_PREFIXES
 
 if TYPE_CHECKING:
     from diploid_agent.plan.manager import PlanManager
     from diploid_agent.runtime.event_bus import EventBus
+    from diploid_agent.runtime.wake_queue import WakeQueue
     from diploid_agent.task.engine import TaskEngine
 
 try:
@@ -51,6 +54,7 @@ except ImportError:  # pragma: no cover - dependency guard
 logger = logging.getLogger(__name__)
 
 CRON_PLAN_NAME = "__cron__"
+CRON_WAKE_REASON_PREFIX = "cron:"
 
 
 @dataclass
@@ -85,11 +89,13 @@ class CronService:
         task_engine: TaskEngine,
         event_bus: EventBus,
         sessions_root: Path,
+        wake_queue: WakeQueue | None = None,
     ) -> None:
         self._config = config
         self._plan_manager = plan_manager
         self._task_engine = task_engine
         self._event_bus = event_bus
+        self._wake_queue = wake_queue
         self._sessions_root = Path(sessions_root).expanduser()
         cron_cfg = config.harness.cron
         self._state = CronStateStore(cron_cfg.state_path)
@@ -349,6 +355,23 @@ class CronService:
                 continue
             if state.source_file != str(resolved.source_file):
                 state.source_file = str(resolved.source_file)
+            schedule_key = spec.schedule.model_dump_json()
+            if state.schedule_key != schedule_key:
+                if not state.schedule_key:
+                    # First sight of this state row (or a row that predates
+                    # the field): stamp the key without disturbing next_due
+                    # or a pending catchup.
+                    state.schedule_key = schedule_key
+                    self._state.update(state)
+                elif state.running_task_id is None:
+                    # Hot-edited schedule on an idle job: reseed forward.
+                    state.schedule_key = schedule_key
+                    state.next_due_at = self._next_due(spec, now)
+                    self._state.update(state)
+                    self._catchup_pending.discard(job_id)
+                    continue
+                # else: drift while a run is in flight — leave the stale key
+                # so _finalize reseeds from the new spec once it lands.
             if state.next_due_at is None:
                 state.next_due_at = self._next_due(spec, now)
                 self._state.update(state)
@@ -437,6 +460,27 @@ class CronService:
         self._cron_plans[chat_id] = plan.id
         return plan.id
 
+    def run_now(self, job_id: str) -> dict[str, Any]:
+        """Fire a job immediately — the operator door behind POST /cron/<id>/run.
+
+        Manual runs ignore ``enabled`` and auto-``disabled`` (the operator is
+        the override; a successful manual run also re-enables the job) but
+        respect overlap — an in-flight run is a conflict. The schedule is not
+        consumed: ``next_due_at`` is left alone.
+        """
+        resolved = self._jobs.get(job_id)
+        if resolved is None:
+            raise KeyError(job_id)
+        state = self._state.ensure(job_id, source_file=str(resolved.source_file))
+        if state.running_task_id is not None:
+            raise RuntimeError(f"cron job {job_id} is already running")
+        self._materialize(resolved, state, time.time(), manual=True)
+        return {
+            "job_id": job_id,
+            "task_id": state.last_task_id,
+            "status": "started" if state.running_task_id else "failed",
+        }
+
     def _materialize(
         self,
         resolved: _ResolvedJob,
@@ -444,16 +488,16 @@ class CronService:
         now: float,
         *,
         catchup: bool = False,
+        manual: bool = False,
     ) -> None:
         spec = resolved.spec
         cron_cfg = self._config.harness.cron
         plan_id = self._cron_plan_id(resolved.chat_id)
         cwd = Path(spec.call.cwd).expanduser() if spec.call.cwd else resolved.persona_dir
+        tags = f"{', catchup' if catchup else ''}{', manual' if manual else ''}"
         task = Task(
             name=f"cron:{spec.id}",
-            description=(
-                f"cron job {spec.id} ({resolved.source_label}{', catchup' if catchup else ''})"
-            ),
+            description=f"cron job {spec.id} ({resolved.source_label}{tags})",
             chat_id=resolved.chat_id,
             cwd=cwd,
         )
@@ -477,7 +521,13 @@ class CronService:
         state.last_task_id = added.id
         state.last_run_at = now
         state.queued_due = False
-        state.next_due_at = self._next_due(spec, now)
+        # Hot-edit rule: the run belongs to the spec that fired it. Persist
+        # both so finalize can deliver under the firing spec even if the
+        # file changes (or the process restarts) mid-run.
+        state.fired_spec = spec.model_dump_json()
+        state.fired_chat_id = resolved.chat_id
+        if not manual:
+            state.next_due_at = self._next_due(spec, now)
         if catchup:
             state.last_status = "catchup"
         self._state.update(state)
@@ -543,6 +593,9 @@ class CronService:
             state.running_plan_id = None
             if ok:
                 state.consecutive_failures = 0
+                # Only a manual run can succeed on a disabled job, so a
+                # success here is the operator's re-enable signal.
+                state.disabled = False
             else:
                 state.consecutive_failures += 1
                 max_failures = resolved.spec.max_consecutive_failures if resolved is not None else 3
@@ -553,13 +606,53 @@ class CronService:
                         f"auto-disabled after {state.consecutive_failures} "
                         f"consecutive failures: {state.last_summary}"
                     )
+            if resolved is not None:
+                # Hot-edited schedule while the run was in flight: adopt the
+                # new schedule from the next fire.
+                schedule_key = resolved.spec.schedule.model_dump_json()
+                if state.schedule_key != schedule_key:
+                    state.schedule_key = schedule_key
+                    state.next_due_at = self._next_due(resolved.spec, state.last_finished_at)
             self._state.update(state)
-        if resolved is not None:
-            self._deliver(resolved, state, task)
-            if state.queued_due and not state.disabled:
-                state.queued_due = False
-                self._state.update(state)
-                self._materialize(resolved, state, time.time())
+        # Delivery belongs to the spec that fired the run, so a hot edit or
+        # a mid-run removal still lands the result where the firing spec said.
+        delivery_ctx = self._delivery_context(state, resolved)
+        if delivery_ctx is not None:
+            self._deliver(delivery_ctx, state, task)
+        if resolved is not None and state.queued_due and not state.disabled:
+            state.queued_due = False
+            self._state.update(state)
+            self._materialize(resolved, state, time.time())
+        elif resolved is None:
+            # The job was deleted from every config file mid-run: the result
+            # was still delivered under the firing spec; drop the bookkeeping.
+            self._state.drop(state.job_id)
+
+    def _delivery_context(
+        self,
+        state: CronJobState,
+        resolved: _ResolvedJob | None,
+    ) -> _ResolvedJob | None:
+        """Build the delivery view for a finished run: firing spec wins."""
+        spec: CronJobSpec | None = None
+        if state.fired_spec:
+            try:
+                spec = CronJobSpec.model_validate_json(state.fired_spec)
+            except (ValueError, TypeError):
+                spec = None
+        if spec is None and resolved is not None:
+            spec = resolved.spec
+        chat_id = state.fired_chat_id or (resolved.chat_id if resolved else "")
+        if spec is None or not chat_id:
+            return None
+        return _ResolvedJob(
+            spec=spec,
+            source_file=resolved.source_file if resolved else Path(state.source_file or "."),
+            source_label=resolved.source_label if resolved else "",
+            chat_id=chat_id,
+            persona=resolved.persona if resolved else None,
+            persona_dir=resolved.persona_dir if resolved else None,
+        )
 
     # ------------------------------------------------------------- delivery
 
@@ -568,7 +661,15 @@ class CronService:
         return self._sessions_root / safe / self._config.harness.cron.results_dirname
 
     def _deliver(self, resolved: _ResolvedJob, state: CronJobState, task: Task) -> None:
-        """Every mode writes the result files; the digest slot reads them."""
+        """Every mode writes the result files; the digest slot reads them.
+
+        ``turn`` additionally enqueues a wake that opens a real turn; when the
+        shared self-wake budget or the daily cap refuses, the delivery degrades
+        to the files (the digest slot still shows the result next turn).
+        """
+        outcome = resolved.spec.delivery
+        if resolved.spec.delivery == "turn":
+            outcome = self._deliver_turn(resolved, state, task)
         out_dir = self._results_dir(resolved.chat_id)
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
@@ -589,6 +690,7 @@ class CronService:
                     {
                         "job_id": resolved.spec.id,
                         "delivery": resolved.spec.delivery,
+                        "delivery_result": outcome,
                         "status": state.last_status,
                         "finished_at": state.last_finished_at,
                         "next_due_at": state.next_due_at,
@@ -600,6 +702,71 @@ class CronService:
             )
         except OSError:
             logger.warning("Cron job %s: could not write result files", resolved.spec.id)
+
+    def _deliver_turn(
+        self,
+        resolved: _ResolvedJob,
+        state: CronJobState,
+        task: Task,
+    ) -> str:
+        """Enqueue the result as a real turn; returns the delivery outcome.
+
+        Shares the self-wake budgets so a turn-delivering job cannot widen the
+        interrupt loop an agent could already open herself: pending-cap and
+        daily-cap refusals degrade to file delivery (digest still shows it);
+        a recent arm only defers the wake by the remaining interval.
+        """
+        if self._wake_queue is None:
+            return "turn_suppressed: no wake queue"
+        cron_cfg = self._config.harness.cron
+        timer_cfg = self._config.harness.timer
+        now = time.time()
+        today = datetime.now().astimezone().strftime("%Y-%m-%d")
+        turns_today = sum(s.turn_count for s in self._state.all().values() if s.turn_date == today)
+        if turns_today >= cron_cfg.turn_delivery_max_per_day:
+            return "turn_suppressed: daily cap reached"
+        pending = [
+            e
+            for e in self._wake_queue.pending(chat_id=resolved.chat_id)
+            if e.reason.startswith(WAKE_BUDGET_REASON_PREFIXES)
+        ]
+        if len(pending) >= timer_cfg.self_wake_max_pending:
+            return "turn_suppressed: wake budget reached"
+        scheduled_at = now
+        latest = max((e.created_at for e in pending), default=0.0)
+        if latest and now - latest < timer_cfg.self_wake_min_interval_seconds:
+            scheduled_at = latest + timer_cfg.self_wake_min_interval_seconds
+        summary = (task.result or task.log or "").strip()
+        message = (
+            f"[cron: {resolved.spec.id} finished — {state.last_status}]\n"
+            f"{summary or '(no summary)'}\n\n"
+            "A scheduled job delivered this result as a turn — respond with judgment."
+        )
+        self._wake_queue.enqueue(
+            WakeEvent(
+                id="",
+                chat_id=resolved.chat_id,
+                reason=f"{CRON_WAKE_REASON_PREFIX}{resolved.spec.id}",
+                priority=1,
+                scheduled_at=scheduled_at,
+                payload={
+                    "user_message": message,
+                    "agent_reason": f"{CRON_WAKE_REASON_PREFIX}{resolved.spec.id}",
+                    "notify": True,
+                },
+                silent=False,
+                created_at=now,
+                ready=True,
+            )
+        )
+        if state.turn_date != today:
+            state.turn_date = today
+            state.turn_count = 0
+        state.turn_count += 1
+        self._state.update(state)
+        if scheduled_at > now:
+            return f"turn_deferred: {scheduled_at - now:.0f}s"
+        return "turn"
 
     def _write_service_last(self) -> None:
         """Surface reload warnings where the digest slot can read them."""
@@ -663,6 +830,7 @@ class CronService:
     def snapshot(self) -> dict[str, Any]:
         """Read-only view of merged jobs and their state for ``GET /cron``."""
         states = self._state.all()
+        today = datetime.now().astimezone().strftime("%Y-%m-%d")
         jobs: list[dict[str, Any]] = []
         for job_id, resolved in sorted(self._jobs.items()):
             spec = resolved.spec
@@ -684,6 +852,7 @@ class CronService:
                     "consecutive_failures": state.consecutive_failures if state else 0,
                     "running": bool(state and state.running_task_id),
                     "auto_disabled": bool(state and state.disabled),
+                    "turns_today": (state.turn_count if state and state.turn_date == today else 0),
                 }
             )
         return {
