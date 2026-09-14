@@ -87,3 +87,112 @@ def transcribe(path: Path, config: TelegramConfig) -> str | None:
         return _transcribe_faster_whisper(path, config.stt_model)
     logger.warning("Unknown stt_provider %r — expected none/command/faster-whisper", provider)
     return None
+
+
+_TTS_TIMEOUT = 90.0
+
+_voice_cache: dict[str, Any] = {}
+
+
+def _synthesize_command(text: str, command: str, work_dir: Path) -> Path | None:
+    """Run ``tts_command`` with the text on stdin; stdout must be audio bytes.
+
+    Ogg/Opus output is sent as a Telegram voice note; anything else is sent as
+    a plain audio file. The contract is deliberately tiny so a whisper.cpp-
+    style binary, a piper wrapper, or a host-side speech bridge all fit.
+    """
+    if not command.strip():
+        logger.warning("tts_provider=command but tts_command is empty")
+        return None
+    try:
+        proc = subprocess.run(
+            shlex.split(command),
+            input=text.encode(),
+            capture_output=True,
+            timeout=_TTS_TIMEOUT,
+            check=False,
+        )
+    except Exception:
+        logger.exception("tts command failed")
+        return None
+    if proc.returncode != 0 or not proc.stdout:
+        logger.warning(
+            "tts command exited %s with %d bytes",
+            proc.returncode,
+            len(proc.stdout),
+        )
+        return None
+    dest = work_dir / "say.ogg" if proc.stdout[:4] == b"OggS" else work_dir / "say.bin"
+    dest.write_bytes(proc.stdout)
+    return dest
+
+
+def _synthesize_piper(text: str, model_path: str, work_dir: Path) -> Path | None:
+    """Synthesize with piper (wav) then ffmpeg → ogg/opus for sendVoice."""
+    if not model_path:
+        logger.warning("tts_provider=piper but tts_model_path is empty")
+        return None
+    model_path = str(Path(model_path).expanduser())
+    try:
+        from piper import PiperVoice
+    except ImportError:
+        logger.warning("tts_provider=piper but piper-tts is not installed in the poller env")
+        return None
+    with _model_cache_lock:
+        voice = _voice_cache.get(model_path)
+        if voice is None:
+            voice = PiperVoice.load(model_path)
+            _voice_cache[model_path] = voice
+
+    import wave
+
+    wav_path = work_dir / "say.wav"
+    try:
+        # piper-tts >= 1.3: synthesize(text) yields AudioChunk objects;
+        # older releases take a wave file handle as the second argument.
+        try:
+            chunks = voice.synthesize(text)
+            params_set = False
+            with wave.open(str(wav_path), "wb") as wav:
+                for chunk in chunks:
+                    if not params_set:
+                        wav.setnchannels(chunk.sample_channels)
+                        wav.setsampwidth(chunk.sample_width)
+                        wav.setframerate(chunk.sample_rate)
+                        params_set = True
+                    wav.writeframes(chunk.audio_int16_bytes)
+        except TypeError:
+            with wave.open(str(wav_path), "wb") as wav:
+                voice.synthesize(text, wav)
+    except Exception:
+        logger.exception("piper synthesis failed")
+        return None
+
+    ogg_path = work_dir / "say.ogg"
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-y", "-v", "quiet", "-i", str(wav_path), "-c:a", "libopus", str(ogg_path)],
+            capture_output=True,
+            timeout=_TTS_TIMEOUT,
+            check=False,
+        )
+    except Exception:
+        logger.exception("ffmpeg wav→ogg failed")
+        return None
+    if proc.returncode != 0 or not ogg_path.exists():
+        logger.warning("ffmpeg exited %s: %s", proc.returncode, proc.stderr[-200:])
+        return None
+    return ogg_path
+
+
+def synthesize(text: str, config: TelegramConfig, work_dir: Path) -> Path | None:
+    """Synthesize ``text`` into an audio file under ``work_dir``, or None."""
+    provider = config.tts_provider
+    if provider == "none":
+        return None
+    if provider == "command":
+        return _synthesize_command(text, config.tts_command, work_dir)
+    if provider == "piper":
+        return _synthesize_piper(text, config.tts_model_path, work_dir)
+    logger.warning("Unknown tts_provider %r — expected none/command/piper", provider)
+    return None

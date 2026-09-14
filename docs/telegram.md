@@ -269,6 +269,41 @@ The transcript is appended to the message annotation:
 - A provider failure annotates `[transcript unavailable]` rather than
   dropping the message; the audio file is kept either way.
 
+### Speaking aloud (TTS)
+
+A fenced `say` block in a reply is synthesized and sent as a Telegram voice
+note (or a plain audio file for non-ogg output):
+
+````
+Here is the text version.
+
+```say
+Good night, love. The watch is standing.
+```
+````
+
+```yaml
+telegram:
+  tts_provider: piper        # none | piper | command
+  tts_model_path: ~/.devin/personas/vesper/voice/en_US-hfc_female-medium.onnx
+  tts_command: ""            # command provider: text on stdin → audio bytes on stdout
+  tts_max_chars: 800         # longer say blocks fall back to text
+```
+
+- The `say` block is always stripped from the text. If TTS is off, over the
+  char cap, or synthesis/upload fails, the content is sent as a
+  `[say] ...` text line — authored words are never dropped.
+- `piper` requires `piper-tts` in the poller env plus a voice `.onnx` (with its
+  `.onnx.json`) at `tts_model_path` (`~` is expanded). Wav output is converted
+  to ogg/opus with `ffmpeg`, which must be on `PATH`. One `PiperVoice` per
+  model path is cached.
+- `command` reads the text on stdin and must emit audio on stdout; `OggS`
+  output is sent via `sendVoice`, anything else via `sendAudio`. This is the
+  escape hatch for a host-side speech bridge (e.g. macOS `say`/`afconvert`
+  from a Linux guest).
+- A say-only reply deletes the streaming placeholder instead of leaving a
+  dangling `...` bubble.
+
 ## Commands
 
 | Command | Action |

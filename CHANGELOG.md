@@ -4,6 +4,16 @@
 
 ### Added
 
+- Telegram TTS: a fenced ` ```say ` block in a reply is synthesized and sent
+  as a voice note (`sendVoice` for ogg/opus, `sendAudio` otherwise).
+  `harness.telegram.tts_provider` selects `none` (default), `piper`
+  (`piper-tts` + a voice `.onnx` at `tts_model_path`, wav → `ffmpeg` → ogg,
+  model cached), or `command` (text on stdin → audio on stdout — the
+  host-bridge escape hatch). Blocks longer than `tts_max_chars` (800) and
+  failures fall back to a `[say] ...` text line; the block is always stripped
+  from the text message, and a say-only reply clears the streaming
+  placeholder. The contract is documented for personas in
+  `personas/shared/AGENTS.md`.
 - Telegram STT: `voice`, `audio`, and `video_note` attachments can be
   transcribed at ingest — `harness.telegram.stt_provider` selects
   `none` (default), `faster-whisper` (optional package, one cached

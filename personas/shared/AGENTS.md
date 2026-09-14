@@ -42,6 +42,25 @@ Should I continue? (custom cancel label)
 ```
 ````
 
+## Speaking aloud
+
+When TTS is configured on the service, a fenced `say` block in your reply is
+spoken aloud and delivered as a Telegram voice note. The block is removed from
+the text message; if synthesis is off or fails, the content still reaches the
+user as a `[say] ...` text line — the words are never lost.
+
+````
+Here is the text version.
+
+```say
+Good night, love. The watch is standing.
+```
+````
+
+Use it deliberately — a voice note is for moments that deserve a voice, not
+every reply. Keep it under ~800 characters (`tts_max_chars` cap) and put it at
+the end of the message.
+
 ## Memory tools
 
 The `diploid-memory` MCP server is always available. When you learn a fact, preference, decision, or anything that should survive this session, make it durable:

@@ -139,6 +139,10 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
         stt_provider: str = "none",
         stt_model: str = "small",
         stt_command: str = "",
+        tts_provider: str = "none",
+        tts_model_path: str = "",
+        tts_command: str = "",
+        tts_max_chars: int = 800,
     ):
         self.token = token
         self.metrics = metrics
@@ -164,6 +168,10 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
             stt_provider=stt_provider,
             stt_model=stt_model,
             stt_command=stt_command,
+            tts_provider=tts_provider,
+            tts_model_path=tts_model_path,
+            tts_command=tts_command,
+            tts_max_chars=tts_max_chars,
         )
         self.state_dir = state_dir or Path("sessions") / ".poller-placeholders"
         # Attachments land in <sessions_root>/<chat_id>/<dirname>/, inside the

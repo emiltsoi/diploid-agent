@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 ASK_FENCE_RE = re.compile(r"^```ask\s*\n([\s\S]*?)\n```\s*$", re.MULTILINE)
+SAY_FENCE_RE = re.compile(r"^```say\s*\n([\s\S]*?)\n```\s*$", re.MULTILINE)
 
 ASK_CALLBACK_PREFIX = "ask_"
 ASK_CANCEL_CALLBACK_DATA = f"{ASK_CALLBACK_PREFIX}cancel"
@@ -167,3 +168,19 @@ def extract_ask_block(text: str) -> tuple[str, AskBlock | None]:
         cancellable=cancellable,
         cancel_label=cancel_label,
     )
+
+
+def extract_say_block(text: str) -> tuple[str, str | None]:
+    """Extract a ```say fenced block — plain text the agent wants spoken aloud.
+
+    Returns the text with the block removed and the spoken content if found.
+    Unlike ``ask``, the body is raw text, not JSON.
+    """
+    match = SAY_FENCE_RE.search(text)
+    if not match:
+        return text, None
+    body = match.group(1).strip()
+    if not body:
+        return text, None
+    visible = (text[: match.start()] + text[match.end() :]).strip()
+    return visible, body

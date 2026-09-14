@@ -13,8 +13,10 @@ from __future__ import annotations
 import json
 import logging
 import re
+import tempfile
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -24,7 +26,9 @@ from diploid_agent.transport.interactive import (
     build_empty_inline_keyboard,
     build_inline_keyboard,
     extract_ask_block,
+    extract_say_block,
 )
+from diploid_agent.transport.telegram.voice import synthesize
 from diploid_agent.transport.telegram_format import (
     _prefix_within_utf16_limit,
     _strip_mdv2,
@@ -65,6 +69,7 @@ class TelegramSenderMixin:
         method: str,
         *,
         throttle: bool = True,
+        files: dict[str, Any] | None = None,
         **params,
     ) -> dict:
         """Call the Telegram Bot API, respecting rate limits and retries.
@@ -84,7 +89,7 @@ class TelegramSenderMixin:
                 # Use POST with form data to avoid leaking the token in URL
                 # query strings and to side-step GET URL-length limits for long
                 # replies.
-                resp = self.client.post(f"{self.base_url}/{method}", data=params)
+                resp = self.client.post(f"{self.base_url}/{method}", data=params, files=files)
                 resp.raise_for_status()
                 with self._rate_limit_lock:
                     if chat_id is not None:
@@ -300,6 +305,70 @@ class TelegramSenderMixin:
             logger.exception("Failed to edit Telegram message")
             return False
 
+    def _send_audio_file(
+        self,
+        chat_id: int,
+        path: Path,
+        *,
+        reply_to_message_id: int | None = None,
+    ) -> int | None:
+        """Upload an audio file: sendVoice for ogg/opus, sendAudio otherwise."""
+        try:
+            payload = path.read_bytes()
+        except OSError:
+            logger.exception("Failed to read audio file %s", path)
+            return None
+        is_voice = payload[:4] == b"OggS"
+        method, field = ("sendVoice", "voice") if is_voice else ("sendAudio", "audio")
+        params: dict[str, Any] = {"chat_id": chat_id}
+        if reply_to_message_id is not None:
+            params["reply_to_message_id"] = reply_to_message_id
+        files = {
+            field: (
+                path.name,
+                payload,
+                "audio/ogg" if is_voice else "application/octet-stream",
+            )
+        }
+        try:
+            data = self._api(method, files=files, **params)
+            return data.get("result", {}).get("message_id")
+        except Exception:
+            logger.exception("Failed to send %s for chat %s", method, chat_id)
+            return None
+
+    def _maybe_send_voice(
+        self,
+        chat_id: int,
+        say_text: str,
+        *,
+        reply_to_message_id: int | None = None,
+    ) -> None:
+        """Synthesize a ```say block and send it; fall back to text on failure.
+
+        The block is always stripped from the text message, so when TTS is off
+        or the send fails the words still reach the user as ``[say] ...``.
+        """
+        config = self._live_telegram_config
+        sent = False
+        if config.tts_provider != "none" and len(say_text) <= config.tts_max_chars:
+            try:
+                with tempfile.TemporaryDirectory(prefix="tts-") as td:
+                    path = synthesize(say_text, config, Path(td))
+                    if path is not None:
+                        sent = (
+                            self._send_audio_file(
+                                chat_id, path, reply_to_message_id=reply_to_message_id
+                            )
+                            is not None
+                        )
+            except Exception:
+                logger.exception("Voice send failed for chat %s", chat_id)
+        if not sent:
+            self._send_message(
+                chat_id, f"[say] {say_text}", reply_to_message_id=reply_to_message_id
+            )
+
     def _delete_message(self, chat_id: int, message_id: int) -> None:
         """Delete a Telegram message."""
         try:
@@ -475,8 +544,10 @@ class TelegramSenderMixin:
         ask_block: AskBlock | None = None
         display_text = text
 
+        say_text: str | None = None
         if text:
             display_text, ask_block = extract_ask_block(text)
+            display_text, say_text = extract_say_block(display_text)
 
         if ask_block is not None and first_message_id is not None:
             self._delete_message(chat_id, first_message_id)
@@ -507,7 +578,11 @@ class TelegramSenderMixin:
             ask_block is not None,
         )
 
-        chunks = split_telegram_text(formatted, max_length=4096, len_fn=len_fn, reserve=reserve)
+        chunks = (
+            split_telegram_text(formatted, max_length=4096, len_fn=len_fn, reserve=reserve)
+            if display_text
+            else []
+        )
         total = len(chunks)
         sent: list[int] = []
 
@@ -578,5 +653,12 @@ class TelegramSenderMixin:
                     chat_id,
                     total,
                 )
+
+        if not chunks and first_message_id is not None:
+            # The whole reply was consumed by a say block; clear the placeholder.
+            self._delete_message(chat_id, first_message_id)
+
+        if say_text is not None:
+            self._maybe_send_voice(chat_id, say_text, reply_to_message_id=reply_to_message_id)
 
         return sent

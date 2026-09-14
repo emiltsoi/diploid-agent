@@ -131,6 +131,10 @@ class TelegramConfig(BaseModel):
     stt_provider: Literal["none", "faster-whisper", "command"] = "none"
     stt_model: str = "small"
     stt_command: str = ""
+    tts_provider: Literal["none", "piper", "command"] = "none"
+    tts_model_path: str = ""
+    tts_command: str = ""
+    tts_max_chars: int = 800
 
 
 class MetricsConfig(BaseModel):

@@ -2938,3 +2938,111 @@ def test_poller_stt_kwargs_reach_static_config() -> None:
     assert cfg.stt_provider == "command"
     assert cfg.stt_command == "whisper-cli"
     assert cfg.stt_model == "base"
+
+
+# ---------------------------------------------------------------------------
+# TTS (say blocks → voice notes)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_say_block() -> None:
+    from diploid_agent.transport.interactive import extract_say_block
+
+    text, say = extract_say_block("hello there\n```say\nGood night, love.\n```")
+    assert text == "hello there"
+    assert say == "Good night, love."
+    assert extract_say_block("no block") == ("no block", None)
+    assert extract_say_block("```say\n\n```") == ("```say\n\n```", None)
+
+
+def test_say_block_sends_voice_via_command_provider(tmp_path: Path) -> None:
+    ogg = tmp_path / "voice.ogg"
+    ogg.write_bytes(b"OggS" + b"\x00" * 64)
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+        tts_provider="command",
+        tts_command=f"cat {ogg}",
+    )
+    calls: list[tuple[str, dict, dict]] = []
+
+    def fake_api(method: str, *, files: Any = None, **params: Any) -> dict:
+        calls.append((method, params, files or {}))
+        return {"ok": True, "result": {"message_id": 99}}
+
+    poller._api = fake_api
+    poller._send_text(12345, "text reply\n```say\nGood night, love.\n```")
+
+    send = [c for c in calls if c[0] == "sendMessage"]
+    voice = [c for c in calls if c[0] == "sendVoice"]
+    assert len(send) == 1 and send[0][1]["text"] == "text reply"
+    assert len(voice) == 1
+    assert voice[0][1]["chat_id"] == 12345
+    field = voice[0][2]["voice"]
+    assert field[1][:4] == b"OggS"
+
+
+def test_say_block_non_ogg_uses_sendaudio(tmp_path: Path) -> None:
+    wav = tmp_path / "clip.bin"
+    wav.write_bytes(b"RIFF" + b"\x00" * 32)
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+        tts_provider="command",
+        tts_command=f"cat {wav}",
+    )
+    calls: list[str] = []
+    poller._api = lambda method, **kw: (
+        calls.append(method) or {"ok": True, "result": {"message_id": 1}}
+    )
+    poller._send_text(12345, "```say\nhi\n```")
+    assert "sendAudio" in calls
+
+
+def test_say_block_provider_none_falls_back_to_text(tmp_path: Path) -> None:
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    sent: list[str] = []
+    poller._api = lambda method, **kw: (
+        sent.append(kw["text"]) or {"ok": True, "result": {"message_id": 1}}
+    )
+    poller._send_text(12345, "main text\n```say\nspoken words\n```")
+    assert sent == ["main text", "[say] spoken words"]
+
+
+def test_say_block_over_max_chars_falls_back_to_text(tmp_path: Path) -> None:
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+        tts_provider="command",
+        tts_command="false",
+        tts_max_chars=5,
+    )
+    sent: list[str] = []
+    poller._api = lambda method, **kw: (
+        sent.append(kw["text"]) or {"ok": True, "result": {"message_id": 1}}
+    )
+    poller._send_text(12345, "```say\nthis is far too long to speak\n```")
+    assert sent == ["[say] this is far too long to speak"]
+
+
+def test_say_block_synth_failure_falls_back_to_text(tmp_path: Path) -> None:
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+        tts_provider="command",
+        tts_command="false",
+    )
+    sent: list[str] = []
+    poller._api = lambda method, **kw: (
+        sent.append(kw["text"]) or {"ok": True, "result": {"message_id": 1}}
+    )
+    poller._send_text(12345, "```say\nsomething\n```")
+    assert sent == ["[say] something"]
