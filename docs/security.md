@@ -94,6 +94,17 @@ tool calls including shell execution. This would let the agent run
   Rejections and accepted restarts are incident-recorded, and accepted restarts
   enqueue an operator notice to `harness.mesh.fallback_chat_id`. Operator doors —
   `POST /graceful-restart` and Telegram `/graceful-restart` — bypass the gate.
+  `restart_allowed_units` deliberately does not load from
+  `sessions-*/runtime-overrides.yaml` — the policy boundary is not mutable
+  through the channel it governs (only the fixed override sections `task`,
+  `waker`, `timer`, `notifications`, `telegram`, `plugins` are).
+  Residual risk, stated honestly: all family services run as the same uid, so a
+  same-uid process can still open a peer's control socket directly and name the
+  peer's own unit — the request is then judged by the *peer's* allowlist, not
+  the caller's. Within the family domain this is accepted: "any family agent
+  can restart any family service whose persona has restart_enabled on." A
+  per-service control token baked into each child's env (listener rejects
+  token-less requests) closes it if that ever stops being acceptable.
 - Task-spawned ACP children (subagents, cron phantoms) get no restart channel at
   all: `TaskEngine._run_acp` builds their engine with `service_name=None`,
   so their `DIPLOID_CONTROL_SOCKET` points at an unbound dead-end path.

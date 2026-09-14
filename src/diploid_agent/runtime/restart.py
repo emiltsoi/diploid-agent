@@ -211,7 +211,6 @@ class RuntimeRestart:
                     service,
                 )
                 return "cooldown"
-            self._state.last_service_restart_at = now
 
         logger.warning(
             "ACP subprocess requested restart of %s (reason: %s); scheduling graceful restart",
@@ -249,6 +248,10 @@ class RuntimeRestart:
         # Drain in-flight turns, flush plugin state, then schedule the restart.
         if not self._schedule_draining_restart(service, chat_id=None, reason=reason):
             return "rejected: no such unit"
+        # Stamp the cooldown only after the unit is known to exist, so a
+        # rejected request does not burn the window for a legitimate one.
+        with self._lock:
+            self._state.last_service_restart_at = now
         self._notify_agent_restart(service, reason)
         return "scheduled"
 

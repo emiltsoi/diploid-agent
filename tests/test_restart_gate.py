@@ -164,3 +164,15 @@ def test_missing_unit_rejected_after_gate(tmp_path: Path) -> None:
     restart._unit_exists = lambda s: False  # type: ignore[method-assign]
     status = restart._on_service_restart("test-pilot.service", "maintenance")
     assert status == "rejected: no such unit"
+
+
+def test_rejected_request_does_not_burn_cooldown(tmp_path: Path) -> None:
+    """A 'no such unit' rejection must not consume the restart window."""
+    restart = _make_restart(_make_config(tmp_path), _Incidents(), [])
+    restart._unit_exists = lambda s: s != "test-pilot.service"  # type: ignore[method-assign]
+    assert (
+        restart._on_service_restart("test-pilot.service", "typo")
+        == "rejected: no such unit"
+    )
+    restart._unit_exists = lambda s: True  # type: ignore[method-assign]
+    assert restart._on_service_restart("test-pilot.service", "for real") == "scheduled"
