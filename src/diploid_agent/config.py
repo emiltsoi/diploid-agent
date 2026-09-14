@@ -125,6 +125,9 @@ class TelegramConfig(BaseModel):
     min_edit_message_interval: float = 2.0
     message_format: Literal["plain", "markdown_v2"] = "plain"
     code_style: Literal["inline", "box"] = "inline"
+    attachments_enabled: bool = True
+    attachments_max_bytes: int = 20_000_000
+    attachments_dirname: str = "inbox"
 
 
 class MetricsConfig(BaseModel):

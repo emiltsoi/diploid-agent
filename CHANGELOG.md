@@ -4,6 +4,20 @@
 
 ### Added
 
+- Telegram attachments: messages carrying a photo, document, voice, video,
+  video note, sticker, or animation are now downloaded on the turn worker via
+  `getFile` + the file endpoint into the chat's ACP workspace at
+  `<sessions_root>/<chat_id>/inbox/<message_id>-<name>`, and the prompt is
+  annotated `[attachment saved: inbox/<name> (kind[, mime])]` — a captionless
+  attachment's annotation is the whole message text. Filenames are sanitized
+  to one path segment; `harness.telegram.attachments_max_bytes` (default
+  20 MB, the Bot API ceiling) is enforced on the declared size and the
+  streamed body, with partial downloads removed; failures annotate
+  `[attachment could not be saved: ...]` instead of dropping the message.
+  `harness.telegram.attachments_enabled: false` restores media-ignoring
+  behavior, and `attachments_dirname` renames the subfolder. Because the
+  inbox sits inside the session dir, a `session:` cron `file` trigger can
+  watch it.
 - Cron Wave C: `trigger:` jobs — event-driven siblings of `schedule:` on
   the same registry. `trigger.type: file` watches a path's mtime (first
   sight adopts without firing; a change inside `cooldown_seconds` stays

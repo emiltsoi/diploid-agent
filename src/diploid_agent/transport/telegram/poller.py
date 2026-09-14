@@ -9,8 +9,10 @@ the user.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import json
 import logging
+import re
 import threading
 import time
 from collections import deque
@@ -40,8 +42,64 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 logger = logging.getLogger("telegram_poll")
 
+# Characters allowed in a saved attachment filename. Anything else (including
+# path separators and dots-only names) is collapsed to "_".
+_UNSAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
 
-from diploid_agent.transport.telegram.models import ChatInput
+# Message keys carrying downloadable files. ``photo`` is a size ladder; every
+# other key is a single file object.
+_ATTACHMENT_KEYS = (
+    "document",
+    "audio",
+    "voice",
+    "video",
+    "video_note",
+    "sticker",
+    "animation",
+)
+
+
+def _extract_attachments(message: dict) -> tuple[TelegramAttachment, ...]:
+    """Pull downloadable file descriptors out of a Telegram message."""
+    out: list[TelegramAttachment] = []
+    photos = message.get("photo")
+    if isinstance(photos, list) and photos:
+        # The same image at several resolutions; keep the largest variant.
+        best = max(
+            (p for p in photos if isinstance(p, dict) and p.get("file_id")),
+            key=lambda p: p.get("file_size") or (p.get("width", 0) * p.get("height", 0)),
+            default=None,
+        )
+        if best is not None:
+            out.append(
+                TelegramAttachment(
+                    kind="photo",
+                    file_id=best["file_id"],
+                    file_size=best.get("file_size"),
+                )
+            )
+    for key in _ATTACHMENT_KEYS:
+        obj = message.get(key)
+        if isinstance(obj, dict) and obj.get("file_id"):
+            out.append(
+                TelegramAttachment(
+                    kind=key,
+                    file_id=obj["file_id"],
+                    file_name=obj.get("file_name"),
+                    mime_type=obj.get("mime_type"),
+                    file_size=obj.get("file_size"),
+                )
+            )
+    return tuple(out)
+
+
+def _safe_filename(name: str, *, fallback: str) -> str:
+    """Reduce a Telegram-provided name to a single safe path segment."""
+    stem = _UNSAFE_FILENAME.sub("_", Path(name).name).strip("._")
+    return (stem or fallback)[:96]
+
+
+from diploid_agent.transport.telegram.models import ChatInput, TelegramAttachment
 from diploid_agent.transport.telegram.workers import DeliveryWorker, TurnWorker
 
 from .commands import TelegramCommandMixin
@@ -65,6 +123,7 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
         intermediate_idle: float = 5.0,
         intermediate_min_chars: int = 20,
         state_dir: Path | None = None,
+        sessions_root: Path | None = None,
         reply_preview_chars: int = 240,
         min_telegram_interval: float = 1.0,
         min_edit_message_interval: float = 2.0,
@@ -94,6 +153,9 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
             code_style=code_style,
         )
         self.state_dir = state_dir or Path("sessions") / ".poller-placeholders"
+        # Attachments land in <sessions_root>/<chat_id>/<dirname>/, inside the
+        # chat's ACP workspace, so a ``session:`` cron trigger can watch them.
+        self.sessions_root = Path(sessions_root) if sessions_root else self.state_dir.parent
         self.reply_preview_chars = reply_preview_chars
         self._max_telegram_retries = max_telegram_retries
         self._max_telegram_backoff = max_telegram_backoff
@@ -241,14 +303,15 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
         chat_id = chat.get("id")
         message_id = message.get("message_id")
 
-        # Prefer text, then caption; ignore other media.
+        # Prefer text, then caption.
         text = message.get("text") or message.get("caption", "")
+        attachments = _extract_attachments(message)
 
         # Do not reply to messages the bot sent itself.
         if message.get("from", {}).get("is_bot"):
             return None
 
-        if not chat_id or not text:
+        if not chat_id or not (text or attachments):
             return None
 
         reply_to = message.get("reply_to_message", {})
@@ -269,7 +332,89 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
             reply_to_is_bot=reply_to_is_bot,
             reply_to_message_id=reply_to_message_id,
             callback_query_id=None,
+            attachments=attachments,
         )
+
+    def _download_attachment(
+        self,
+        chat_id: int,
+        message_id: int,
+        attachment: TelegramAttachment,
+        max_bytes: int,
+    ) -> Path:
+        """Fetch one attachment from Telegram into the chat's inbox dir."""
+        data = self._api("getFile", file_id=attachment.file_id)
+        result = data.get("result") or {}
+        file_path = result.get("file_path")
+        if not file_path:
+            raise RuntimeError(f"getFile returned no file_path for {attachment.file_id}")
+        declared = result.get("file_size") or attachment.file_size
+        if declared is not None and declared > max_bytes:
+            raise RuntimeError(f"attachment too large ({declared} bytes)")
+
+        raw_name = attachment.file_name or Path(file_path).name
+        name = f"{message_id}-{_safe_filename(raw_name, fallback='file')}"
+        dirname = _safe_filename(self._live_telegram_config.attachments_dirname, fallback="inbox")
+        inbox = self.sessions_root / str(chat_id) / dirname
+        inbox.mkdir(parents=True, exist_ok=True)
+        dest = (inbox / name).resolve()
+        if dest.parent != inbox.resolve():
+            raise RuntimeError("attachment name escapes inbox")
+
+        url = f"https://api.telegram.org/file/bot{self.token}/{file_path}"
+        written = 0
+        try:
+            with self.client.stream("GET", url) as resp:
+                resp.raise_for_status()
+                with dest.open("wb") as f:
+                    for chunk in resp.iter_bytes(65536):
+                        written += len(chunk)
+                        if written > max_bytes:
+                            raise RuntimeError(f"attachment exceeds {max_bytes} bytes")
+                        f.write(chunk)
+        except BaseException:
+            dest.unlink(missing_ok=True)
+            raise
+        return dest
+
+    def _ingest_attachments(self, chat_input: ChatInput) -> ChatInput:
+        """Download a message's attachments and append their paths to the text.
+
+        Runs on the turn worker, off the poll loop. A failed or oversized file
+        is annotated rather than dropping the message, so the agent can tell the
+        user something was sent but could not be saved.
+        """
+        if not chat_input.attachments:
+            return chat_input
+        config = self._live_telegram_config
+        if not config.attachments_enabled:
+            return chat_input
+        lines = []
+        for att in chat_input.attachments:
+            try:
+                dest = self._download_attachment(
+                    chat_input.chat_id,
+                    chat_input.message_id,
+                    att,
+                    config.attachments_max_bytes,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Attachment %s (%s) for chat %s failed",
+                    att.file_id,
+                    att.kind,
+                    chat_input.chat_id,
+                )
+                label = att.file_name or att.kind
+                lines.append(f"[attachment could not be saved: {label} ({exc})]")
+                continue
+            rel = f"{dest.parent.name}/{dest.name}"
+            desc = att.kind if att.mime_type is None else f"{att.kind}, {att.mime_type}"
+            lines.append(f"[attachment saved: {rel} ({desc})]")
+        text = chat_input.text
+        for line in lines:
+            text = f"{text}\n{line}" if text else line
+        return dataclasses.replace(chat_input, text=text)
 
     def _send_typing(self, chat_id: int) -> None:
         """Tell Telegram the bot is typing."""

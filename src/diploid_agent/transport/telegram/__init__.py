@@ -13,7 +13,7 @@ from diploid_agent.transport.telegram.formatting import (
     _format_subagent_time,
     _format_thought,
 )
-from diploid_agent.transport.telegram.models import ChatInput
+from diploid_agent.transport.telegram.models import ChatInput, TelegramAttachment
 from diploid_agent.transport.telegram.poller import (
     DeliveryWorker,
     TelegramPoller,
@@ -30,6 +30,7 @@ __all__ = [
     "_THINKING_PREFIX",
     "ChatInput",
     "DeliveryWorker",
+    "TelegramAttachment",
     "TelegramCommandMixin",
     "TelegramPoller",
     "TelegramSenderMixin",

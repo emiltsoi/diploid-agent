@@ -4,7 +4,7 @@ import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Self
 
 import httpx
 
@@ -16,7 +16,12 @@ from diploid_agent.config import (
     WakerConfig,
 )
 from diploid_agent.models import ChatResult
-from diploid_agent.telegram_poll import ChatInput, TelegramPoller, TurnWorker
+from diploid_agent.telegram_poll import (
+    ChatInput,
+    TelegramAttachment,
+    TelegramPoller,
+    TurnWorker,
+)
 from diploid_agent.transport.interactive import AskBlock
 from diploid_agent.transport.telegram import DeliveryWorker, _format_thought
 
@@ -2581,3 +2586,238 @@ def test_handle_update_routes_graceful_restart_with_explicit_service(tmp_path: P
     )
     poller._handle_update(update)
     assert sent == [(12345, "Restarting my-service.service", 1)]
+
+
+# ---------------------------------------------------------------------------
+# Attachment transfer
+# ---------------------------------------------------------------------------
+
+
+def test_parse_update_photo_uses_largest_variant() -> None:
+    update = _update(
+        message={
+            "message_id": 7,
+            "chat": {"id": 12345, "type": "private"},
+            "from": {"id": 1, "is_bot": False},
+            "caption": "look at this",
+            "photo": [
+                {"file_id": "small", "width": 90, "height": 90, "file_size": 100},
+                {"file_id": "big", "width": 800, "height": 800, "file_size": 5000},
+                {"file_id": "mid", "width": 320, "height": 320, "file_size": 800},
+            ],
+        }
+    )
+    parsed = TelegramPoller._parse_update(update)
+    assert isinstance(parsed, ChatInput)
+    assert parsed.text == "look at this"
+    assert len(parsed.attachments) == 1
+    att = parsed.attachments[0]
+    assert att.kind == "photo"
+    assert att.file_id == "big"
+    assert att.file_size == 5000
+
+
+def test_parse_update_captionless_media_still_parsed() -> None:
+    update = _update(
+        message={
+            "message_id": 8,
+            "chat": {"id": 12345, "type": "private"},
+            "from": {"id": 1, "is_bot": False},
+            "document": {
+                "file_id": "doc1",
+                "file_name": "notes.txt",
+                "mime_type": "text/plain",
+                "file_size": 42,
+            },
+        }
+    )
+    parsed = TelegramPoller._parse_update(update)
+    assert isinstance(parsed, ChatInput)
+    assert parsed.text == ""
+    assert len(parsed.attachments) == 1
+    att = parsed.attachments[0]
+    assert att.kind == "document"
+    assert att.file_name == "notes.txt"
+    assert att.mime_type == "text/plain"
+
+
+def test_parse_update_all_media_keys() -> None:
+    for key in ("voice", "video", "video_note", "sticker", "animation", "audio"):
+        update = _update(
+            message={
+                "message_id": 9,
+                "chat": {"id": 12345, "type": "private"},
+                "from": {"id": 1, "is_bot": False},
+                key: {"file_id": f"{key}-id"},
+            }
+        )
+        parsed = TelegramPoller._parse_update(update)
+        assert parsed is not None, key
+        assert parsed.attachments[0].kind == key
+
+
+class _FakeStreamResponse:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = chunks
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        pass
+
+    def raise_for_status(self) -> None:
+        pass
+
+    def iter_bytes(self, size: int) -> Any:
+        yield from self._chunks
+
+
+class _AttachmentClient:
+    """Fake httpx client: post() answers getFile, stream() serves file bytes."""
+
+    def __init__(
+        self,
+        file_path: str = "photos/f.jpg",
+        file_size: int = 4,
+        chunks: list[bytes] | None = None,
+    ) -> None:
+        self._file_path = file_path
+        self._file_size = file_size
+        self._chunks = chunks if chunks is not None else [b"data"]
+        self.streamed_urls: list[str] = []
+
+    def post(self, url: str, **kwargs: Any) -> _FakeResponse:
+        return _FakeResponse(
+            {
+                "ok": True,
+                "result": {"file_path": self._file_path, "file_size": self._file_size},
+            }
+        )
+
+    def stream(self, method: str, url: str, **kwargs: Any) -> _FakeStreamResponse:
+        self.streamed_urls.append(url)
+        return _FakeStreamResponse(self._chunks)
+
+
+def _attachment_poller(tmp_path: Path, client: Any) -> TelegramPoller:
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+        sessions_root=tmp_path / "sessions",
+    )
+    poller._local.client = client
+    return poller
+
+
+def test_ingest_saves_attachment_and_annotates(tmp_path: Path) -> None:
+    client = _AttachmentClient(file_path="documents/notes.txt", chunks=[b"hello file"])
+    poller = _attachment_poller(tmp_path, client)
+    ci = ChatInput(
+        chat_id=12345,
+        message_id=11,
+        text="read this",
+        attachments=(
+            TelegramAttachment(
+                kind="document",
+                file_id="doc1",
+                file_name="notes.txt",
+                mime_type="text/plain",
+            ),
+        ),
+    )
+    out = poller._ingest_attachments(ci)
+    dest = tmp_path / "sessions" / "12345" / "inbox" / "11-notes.txt"
+    assert dest.read_bytes() == b"hello file"
+    assert "read this\n[attachment saved: inbox/11-notes.txt (document, text/plain)]" == out.text
+
+
+def test_ingest_captionless_media_text_is_annotation(tmp_path: Path) -> None:
+    client = _AttachmentClient(file_path="photos/f.jpg", chunks=[b"\xff"])
+    poller = _attachment_poller(tmp_path, client)
+    ci = ChatInput(
+        chat_id=12345,
+        message_id=12,
+        text="",
+        attachments=(TelegramAttachment(kind="photo", file_id="p1"),),
+    )
+    out = poller._ingest_attachments(ci)
+    dest = tmp_path / "sessions" / "12345" / "inbox" / "12-f.jpg"
+    assert dest.read_bytes() == b"\xff"
+    assert out.text == "[attachment saved: inbox/12-f.jpg (photo)]"
+
+
+def test_ingest_disabled_leaves_text_alone(tmp_path: Path) -> None:
+    client = _AttachmentClient()
+    poller = _attachment_poller(tmp_path, client)
+    poller._static_telegram_config = TelegramConfig(attachments_enabled=False)
+    ci = ChatInput(
+        chat_id=12345,
+        message_id=13,
+        text="cap",
+        attachments=(TelegramAttachment(kind="document", file_id="d"),),
+    )
+    out = poller._ingest_attachments(ci)
+    assert out.text == "cap"
+    assert client.streamed_urls == []
+    assert not (tmp_path / "sessions").exists()
+
+
+def test_ingest_oversized_annotates_and_writes_nothing(tmp_path: Path) -> None:
+    client = _AttachmentClient(file_size=50_000_000)
+    poller = _attachment_poller(tmp_path, client)
+    ci = ChatInput(
+        chat_id=12345,
+        message_id=14,
+        text="",
+        attachments=(TelegramAttachment(kind="video", file_id="v", file_size=50_000_000),),
+    )
+    out = poller._ingest_attachments(ci)
+    assert "could not be saved" in out.text
+    assert client.streamed_urls == []
+
+
+def test_ingest_stream_overrun_annotates_and_removes_partial(tmp_path: Path) -> None:
+    client = _AttachmentClient(
+        file_path="documents/big.bin",
+        file_size=None,
+        chunks=[b"x" * 65_536] * 400,
+    )
+    client._file_size = None
+    poller = _attachment_poller(tmp_path, client)
+    poller._static_telegram_config = TelegramConfig(attachments_max_bytes=100_000)
+    ci = ChatInput(
+        chat_id=12345,
+        message_id=15,
+        text="",
+        attachments=(TelegramAttachment(kind="document", file_id="d", file_name="big.bin"),),
+    )
+    out = poller._ingest_attachments(ci)
+    assert "could not be saved" in out.text
+    assert not (tmp_path / "sessions" / "12345" / "inbox" / "15-big.bin").exists()
+
+
+def test_ingest_getfile_failure_annotates(tmp_path: Path) -> None:
+    class _NoFile:
+        def post(self, url: str, **kwargs: Any) -> _FakeResponse:
+            return _FakeResponse({"ok": True, "result": {}})
+
+    poller = _attachment_poller(tmp_path, _NoFile())
+    ci = ChatInput(
+        chat_id=12345,
+        message_id=16,
+        text="",
+        attachments=(TelegramAttachment(kind="photo", file_id="p"),),
+    )
+    out = poller._ingest_attachments(ci)
+    assert "could not be saved" in out.text
+
+
+def test_safe_filename_strips_path_components() -> None:
+    from diploid_agent.transport.telegram.poller import _safe_filename
+
+    assert _safe_filename("../../etc/passwd", fallback="f") == "passwd"
+    assert _safe_filename("..\\win\\evil.exe", fallback="f") == "win_evil.exe"
+    assert _safe_filename(".../..", fallback="f") == "f"
+    assert _safe_filename("normal-name_v2.jpg", fallback="f") == "normal-name_v2.jpg"

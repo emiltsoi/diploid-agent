@@ -2,6 +2,7 @@
 
 from diploid_agent.transport.telegram import (
     ChatInput,
+    TelegramAttachment,
     TelegramPoller,
     TelegramTransport,
     TurnWorker,
@@ -10,6 +11,7 @@ from diploid_agent.transport.telegram import (
 
 __all__ = [
     "ChatInput",
+    "TelegramAttachment",
     "TelegramPoller",
     "TelegramTransport",
     "TurnWorker",

@@ -6,6 +6,17 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class TelegramAttachment:
+    """A file-bearing Telegram message part awaiting download."""
+
+    kind: str
+    file_id: str
+    file_name: str | None = None
+    mime_type: str | None = None
+    file_size: int | None = None
+
+
+@dataclass(frozen=True)
 class ChatInput:
     """A normalized user message from Telegram, including any reply-to context."""
 
@@ -16,3 +27,4 @@ class ChatInput:
     reply_to_is_bot: bool | None = None
     reply_to_message_id: int | None = None
     callback_query_id: str | None = None
+    attachments: tuple[TelegramAttachment, ...] = ()

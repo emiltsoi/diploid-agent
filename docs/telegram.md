@@ -201,6 +201,44 @@ marker is added.
 The first bot message in a turn is also sent as a Telegram `reply` to your
 message, so the conversation thread is visible.
 
+## Attachments
+
+When a message carries a file — a photo, document, voice note, video, sticker,
+or animation — the poller downloads it through the Bot API (`getFile` plus the
+file endpoint) and saves it under the chat's ACP workspace:
+
+```
+<sessions_root>/<chat_id>/inbox/<message_id>-<name>
+```
+
+The agent then sees the caption (if any) plus one annotation per file:
+
+```
+[attachment saved: inbox/231-holiday.jpg (photo, image/jpeg)]
+```
+
+so it can `read` the file like anything else in its workspace. Because the
+inbox lives under the session directory, a `session:` cron `file` trigger can
+also watch it — an arriving photo can wake a job without spending a turn.
+
+Details:
+
+- The `photo` field is a size ladder; only the largest variant is downloaded.
+- A captionless attachment still reaches the agent — the annotation *is* the
+  message text.
+- Filenames are sanitized to a single safe segment and prefixed with the
+  message id, so `../../etc/passwd` lands as `passwd` inside the inbox.
+- `harness.telegram.attachments_max_bytes` (default 20 MB, the Bot API's
+  `getFile` ceiling) is enforced on both the declared size and the streamed
+  body; a partial download is removed.
+- A download that fails or is skipped is annotated as
+  `[attachment could not be saved: ...]` rather than dropping the message.
+- `harness.telegram.attachments_enabled: false` restores the old behavior:
+  media is ignored entirely. `attachments_dirname` renames the subfolder.
+
+Downloads happen on the turn worker, not the poll loop, so a large file cannot
+stall `getUpdates` for other chats.
+
 ## Commands
 
 | Command | Action |

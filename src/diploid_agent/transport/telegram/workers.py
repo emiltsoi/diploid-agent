@@ -193,6 +193,8 @@ class TurnWorker(threading.Thread):
         placeholder is only created after the thought stream completes, so the
         final reply always ends up below the thought block.
         """
+        chat_input = self.poller._ingest_attachments(chat_input)
+
         thought_id: int | None = None
         message_id: int | None = None
         if self.poller._stream_thoughts_enabled(self.chat_id):

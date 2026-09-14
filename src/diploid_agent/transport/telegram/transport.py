@@ -136,6 +136,7 @@ def main() -> int:
         message_format=config.harness.telegram.message_format,
         code_style=config.harness.telegram.code_style,
         state_dir=config.harness.sessions_root / ".poller-placeholders",
+        sessions_root=config.harness.sessions_root,
         reply_preview_chars=config.harness.memory.max_bot_reply_quote_chars,
         metrics=metrics,
     )
