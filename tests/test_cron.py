@@ -918,7 +918,12 @@ def _touch(path: Path, delta: float = 5.0) -> None:
 
 def _finish_running(svc: CronService, job_id: str) -> None:
     state = svc._state.get(job_id)
-    assert state is not None and state.running_task_id is not None
+    assert state is not None
+    if state.running_task_id is None:
+        # A fast task (e.g. `echo hi`) can complete and be finalized by the
+        # engine's own event thread before this helper observes it.
+        assert state.last_task_id is not None and state.last_finished_at is not None
+        return
     deadline = time.time() + 5
     task = None
     while time.time() < deadline:
@@ -1352,7 +1357,10 @@ def test_trigger_queued_refire_respects_cooldown(tmp_path: Path) -> None:
     _touch(watch)
     svc._tick()  # fire #1
     state = svc._state.get("watcher")
-    assert state.running_task_id is not None
+    # `echo hi` can finish and finalize before we read the state — the durable
+    # proof a run materialized is last_task_id, not running_task_id.
+    first_task = state.last_task_id
+    assert first_task is not None
     # Change the file mid-run, inside the cooldown window.
     _touch(watch, delta=10)
     svc._tick()
@@ -1362,13 +1370,15 @@ def test_trigger_queued_refire_respects_cooldown(tmp_path: Path) -> None:
     assert state.trigger_seen_mtime != watch.stat().st_mtime
     _finish_running(svc, "watcher")
     svc._tick()  # run done, window still closed — edge still pending
-    assert svc._state.get("watcher").running_task_id is None
+    assert svc._state.get("watcher").last_task_id == first_task
     # Once the window elapses the pending edge fires once.
     state = svc._state.get("watcher")
     state.trigger_fired_at = time.time() - 700
     svc._state.update(state)
     svc._tick()
-    assert svc._state.get("watcher").running_task_id is not None
+    watcher = svc._state.get("watcher")
+    assert watcher.last_task_id != first_task
+    assert watcher.trigger_seen_mtime == watch.stat().st_mtime
 
 
 def test_hot_edit_body_trigger_keeps_cooldown(tmp_path: Path) -> None:
