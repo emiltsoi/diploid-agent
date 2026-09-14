@@ -37,15 +37,16 @@ def _listener(name: str, calls: list) -> ControlListener:
     )
 
 
-def _send_restart(path: Path, service: str, reason: str = "test") -> dict:
+def _send_restart(
+    path: Path, service: str, reason: str = "test", token: str | None = None
+) -> dict:
+    payload = {"action": "restart_service", "service": service, "reason": reason}
+    if token is not None:
+        payload["token"] = token
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
         s.settimeout(5.0)
         s.connect(str(path))
-        s.sendall(
-            json.dumps({"action": "restart_service", "service": service, "reason": reason}).encode(
-                "utf-8"
-            )
-        )
+        s.sendall(json.dumps(payload).encode("utf-8"))
         return json.loads(s.recv(1024).decode("utf-8"))
 
 
@@ -80,7 +81,7 @@ def test_close_then_ensure_listening_rebinds_same_path() -> None:
         assert path.exists()
 
         # A restart request still reaches the handler after the re-bind.
-        ack = _send_restart(path, name, reason="rebind")
+        ack = _send_restart(path, name, reason="rebind", token=listener._token)
         assert ack["status"] == "ok"
         assert ack["pid"] == os.getpid()
         deadline = time.time() + 2.0
@@ -120,7 +121,7 @@ def test_stale_socket_file_is_rebound() -> None:
     second = _listener(name, calls)
     try:
         assert second.socket_path == path
-        ack = _send_restart(path, name)
+        ack = _send_restart(path, name, token=second._token)
         assert ack["status"] == "ok"
     finally:
         second.close()
@@ -190,7 +191,9 @@ def test_in_process_listener_shares_live_socket() -> None:
         assert second.env()["DIPLOID_CONTROL_SOCKET"] == str(first.socket_path)
         assert second._control_listener_thread is None
 
-        ack = _send_restart(first.socket_path, name, reason="shared")
+        # The sharer adopted the owner's token, so its children's requests pass.
+        assert second.env()["DIPLOID_CONTROL_TOKEN"] == first._token
+        ack = _send_restart(first.socket_path, name, reason="shared", token=second._token)
         assert ack["status"] == "ok"
         deadline = time.time() + 2.0
         while not calls_a and time.time() < deadline:
@@ -239,8 +242,28 @@ def test_ack_carries_gate_status() -> None:
         watchdog_timeout=30.0,
     )
     try:
-        ack = _send_restart(listener.socket_path, name, reason="gated")
+        ack = _send_restart(listener.socket_path, name, reason="gated", token=listener._token)
         assert ack["status"] == "rejected: gated"
         assert ack["service"] == name
+    finally:
+        listener.close()
+
+
+def test_restart_requires_control_token() -> None:
+    """Restart requests must carry the listener's DIPLOID_CONTROL_TOKEN."""
+    name = _name()
+    calls: list = []
+    listener = _listener(name, calls)
+    try:
+        # Missing token -> rejected, callback never fires.
+        ack = _send_restart(listener.socket_path, name)
+        assert ack["status"] == "rejected: bad control token"
+        # Wrong token -> same.
+        ack = _send_restart(listener.socket_path, name, token="forged")
+        assert ack["status"] == "rejected: bad control token"
+        # Correct token -> dispatched.
+        ack = _send_restart(listener.socket_path, name, token=listener._token)
+        assert ack["status"] == "ok"
+        assert calls == [(name, "test")]
     finally:
         listener.close()

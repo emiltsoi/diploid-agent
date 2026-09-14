@@ -98,13 +98,16 @@ tool calls including shell execution. This would let the agent run
   `sessions-*/runtime-overrides.yaml` — the policy boundary is not mutable
   through the channel it governs (only the fixed override sections `task`,
   `waker`, `timer`, `notifications`, `telegram`, `plugins` are).
-  Residual risk, stated honestly: all family services run as the same uid, so a
-  same-uid process can still open a peer's control socket directly and name the
-  peer's own unit — the request is then judged by the *peer's* allowlist, not
-  the caller's. Within the family domain this is accepted: "any family agent
-  can restart any family service whose persona has restart_enabled on." A
-  per-service control token baked into each child's env (listener rejects
-  token-less requests) closes it if that ever stops being acceptable.
+- The control socket additionally requires a per-boot `DIPLOID_CONTROL_TOKEN`
+  (random, in-memory only): each `ControlListener` generates its own and
+  rejects `restart_service` requests without it, and the token reaches children
+  only through the baked env — it never crosses the wire except inside a
+  request to the socket that owns it. This closes the same-uid deputy case: a
+  process that can connect to a *peer's* socket still cannot restart it,
+  because it cannot produce the peer's token. In-process listeners sharing the
+  stable path adopt the owner's token via a module-local registry, so a second
+  same-pid client's children keep working. `control_ping` probes stay
+  token-free — they only ever return pid/service.
 - Task-spawned ACP children (subagents, cron phantoms) get no restart channel at
   all: `TaskEngine._run_acp` builds their engine with `service_name=None`,
   so their `DIPLOID_CONTROL_SOCKET` points at an unbound dead-end path.

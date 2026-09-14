@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import socket
 import stat
 import tempfile
@@ -17,6 +18,12 @@ from pathlib import Path
 from diploid_agent.acp_client.errors import AcpTransportError
 
 logger = logging.getLogger(__name__)
+
+# Live in-process listeners by socket path. Same-pid listeners sharing the
+# stable path adopt the owner's control token so their children (baked with
+# the sharer's env) still pass the token check. A foreign process can never
+# reach this table — the token stays out of the wire protocol.
+_LIVE_LISTENERS: dict[str, ControlListener] = {}
 
 _CONTROL_DIR_MODE = 0o700
 _PROBE_TIMEOUT_SECONDS = 0.5
@@ -75,6 +82,11 @@ class ControlListener:
         # (st_dev, st_ino) of the socket file this instance bound, so close()
         # never unlinks a socket rebound by a newer owner of the stable path.
         self._bound_stat: tuple[int, int] | None = None
+        # Capability baked into children via DIPLOID_CONTROL_TOKEN; the
+        # listener rejects restart requests without it. Regenerated when this
+        # instance actually binds (an adopted token belongs to the owner).
+        self._token = secrets.token_hex(16)
+        self._token_adopted = False
         try:
             self._start()
         except ControlSocketInUseError as exc:
@@ -140,6 +152,7 @@ class ControlListener:
                         "ACP control socket %s already served in-process; sharing",
                         self._control_socket_path,
                     )
+                    self._adopt_owner_token()
                     return None
                 deadline = time.monotonic() + _PROBE_LIVE_RETRY_SECONDS
                 while state == "live_foreign" and time.monotonic() < deadline:
@@ -150,6 +163,7 @@ class ControlListener:
                         "ACP control socket %s already served in-process; sharing",
                         self._control_socket_path,
                     )
+                    self._adopt_owner_token()
                     return None
                 if state != "stale":
                     raise ControlSocketInUseError(self._control_socket_path)
@@ -160,12 +174,29 @@ class ControlListener:
             sock.settimeout(1.0)
             st = self._control_socket_path.lstat()
             self._bound_stat = (st.st_dev, st.st_ino)
+            if self._token_adopted:
+                # We were a passenger and are becoming the owner: fresh token,
+                # since env() is re-read for every new child anyway.
+                self._token = secrets.token_hex(16)
+                self._token_adopted = False
+            _LIVE_LISTENERS[str(self._control_socket_path)] = self
             return sock
         except ControlSocketInUseError:
             raise
         except Exception as exc:
             logger.warning("Failed to bind ACP control socket", exc_info=exc)
             return None
+
+    def _adopt_owner_token(self) -> None:
+        """Copy the in-process socket owner's control token (share case)."""
+        owner = _LIVE_LISTENERS.get(str(self._control_socket_path))
+        if owner is not None and owner is not self:
+            self._token = owner._token
+            self._token_adopted = True
+
+    def _deregister(self) -> None:
+        if _LIVE_LISTENERS.get(str(self._control_socket_path)) is self:
+            _LIVE_LISTENERS.pop(str(self._control_socket_path), None)
 
     def _ensure_control_dir_permissions(self) -> None:
         """Enforce that the control socket directory is private to this user.
@@ -276,7 +307,13 @@ class ControlListener:
                         reason = msg.get("reason", "")
                         status = "ok"
                         if action == "restart_service":
-                            if self._on_service_restart is None:
+                            if msg.get("token") != self._token:
+                                logger.warning(
+                                    "Control request for %s rejected: bad/missing token",
+                                    service,
+                                )
+                                status = "rejected: bad control token"
+                            elif self._on_service_restart is None:
                                 status = "ignored"
                             else:
                                 status = (
@@ -298,6 +335,7 @@ class ControlListener:
                 sock.close()
             except OSError:
                 pass
+            self._deregister()
             self._unlink_if_owned()
 
     def close(self) -> None:
@@ -312,6 +350,7 @@ class ControlListener:
             except OSError:
                 pass
             self._control_socket = None
+        self._deregister()
         self._unlink_if_owned()
         # The stable dir intentionally persists across process restarts.
 
@@ -320,4 +359,5 @@ class ControlListener:
         return {
             "DIPLOID_CONTROL_SOCKET": str(self._control_socket_path),
             "DIPLOID_SERVICE_NAME": self._service_name or "unknown.service",
+            "DIPLOID_CONTROL_TOKEN": self._token,
         }

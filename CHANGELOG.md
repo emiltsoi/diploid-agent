@@ -17,6 +17,15 @@
   bypass the gate. Task-spawned ACP children (subagents, cron phantoms) are
   built with `service_name=None`, so their `DIPLOID_CONTROL_SOCKET` points at
   an unbound dead end — they cannot reach the restart channel at all.
+- Control-socket capability token: each `ControlListener` generates a per-boot
+  `DIPLOID_CONTROL_TOKEN` (in-memory only) and rejects `restart_service`
+  requests without it. The token reaches children only through the baked env,
+  so a same-uid process that can connect to a peer's socket still cannot
+  restart it — closing the confused-deputy residual. In-process listeners that
+  share the stable path adopt the owner's token via a module registry; a
+  passenger that later binds regenerates. `control_ping` probes stay
+  token-free. The sandbox `systemctl` shim and `harness_restart` both send the
+  token; token-less legacy children fail closed until their transport re-bakes.
 
 ## 0.6.4 — 2026-09-14
 

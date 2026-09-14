@@ -53,6 +53,7 @@ def _send_request(command: str, unit: str, reason: str) -> int:
                 "service": unit or service_name,
                 "command": command,
                 "reason": reason,
+                "token": os.environ.get("DIPLOID_CONTROL_TOKEN", ""),
             }
             s.sendall(json.dumps(payload).encode("utf-8"))
             data = b""
