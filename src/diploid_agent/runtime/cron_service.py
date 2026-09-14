@@ -520,9 +520,13 @@ class CronService:
 
     @staticmethod
     def _reset_trigger(state: CronJobState) -> None:
-        """Re-bootstrap a trigger after its spec was hot-edited."""
+        """Re-bootstrap a trigger after its spec was hot-edited.
+
+        ``trigger_fired_at`` deliberately survives: an edit may re-arm the
+        observation but must not buy a fire inside the previous cooldown
+        window.
+        """
         state.trigger_seen_mtime = None
-        state.trigger_fired_at = None
         state.trigger_held = False
         state.queued_due = False
         state.next_due_at = None  # a schedule→trigger conversion may leave one
@@ -568,6 +572,11 @@ class CronService:
             return None
         if mtime == state.trigger_seen_mtime:
             return None
+        # Cooldown gates *consumption*, not just firing: an edge inside the
+        # window stays pending so a queued re-fire can never chain
+        # fire-on-completion in defiance of the floor.
+        if state.trigger_fired_at is not None and now - state.trigger_fired_at < cooldown:
+            return None
         if state.running_task_id is not None:
             # Consume the edge once: skip marks it, queue owes a re-fire.
             state.trigger_seen_mtime = mtime
@@ -576,8 +585,6 @@ class CronService:
             else:
                 state.last_status = "skipped"
             self._state.update(state)
-            return None
-        if state.trigger_fired_at is not None and now - state.trigger_fired_at < cooldown:
             return None
         state.trigger_seen_mtime = mtime
         self._state.update(state)
@@ -611,7 +618,12 @@ class CronService:
             return None
         if state.trigger_held:
             return None
-        # New edge.
+        # New edge. Cooldown gates consumption, not just firing — inside the
+        # window the edge stays pending and is re-observed once both the run
+        # and the window have passed (an edge whose condition clears first
+        # simply evaporates).
+        if state.trigger_fired_at is not None and now - state.trigger_fired_at < cooldown:
+            return None
         if state.running_task_id is not None:
             state.trigger_held = True  # consume the edge once
             if resolved.spec.overlap == "queue":
@@ -619,8 +631,6 @@ class CronService:
             else:
                 state.last_status = "skipped"
             self._state.update(state)
-            return None
-        if state.trigger_fired_at is not None and now - state.trigger_fired_at < cooldown:
             return None
         state.trigger_held = True
         self._state.update(state)

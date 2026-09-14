@@ -80,7 +80,10 @@ firing condition differs.
 
 `cooldown_seconds` bounds refires (default `min_interval_seconds`);
 explicit values below `min_interval_seconds` drop the job, because a
-trigger under the floor is a loop wearing a watch.
+trigger under the floor is a loop wearing a watch. The cooldown gates
+edge *consumption*, not just firing — an edge observed inside the window
+is left pending, so a queued re-fire (`overlap: queue`) can never chain
+fire-on-completion in defiance of the floor.
 
 ### File trigger path confinement
 
@@ -101,9 +104,11 @@ Trigger observations persist on the job's `cron_state.jsonl` row
 (`trigger_seen_mtime`, `trigger_fired_at`, `trigger_held`) so cooldowns
 and edge state survive restarts. A hot edit to the `trigger:` block
 re-bootstraps the state — the first observation of the new spec adopts
-without firing. Converting a job between `schedule:` and `trigger:` is a
-hot edit like any other. `POST /cron/<id>/run` fires a trigger job
-without consuming its cooldown or edge state.
+without firing — but `trigger_fired_at` deliberately survives the reset,
+so an edit cannot buy a fire inside the previous cooldown window.
+Converting a job between `schedule:` and `trigger:` is a hot edit like
+any other. `POST /cron/<id>/run` fires a trigger job without consuming
+its cooldown or edge state.
 
 ## Call types
 

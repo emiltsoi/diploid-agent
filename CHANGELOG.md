@@ -21,7 +21,10 @@
   overlap policy, failure/auto-disable, `POST /cron/<id>/run`, and all
   delivery modes; `GET /cron` and `harness_cron_list` expose `trigger`
   and `trigger_state`. A trigger-spec hot edit re-bootstraps the
-  observation state; the phantom prompt carries a `Trigger:` line.
+  observation state (the cooldown anchor survives, so an edit can't buy a
+  fire inside the old window); the phantom prompt carries a `Trigger:`
+  line. Cooldown gates edge consumption, not just firing, so a queued
+  re-fire can never chain fire-on-completion.
 - Cron Wave B: `delivery: turn` now validates and enqueues a wake
   (`reason=cron:<id>`, `payload.user_message` = status + summary) that opens
   a real turn on the owning chat. Turn deliveries share the self-wake

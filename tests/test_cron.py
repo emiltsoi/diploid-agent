@@ -1283,14 +1283,16 @@ def test_hot_edit_trigger_resets_state(tmp_path: Path) -> None:
     _touch(watch)
     svc._tick()
     _finish_running(svc, "watcher")
-    assert svc._state.get("watcher").trigger_fired_at is not None
+    fired_at = svc._state.get("watcher").trigger_fired_at
+    assert fired_at is not None
     # Hot-edit the trigger path: state re-bootstraps — first sight of the new
-    # path adopts without firing.
+    # path adopts without firing — but the cooldown anchor survives so an
+    # edit cannot buy a fire inside the previous window.
     _touch(tmp_path / "persona" / "other.txt")
     crons.write_text(yaml.safe_dump({"jobs": [_file_job("other.txt")]}))
     svc._tick()
     state = svc._state.get("watcher")
-    assert state.trigger_fired_at is None
+    assert state.trigger_fired_at == fired_at
     assert state.trigger_seen_mtime is not None  # adopted the new file
     assert state.running_task_id is None
 
@@ -1334,3 +1336,66 @@ def test_get_cron_route_shows_trigger(tmp_path: Path) -> None:
     assert job["schedule"] is None
     assert job["trigger"] == {"type": "file", "path": "watch.txt"}
     assert job["trigger_state"]["seen_mtime"] is not None
+
+
+def test_trigger_queued_refire_respects_cooldown(tmp_path: Path) -> None:
+    """Review fix: an edge inside the cooldown window must not be consumed —
+    otherwise a chatty file + overlap=queue chains a fire on every run
+    completion and the anti-loop floor is defeated."""
+    watch = tmp_path / "persona" / "watch.txt"
+    _touch(watch)
+    job = _file_job("watch.txt", overlap="queue")
+    job["trigger"]["cooldown_seconds"] = 600
+    config = _make_config(tmp_path, persona_crons={"jobs": [job]})
+    svc = _make_service(config, tmp_path)
+    svc._tick()
+    _touch(watch)
+    svc._tick()  # fire #1
+    state = svc._state.get("watcher")
+    assert state.running_task_id is not None
+    # Change the file mid-run, inside the cooldown window.
+    _touch(watch, delta=10)
+    svc._tick()
+    state = svc._state.get("watcher")
+    # The edge is NOT consumed — no queued re-fire is owed yet.
+    assert state.queued_due is False
+    assert state.trigger_seen_mtime != watch.stat().st_mtime
+    _finish_running(svc, "watcher")
+    svc._tick()  # run done, window still closed — edge still pending
+    assert svc._state.get("watcher").running_task_id is None
+    # Once the window elapses the pending edge fires once.
+    state = svc._state.get("watcher")
+    state.trigger_fired_at = time.time() - 700
+    svc._state.update(state)
+    svc._tick()
+    assert svc._state.get("watcher").running_task_id is not None
+
+
+def test_hot_edit_body_trigger_keeps_cooldown(tmp_path: Path) -> None:
+    """Review fix: trigger_fired_at survives a hot edit — re-arming the
+    observation must not let a held-true condition fire inside the old
+    cooldown window."""
+    body = _body_file(tmp_path)
+    body.write_text(json.dumps({"energy": 30}))
+    job = _body_job()
+    job["trigger"]["cooldown_seconds"] = 600
+    crons = tmp_path / "persona" / "crons.yaml"
+    config = _make_config(tmp_path, persona_crons={"jobs": [job]})
+    svc = _make_service(config, tmp_path)
+    svc._tick()  # edge → fire
+    _finish_running(svc, "bodyguard")
+    fired_at = svc._state.get("bodyguard").trigger_fired_at
+    # Hot-edit the threshold while the condition still holds.
+    job = _body_job(value=20)
+    job["trigger"]["cooldown_seconds"] = 600
+    crons.write_text(yaml.safe_dump({"jobs": [job]}))
+    svc._tick()
+    state = svc._state.get("bodyguard")
+    assert state.trigger_fired_at == fired_at  # anchor survived the edit
+    assert state.running_task_id is None  # inside the old window — no fire
+    assert state.trigger_held is False  # observation re-armed, edge pending
+    # When the window ends, the still-true condition fires once.
+    state.trigger_fired_at = time.time() - 700
+    svc._state.update(state)
+    svc._tick()
+    assert svc._state.get("bodyguard").running_task_id is not None
