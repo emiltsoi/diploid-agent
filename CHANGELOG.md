@@ -4,6 +4,15 @@
 
 ### Added
 
+- Telegram STT: `voice`, `audio`, and `video_note` attachments can be
+  transcribed at ingest — `harness.telegram.stt_provider` selects
+  `none` (default), `faster-whisper` (optional package, one cached
+  `WhisperModel` per `stt_model` size, CPU int8), or `command` (runs
+  `stt_command <file>`, stdout is the transcript, 60s timeout). The transcript
+  rides the message annotation as `[transcript: "..."]`; failures annotate
+  `[transcript unavailable]` and keep the file. Also fixes the standalone
+  poller entrypoint never threading the `attachments_*` fields through
+  `TelegramPoller`'s kwargs — they were unreachable from YAML.
 - Telegram attachments: messages carrying a photo, document, voice, video,
   video note, sticker, or animation are now downloaded on the turn worker via
   `getFile` + the file endpoint into the chat's ACP workspace at

@@ -239,6 +239,36 @@ Details:
 Downloads happen on the turn worker, not the poll loop, so a large file cannot
 stall `getUpdates` for other chats.
 
+### Transcription (STT)
+
+Voice notes, audio files, and video notes can be transcribed at ingest, right
+after the download:
+
+```yaml
+telegram:
+  stt_provider: faster-whisper   # none | faster-whisper | command
+  stt_model: base                # whisper size for faster-whisper
+  stt_command: ""                # command provider: invoked as `cmd <file>`,
+                                 # stdout becomes the transcript
+```
+
+The transcript is appended to the message annotation:
+
+```
+[attachment saved: inbox/2373-voice.oga (voice, audio/ogg)]
+[transcript: "love, check the evening job"]
+```
+
+- `none` (default) skips transcription entirely.
+- `faster-whisper` requires the package in the poller's Python env (it is not
+  a hard dependency). One `WhisperModel` per `stt_model` size is loaded and
+  cached; CPU int8 inference is enough for message-length notes.
+- `command` runs `stt_command <file>` with a 60s timeout — the escape hatch
+  for whisper.cpp, a host-side speech bridge, or anything else that prints a
+  transcript.
+- A provider failure annotates `[transcript unavailable]` rather than
+  dropping the message; the audio file is kept either way.
+
 ## Commands
 
 | Command | Action |

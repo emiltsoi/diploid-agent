@@ -2821,3 +2821,120 @@ def test_safe_filename_strips_path_components() -> None:
     assert _safe_filename("..\\win\\evil.exe", fallback="f") == "win_evil.exe"
     assert _safe_filename(".../..", fallback="f") == "f"
     assert _safe_filename("normal-name_v2.jpg", fallback="f") == "normal-name_v2.jpg"
+
+
+# ---------------------------------------------------------------------------
+# STT (voice transcription)
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_voice_transcribes_with_command_provider(tmp_path: Path) -> None:
+    client = _AttachmentClient(file_path="voice/v.oga", chunks=[b"ogg-bytes"])
+    poller = _attachment_poller(tmp_path, client)
+    poller._static_telegram_config = TelegramConfig(
+        stt_provider="command", stt_command="echo heard:"
+    )
+    ci = ChatInput(
+        chat_id=12345,
+        message_id=20,
+        text="",
+        attachments=(TelegramAttachment(kind="voice", file_id="v1", mime_type="audio/ogg"),),
+    )
+    out = poller._ingest_attachments(ci)
+    assert "[attachment saved: inbox/20-v.oga (voice, audio/ogg)]" in out.text
+    assert '[transcript: "heard:' in out.text
+
+
+def test_ingest_provider_none_adds_no_transcript(tmp_path: Path) -> None:
+    client = _AttachmentClient(file_path="voice/v.oga", chunks=[b"ogg"])
+    poller = _attachment_poller(tmp_path, client)
+    ci = ChatInput(
+        chat_id=12345,
+        message_id=21,
+        text="",
+        attachments=(TelegramAttachment(kind="voice", file_id="v"),),
+    )
+    out = poller._ingest_attachments(ci)
+    assert "transcript" not in out.text
+
+
+def test_ingest_photo_never_transcribes(tmp_path: Path) -> None:
+    client = _AttachmentClient(file_path="photos/p.jpg", chunks=[b"\xff"])
+    poller = _attachment_poller(tmp_path, client)
+    poller._static_telegram_config = TelegramConfig(
+        stt_provider="command", stt_command="echo should-not-run"
+    )
+    ci = ChatInput(
+        chat_id=12345,
+        message_id=22,
+        text="",
+        attachments=(TelegramAttachment(kind="photo", file_id="p"),),
+    )
+    out = poller._ingest_attachments(ci)
+    assert "transcript" not in out.text
+
+
+def test_ingest_failing_stt_command_annotates_unavailable(tmp_path: Path) -> None:
+    client = _AttachmentClient(file_path="voice/v.oga", chunks=[b"ogg"])
+    poller = _attachment_poller(tmp_path, client)
+    poller._static_telegram_config = TelegramConfig(stt_provider="command", stt_command="false")
+    ci = ChatInput(
+        chat_id=12345,
+        message_id=23,
+        text="",
+        attachments=(TelegramAttachment(kind="voice", file_id="v"),),
+    )
+    out = poller._ingest_attachments(ci)
+    assert "[transcript unavailable]" in out.text
+
+
+def test_transcribe_faster_whisper_dispatch(tmp_path: Path, monkeypatch: Any) -> None:
+    import sys
+    import types
+
+    import diploid_agent.transport.telegram.voice as voice_mod
+
+    class _Seg:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    class _Model:
+        def __init__(self, name: str, **kwargs: Any) -> None:
+            assert name == "tiny"
+
+        def transcribe(self, path: str) -> tuple[list[_Seg], Any]:
+            return [_Seg(" hello "), _Seg(" world ")], SimpleNamespace()
+
+    fake = types.ModuleType("faster_whisper")
+    fake.WhisperModel = _Model
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake)
+    voice_mod._model_cache.clear()
+
+    cfg = TelegramConfig(stt_provider="faster-whisper", stt_model="tiny")
+    assert voice_mod.transcribe(tmp_path / "x.oga", cfg) == "hello world"
+    # Second call reuses the cached model (no second __init__ assertion needed —
+    # a re-instantiation would just re-run the same fake; the cache key is
+    # pinned by the model name).
+    assert "tiny" in voice_mod._model_cache
+
+
+def test_transcribe_unknown_provider_returns_none(tmp_path: Path) -> None:
+    from diploid_agent.transport.telegram.voice import transcribe
+
+    cfg = TelegramConfig()
+    object.__setattr__(cfg, "stt_provider", "bogus")
+    assert transcribe(tmp_path / "x.oga", cfg) is None
+
+
+def test_poller_stt_kwargs_reach_static_config() -> None:
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        stt_provider="command",
+        stt_command="whisper-cli",
+        stt_model="base",
+    )
+    cfg = poller._live_telegram_config
+    assert cfg.stt_provider == "command"
+    assert cfg.stt_command == "whisper-cli"
+    assert cfg.stt_model == "base"

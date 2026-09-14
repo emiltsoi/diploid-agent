@@ -100,6 +100,7 @@ def _safe_filename(name: str, *, fallback: str) -> str:
 
 
 from diploid_agent.transport.telegram.models import ChatInput, TelegramAttachment
+from diploid_agent.transport.telegram.voice import TRANSCRIBABLE_KINDS, transcribe
 from diploid_agent.transport.telegram.workers import DeliveryWorker, TurnWorker
 
 from .commands import TelegramCommandMixin
@@ -132,6 +133,12 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
         metrics: Any | None = None,
         message_format: str = "plain",
         code_style: str = "inline",
+        attachments_enabled: bool = True,
+        attachments_max_bytes: int = 20_000_000,
+        attachments_dirname: str = "inbox",
+        stt_provider: str = "none",
+        stt_model: str = "small",
+        stt_command: str = "",
     ):
         self.token = token
         self.metrics = metrics
@@ -151,6 +158,12 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
             min_edit_message_interval=min_edit_message_interval,
             message_format=message_format,
             code_style=code_style,
+            attachments_enabled=attachments_enabled,
+            attachments_max_bytes=attachments_max_bytes,
+            attachments_dirname=attachments_dirname,
+            stt_provider=stt_provider,
+            stt_model=stt_model,
+            stt_command=stt_command,
         )
         self.state_dir = state_dir or Path("sessions") / ".poller-placeholders"
         # Attachments land in <sessions_root>/<chat_id>/<dirname>/, inside the
@@ -411,6 +424,12 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
             rel = f"{dest.parent.name}/{dest.name}"
             desc = att.kind if att.mime_type is None else f"{att.kind}, {att.mime_type}"
             lines.append(f"[attachment saved: {rel} ({desc})]")
+            if att.kind in TRANSCRIBABLE_KINDS:
+                transcript = transcribe(dest, config)
+                if transcript:
+                    lines.append(f'[transcript: "{transcript}"]')
+                elif config.stt_provider != "none":
+                    lines.append("[transcript unavailable]")
         text = chat_input.text
         for line in lines:
             text = f"{text}\n{line}" if text else line

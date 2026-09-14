@@ -128,6 +128,9 @@ class TelegramConfig(BaseModel):
     attachments_enabled: bool = True
     attachments_max_bytes: int = 20_000_000
     attachments_dirname: str = "inbox"
+    stt_provider: Literal["none", "faster-whisper", "command"] = "none"
+    stt_model: str = "small"
+    stt_command: str = ""
 
 
 class MetricsConfig(BaseModel):
