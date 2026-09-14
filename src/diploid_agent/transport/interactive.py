@@ -9,6 +9,7 @@ from typing import Any
 
 ASK_FENCE_RE = re.compile(r"^```ask\s*\n([\s\S]*?)\n```\s*$", re.MULTILINE)
 SAY_FENCE_RE = re.compile(r"^```say\s*\n([\s\S]*?)\n```\s*$", re.MULTILINE)
+FILE_FENCE_RE = re.compile(r"^```file\s*\n([\s\S]*?)\n```\s*$", re.MULTILINE)
 
 ASK_CALLBACK_PREFIX = "ask_"
 ASK_CANCEL_CALLBACK_DATA = f"{ASK_CALLBACK_PREFIX}cancel"
@@ -184,3 +185,31 @@ def extract_say_block(text: str) -> tuple[str, str | None]:
         return text, None
     visible = (text[: match.start()] + text[match.end() :]).strip()
     return visible, body
+
+
+@dataclass(frozen=True)
+class FileRef:
+    """A file the agent wants delivered, plus an optional caption."""
+
+    path: str
+    caption: str = ""
+
+
+def extract_file_blocks(text: str) -> tuple[str, list[FileRef]]:
+    """Extract all ```file fenced blocks — path on the first line, optional caption below.
+
+    Returns the text with every block removed and the refs in order. A block
+    with an empty body is simply dropped.
+    """
+    refs: list[FileRef] = []
+
+    def _sub(match: re.Match[str]) -> str:
+        body = match.group(1).strip()
+        if not body:
+            return ""
+        first, _, rest = body.partition("\n")
+        refs.append(FileRef(path=first.strip(), caption=rest.strip()))
+        return ""
+
+    visible = FILE_FENCE_RE.sub(_sub, text).strip()
+    return visible, refs

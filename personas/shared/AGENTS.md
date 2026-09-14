@@ -61,6 +61,27 @@ Use it deliberately — a voice note is for moments that deserve a voice, not
 every reply. Keep it under ~800 characters (`tts_max_chars` cap) and put it at
 the end of the message.
 
+## Sending files
+
+A fenced `file` block in your reply uploads a file from your chat workspace to
+Telegram — the send-half of attachments. First line is the path (relative to
+your workspace, or absolute under it); any lines below become the caption.
+Multiple blocks send multiple files.
+
+````
+Here is the report I promised.
+
+```file
+outbox/september-notes.pdf
+A short summary for September.
+```
+````
+
+Images go as photos, `.gif` as animations, video as video; everything else
+arrives as a document. If the path is missing, escapes the workspace, or the
+upload fails, the user still sees `[file] <path>` plus your caption — nothing
+is silently dropped. Keep files under `attachments_max_bytes` (20 MB default).
+
 ## Memory tools
 
 The `diploid-memory` MCP server is always available. When you learn a fact, preference, decision, or anything that should survive this session, make it durable:

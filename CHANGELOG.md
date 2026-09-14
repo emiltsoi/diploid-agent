@@ -4,6 +4,14 @@
 
 ### Added
 
+- Telegram outbound files: a fenced ` ```file ` block in a reply uploads a
+  file from the chat workspace — first line is the path (workspace-relative
+  or absolute under it), remaining lines become the caption. The method is
+  chosen by extension (`sendPhoto`/`sendAnimation`/`sendVideo`/`sendDocument`).
+  Paths must resolve inside `<sessions_root>/<chat_id>/` and stay under
+  `attachments_max_bytes`; missing, escaping, oversized, or failed uploads
+  fall back to a `[file] <path>` text line with the caption, and the block is
+  always stripped from the message. Documented in `personas/shared/AGENTS.md`.
 - Telegram TTS: a fenced ` ```say ` block in a reply is synthesized and sent
   as a voice note (`sendVoice` for ogg/opus, `sendAudio` otherwise).
   `harness.telegram.tts_provider` selects `none` (default), `piper`

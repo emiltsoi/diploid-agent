@@ -12,20 +12,23 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 import re
 import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 
 from diploid_agent.transport.interactive import (
     AskBlock,
+    FileRef,
     build_empty_inline_keyboard,
     build_inline_keyboard,
     extract_ask_block,
+    extract_file_blocks,
     extract_say_block,
 )
 from diploid_agent.transport.telegram.voice import synthesize
@@ -369,6 +372,95 @@ class TelegramSenderMixin:
                 chat_id, f"[say] {say_text}", reply_to_message_id=reply_to_message_id
             )
 
+    _FILE_METHOD_BY_EXT: ClassVar[dict[str, tuple[str, str]]] = {
+        **dict.fromkeys((".jpg", ".jpeg", ".png", ".webp"), ("sendPhoto", "photo")),
+        ".gif": ("sendAnimation", "animation"),
+        **dict.fromkeys((".mp4", ".mov", ".webm", ".mkv"), ("sendVideo", "video")),
+    }
+    _FILE_CAPTION_LIMIT = 1024
+
+    def _send_workspace_file(
+        self,
+        chat_id: int,
+        path: Path,
+        *,
+        caption: str = "",
+        reply_to_message_id: int | None = None,
+    ) -> int | None:
+        """Upload a workspace file via sendPhoto/Video/Animation/Document."""
+        try:
+            payload = path.read_bytes()
+        except OSError:
+            logger.exception("Failed to read file %s", path)
+            return None
+        method, field = self._FILE_METHOD_BY_EXT.get(
+            path.suffix.lower(), ("sendDocument", "document")
+        )
+        mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        params: dict[str, Any] = {"chat_id": chat_id}
+        if caption:
+            params["caption"] = caption[: self._FILE_CAPTION_LIMIT]
+        if reply_to_message_id is not None:
+            params["reply_to_message_id"] = reply_to_message_id
+        try:
+            data = self._api(method, files={field: (path.name, payload, mime)}, **params)
+            return data.get("result", {}).get("message_id")
+        except Exception:
+            logger.exception("Failed to send %s for chat %s", method, chat_id)
+            return None
+
+    def _maybe_send_files(
+        self,
+        chat_id: int,
+        refs: list[FileRef],
+        *,
+        reply_to_message_id: int | None = None,
+    ) -> None:
+        """Deliver ```file blocks from the chat workspace; fall back to text.
+
+        The block is always stripped from the message, so when the path is
+        missing, escapes the workspace, exceeds ``attachments_max_bytes``, or
+        the upload fails, the reference still reaches the user as
+        ``[file] ...`` — authored content is never silently dropped.
+        """
+        workspace = (self.sessions_root / str(chat_id)).resolve()
+        max_bytes = self._live_telegram_config.attachments_max_bytes
+        for ref in refs:
+            sent = False
+            try:
+                candidate = Path(ref.path)
+                if candidate.is_absolute():
+                    full = candidate.resolve()
+                else:
+                    full = (workspace / candidate).resolve()
+                if (
+                    full.is_relative_to(workspace)
+                    and full.is_file()
+                    and full.stat().st_size <= max_bytes
+                ):
+                    sent = (
+                        self._send_workspace_file(
+                            chat_id,
+                            full,
+                            caption=ref.caption,
+                            reply_to_message_id=reply_to_message_id,
+                        )
+                        is not None
+                    )
+                else:
+                    logger.warning(
+                        "file block path %r not deliverable for chat %s (workspace-relative file required)",
+                        ref.path,
+                        chat_id,
+                    )
+            except Exception:
+                logger.exception("File send failed for chat %s", chat_id)
+            if not sent:
+                fallback = f"[file] {ref.path}"
+                if ref.caption:
+                    fallback += f"\n{ref.caption}"
+                self._send_message(chat_id, fallback, reply_to_message_id=reply_to_message_id)
+
     def _delete_message(self, chat_id: int, message_id: int) -> None:
         """Delete a Telegram message."""
         try:
@@ -545,9 +637,11 @@ class TelegramSenderMixin:
         display_text = text
 
         say_text: str | None = None
+        file_refs: list[FileRef] = []
         if text:
             display_text, ask_block = extract_ask_block(text)
             display_text, say_text = extract_say_block(display_text)
+            display_text, file_refs = extract_file_blocks(display_text)
 
         if ask_block is not None and first_message_id is not None:
             self._delete_message(chat_id, first_message_id)
@@ -660,5 +754,8 @@ class TelegramSenderMixin:
 
         if say_text is not None:
             self._maybe_send_voice(chat_id, say_text, reply_to_message_id=reply_to_message_id)
+
+        if file_refs:
+            self._maybe_send_files(chat_id, file_refs, reply_to_message_id=reply_to_message_id)
 
         return sent

@@ -22,7 +22,7 @@ from diploid_agent.telegram_poll import (
     TelegramPoller,
     TurnWorker,
 )
-from diploid_agent.transport.interactive import AskBlock
+from diploid_agent.transport.interactive import AskBlock, FileRef
 from diploid_agent.transport.telegram import DeliveryWorker, _format_thought
 
 
@@ -3046,3 +3046,128 @@ def test_say_block_synth_failure_falls_back_to_text(tmp_path: Path) -> None:
     )
     poller._send_text(12345, "```say\nsomething\n```")
     assert sent == ["[say] something"]
+
+
+# ---------------------------------------------------------------------------
+# Outbound files (```file blocks → workspace uploads)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_file_blocks() -> None:
+    from diploid_agent.transport.interactive import extract_file_blocks
+
+    text, refs = extract_file_blocks(
+        "here you go\n```file\noutbox/a.pdf\nreport for you\n```\ntail"
+    )
+    assert text == "here you go\n\ntail"
+    assert refs == [FileRef(path="outbox/a.pdf", caption="report for you")]
+
+    text2, refs2 = extract_file_blocks("```file\na.txt\n```\nmiddle\n```file\nb.jpg\n```")
+    assert [r.path for r in refs2] == ["a.txt", "b.jpg"]
+    assert refs2[0].caption == ""
+    assert "file" not in text2
+
+    assert extract_file_blocks("no block") == ("no block", [])
+    assert extract_file_blocks("```file\n\n```") == ("", [])
+
+
+def test_file_block_sends_document(tmp_path: Path) -> None:
+    workspace = tmp_path / "12345"
+    (workspace / "outbox").mkdir(parents=True)
+    (workspace / "outbox" / "report.pdf").write_bytes(b"%PDF-fake")
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+        sessions_root=tmp_path,
+    )
+    calls: list[tuple[str, dict, dict]] = []
+
+    def fake_api(method: str, *, files: Any = None, **params: Any) -> dict:
+        calls.append((method, params, files or {}))
+        return {"ok": True, "result": {"message_id": 42}}
+
+    poller._api = fake_api
+    poller._send_text(12345, "made this\n```file\noutbox/report.pdf\nSeptember notes\n```")
+
+    send = [c for c in calls if c[0] == "sendMessage"]
+    doc = [c for c in calls if c[0] == "sendDocument"]
+    assert len(send) == 1 and send[0][1]["text"] == "made this"
+    assert len(doc) == 1
+    assert doc[0][1]["caption"] == "September notes"
+    field = doc[0][2]["document"]
+    assert field[0] == "report.pdf" and field[1] == b"%PDF-fake"
+
+
+def test_file_block_image_uses_sendphoto(tmp_path: Path) -> None:
+    workspace = tmp_path / "7"
+    workspace.mkdir(parents=True)
+    (workspace / "pic.png").write_bytes(b"\x89PNG" + b"\x00" * 16)
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+        sessions_root=tmp_path,
+    )
+    calls: list[str] = []
+    poller._api = lambda method, **kw: (
+        calls.append(method) or {"ok": True, "result": {"message_id": 1}}
+    )
+    poller._send_text(7, "```file\npic.png\n```")
+    assert "sendPhoto" in calls
+
+
+def test_file_block_escape_falls_back_to_text(tmp_path: Path) -> None:
+    (tmp_path / "secret.txt").write_text("nope")
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+        sessions_root=tmp_path,
+    )
+    sent: list[str] = []
+    poller._api = lambda method, **kw: (
+        sent.append(kw.get("text", method)) or {"ok": True, "result": {"message_id": 1}}
+    )
+    poller._send_text(12345, "```file\n../secret.txt\n```")
+    poller._send_text(12345, f"```file\n{tmp_path}/secret.txt\n```")
+    poller._send_text(12345, "```file\nmissing.txt\n```")
+    assert sent == [
+        "[file] ../secret.txt",
+        f"[file] {tmp_path}/secret.txt",
+        "[file] missing.txt",
+    ]
+
+
+def test_file_block_oversize_falls_back(tmp_path: Path) -> None:
+    workspace = tmp_path / "9"
+    workspace.mkdir(parents=True)
+    (workspace / "big.bin").write_bytes(b"\x00" * 64)
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+        sessions_root=tmp_path,
+        attachments_max_bytes=8,
+    )
+    sent: list[str] = []
+    poller._api = lambda method, **kw: (
+        sent.append(kw.get("text", method)) or {"ok": True, "result": {"message_id": 1}}
+    )
+    poller._send_text(9, "```file\nbig.bin\n```")
+    assert sent == ["[file] big.bin"]
+
+
+def test_file_block_caption_preserved_on_failure(tmp_path: Path) -> None:
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+        sessions_root=tmp_path,
+    )
+    sent: list[str] = []
+    poller._api = lambda method, **kw: (
+        sent.append(kw.get("text", method)) or {"ok": True, "result": {"message_id": 1}}
+    )
+    poller._send_text(5, "```file\ngone.txt\nkeep these words\n```")
+    assert sent == ["[file] gone.txt\nkeep these words"]

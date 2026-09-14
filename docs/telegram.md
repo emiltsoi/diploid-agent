@@ -304,6 +304,34 @@ telegram:
 - A say-only reply deletes the streaming placeholder instead of leaving a
   dangling `...` bubble.
 
+### Sending files
+
+A fenced `file` block in a reply uploads a file from the chat workspace back to
+Telegram — the outbound half of attachments:
+
+````
+Here is the report I promised.
+
+```file
+outbox/september-notes.pdf
+A short summary for September.
+```
+````
+
+- First line is the path — relative to the chat workspace
+  (`<sessions_root>/<chat_id>/`), or absolute underneath it. Any lines below
+  become the caption (truncated to 1024 chars). Multiple blocks send multiple
+  files, in order.
+- The method is chosen by extension: images → `sendPhoto`, `.gif` →
+  `sendAnimation`, video → `sendVideo`, everything else → `sendDocument`.
+- The path is resolved post-`resolve()` and must stay inside the chat
+  workspace; escapes (`../`, absolute paths outside) are refused.
+- The block is always stripped from the text. If the file is missing, escapes,
+  exceeds `attachments_max_bytes`, or the upload fails, the user still gets a
+  `[file] <path>` message with the caption — nothing is silently dropped.
+- A reply made only of `file` blocks deletes the streaming placeholder like a
+  say-only reply does.
+
 ## Commands
 
 | Command | Action |
