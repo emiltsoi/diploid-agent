@@ -4,6 +4,24 @@
 
 ### Added
 
+- Cron Wave C: `trigger:` jobs — event-driven siblings of `schedule:` on
+  the same registry. `trigger.type: file` watches a path's mtime (first
+  sight adopts without firing; a change inside `cooldown_seconds` stays
+  pending and collapses a burst into one fire; deletion is not an edge,
+  recreation is a change). `trigger.type: body` edge-fires when `field op
+  value` in the owning chat's `chat_body_state.json` goes false→true
+  (held-true does not refire; clearing re-arms; missing/malformed state
+  evaluates false). File paths are confined: `session:<rel>` resolves
+  under the owning chat's session dir, other relative paths under the
+  persona root, and absolute paths must land under an allowed root —
+  operator-global files may also reach under `$HOME`. Cooldowns default
+  to `min_interval_seconds` and an explicit value below the floor drops
+  the job. Trigger jobs share the registry, `cron_state.jsonl`
+  persistence (`trigger_seen_mtime`/`trigger_fired_at`/`trigger_held`),
+  overlap policy, failure/auto-disable, `POST /cron/<id>/run`, and all
+  delivery modes; `GET /cron` and `harness_cron_list` expose `trigger`
+  and `trigger_state`. A trigger-spec hot edit re-bootstraps the
+  observation state; the phantom prompt carries a `Trigger:` line.
 - Cron Wave B: `delivery: turn` now validates and enqueues a wake
   (`reason=cron:<id>`, `payload.user_message` = status + summary) that opens
   a real turn on the owning chat. Turn deliveries share the self-wake

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import operator
 import threading
 import time
 from dataclasses import dataclass, field
@@ -55,6 +56,18 @@ logger = logging.getLogger(__name__)
 
 CRON_PLAN_NAME = "__cron__"
 CRON_WAKE_REASON_PREFIX = "cron:"
+# Body-trigger comparison operators; the value column of
+# chat_body_state.json is free-form, so TypeError means "no match".
+_TRIGGER_OPS = {
+    ">": operator.gt,
+    ">=": operator.ge,
+    "<": operator.lt,
+    "<=": operator.le,
+    "==": operator.eq,
+    "!=": operator.ne,
+}
+_SESSION_TRIGGER_PREFIX = "session:"
+_BODY_STATE_FILENAME = "chat_body_state.json"
 
 
 @dataclass
@@ -238,21 +251,32 @@ class CronService:
     ) -> _ResolvedJob | None:
         cron_cfg = self._config.harness.cron
         # Minimum-interval floor.
-        if spec.schedule.every_seconds is not None:
-            if spec.schedule.every_seconds < cron_cfg.min_interval_seconds:
+        if spec.schedule is not None:
+            if spec.schedule.every_seconds is not None:
+                if spec.schedule.every_seconds < cron_cfg.min_interval_seconds:
+                    warnings.append(
+                        f"job {spec.id}: every_seconds {spec.schedule.every_seconds:.0f} "
+                        f"below min_interval {cron_cfg.min_interval_seconds:.0f} — dropped"
+                    )
+                    return None
+            elif spec.schedule.cron is not None:
+                gap = self._cron_gap(spec.schedule.cron, now)
+                if gap is None:
+                    warnings.append(f"job {spec.id}: invalid cron expression — dropped")
+                    return None
+                if gap < cron_cfg.min_interval_seconds:
+                    warnings.append(
+                        f"job {spec.id}: cron interval {gap:.0f}s below "
+                        f"min_interval {cron_cfg.min_interval_seconds:.0f} — dropped"
+                    )
+                    return None
+        elif spec.trigger is not None:
+            # The trigger cooldown is the anti-loop floor for event-driven
+            # jobs — below min_interval it is a loop wearing a watch.
+            cooldown = spec.trigger.cooldown_seconds or cron_cfg.min_interval_seconds
+            if cooldown < cron_cfg.min_interval_seconds:
                 warnings.append(
-                    f"job {spec.id}: every_seconds {spec.schedule.every_seconds:.0f} "
-                    f"below min_interval {cron_cfg.min_interval_seconds:.0f} — dropped"
-                )
-                return None
-        elif spec.schedule.cron is not None:
-            gap = self._cron_gap(spec.schedule.cron, now)
-            if gap is None:
-                warnings.append(f"job {spec.id}: invalid cron expression — dropped")
-                return None
-            if gap < cron_cfg.min_interval_seconds:
-                warnings.append(
-                    f"job {spec.id}: cron interval {gap:.0f}s below "
+                    f"job {spec.id}: trigger cooldown {cooldown:.0f}s below "
                     f"min_interval {cron_cfg.min_interval_seconds:.0f} — dropped"
                 )
                 return None
@@ -266,7 +290,7 @@ class CronService:
         if not chat_id:
             warnings.append(f"job {spec.id}: no chat_id and no mesh fallback configured — dropped")
             return None
-        return _ResolvedJob(
+        resolved = _ResolvedJob(
             spec=spec,
             source_file=watch.path,
             source_label=watch.label,
@@ -274,6 +298,17 @@ class CronService:
             persona=persona,
             persona_dir=persona_dir,
         )
+        if (
+            spec.trigger is not None
+            and spec.trigger.type == "file"
+            and self._resolve_trigger_path(resolved, spec.trigger.path or "") is None
+        ):
+            warnings.append(
+                f"job {spec.id}: trigger path {spec.trigger.path!r} escapes "
+                "the allowed roots (persona dir / session dir) — dropped"
+            )
+            return None
+        return resolved
 
     @staticmethod
     def _cron_gap(expr: str, now: float, samples: int = 5) -> float | None:
@@ -355,23 +390,33 @@ class CronService:
                 continue
             if state.source_file != str(resolved.source_file):
                 state.source_file = str(resolved.source_file)
-            schedule_key = spec.schedule.model_dump_json()
-            if state.schedule_key != schedule_key:
+            driver_key = self._driver_key(spec)
+            if state.schedule_key != driver_key:
                 if not state.schedule_key:
                     # First sight of this state row (or a row that predates
                     # the field): stamp the key without disturbing next_due
                     # or a pending catchup.
-                    state.schedule_key = schedule_key
+                    state.schedule_key = driver_key
                     self._state.update(state)
                 elif state.running_task_id is None:
-                    # Hot-edited schedule on an idle job: reseed forward.
-                    state.schedule_key = schedule_key
-                    state.next_due_at = self._next_due(spec, now)
-                    self._state.update(state)
-                    self._catchup_pending.discard(job_id)
-                    continue
+                    # Hot-edited driver on an idle job: reseed forward /
+                    # re-bootstrap the trigger.
+                    state.schedule_key = driver_key
+                    if spec.trigger is not None:
+                        self._reset_trigger(state)
+                        self._state.update(state)
+                        # Fall through: observe the new source this tick so
+                        # the first sight adopts immediately.
+                    else:
+                        state.next_due_at = self._next_due(spec, now)
+                        self._state.update(state)
+                        self._catchup_pending.discard(job_id)
+                        continue
                 # else: drift while a run is in flight — leave the stale key
                 # so _finalize reseeds from the new spec once it lands.
+            if spec.trigger is not None:
+                self._tick_trigger(resolved, state, now)
+                continue
             if state.next_due_at is None:
                 state.next_due_at = self._next_due(spec, now)
                 self._state.update(state)
@@ -394,6 +439,10 @@ class CronService:
         states = self._state.all()
         for job_id, resolved in self._jobs.items():
             state = states.get(job_id)
+            if resolved.spec.trigger is not None:
+                # Event-driven, not time-driven: nothing was "missed" while
+                # down — the trigger re-observes its source on the next tick.
+                continue
             if state is None or state.next_due_at is None:
                 continue  # brand-new job — the tick seeds it forward
             if state.next_due_at >= now or state.disabled:
@@ -425,6 +474,7 @@ class CronService:
 
     def _next_due(self, spec: CronJobSpec, base: float) -> float:
         sched = spec.schedule
+        assert sched is not None  # callers guard on spec.schedule
         if sched.every_seconds is not None:
             return base + sched.every_seconds
         if sched.at_daily is not None:
@@ -460,6 +510,165 @@ class CronService:
         self._cron_plans[chat_id] = plan.id
         return plan.id
 
+    # ------------------------------------------------------------- triggers
+
+    @staticmethod
+    def _driver_key(spec: CronJobSpec) -> str:
+        """Persisted identity of whatever drives the job — drift detection."""
+        driver = spec.schedule if spec.schedule is not None else spec.trigger
+        return driver.model_dump_json() if driver is not None else ""
+
+    @staticmethod
+    def _reset_trigger(state: CronJobState) -> None:
+        """Re-bootstrap a trigger after its spec was hot-edited."""
+        state.trigger_seen_mtime = None
+        state.trigger_fired_at = None
+        state.trigger_held = False
+        state.queued_due = False
+        state.next_due_at = None  # a schedule→trigger conversion may leave one
+
+    def _tick_trigger(self, resolved: _ResolvedJob, state: CronJobState, now: float) -> None:
+        trig = resolved.spec.trigger
+        if trig is None:
+            return
+        cooldown = trig.cooldown_seconds or self._config.harness.cron.min_interval_seconds
+        if trig.type == "file":
+            reason = self._eval_file_trigger(resolved, state, now, cooldown)
+        else:
+            reason = self._eval_body_trigger(resolved, state, now, cooldown)
+        if reason is not None:
+            self._materialize(resolved, state, now, reason=reason)
+
+    def _eval_file_trigger(
+        self,
+        resolved: _ResolvedJob,
+        state: CronJobState,
+        now: float,
+        cooldown: float,
+    ) -> str | None:
+        """Return a fire-reason when the watched file's mtime changed.
+
+        First sight adopts the current mtime without firing — a pre-existing
+        file is not a change. A change observed inside the cooldown window
+        stays pending: ``trigger_seen_mtime`` is only consumed on fire (or
+        on an overlap decision), so a burst collapses into one fire.
+        """
+        trig = resolved.spec.trigger
+        assert trig is not None
+        path = self._resolve_trigger_path(resolved, trig.path or "")
+        if path is None:
+            return None  # warned at merge time
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return None  # missing file == no change observed
+        if state.trigger_seen_mtime is None:
+            state.trigger_seen_mtime = mtime
+            self._state.update(state)
+            return None
+        if mtime == state.trigger_seen_mtime:
+            return None
+        if state.running_task_id is not None:
+            # Consume the edge once: skip marks it, queue owes a re-fire.
+            state.trigger_seen_mtime = mtime
+            if resolved.spec.overlap == "queue":
+                state.queued_due = True
+            else:
+                state.last_status = "skipped"
+            self._state.update(state)
+            return None
+        if state.trigger_fired_at is not None and now - state.trigger_fired_at < cooldown:
+            return None
+        state.trigger_seen_mtime = mtime
+        self._state.update(state)
+        return f"file changed: {path}"
+
+    def _eval_body_trigger(
+        self,
+        resolved: _ResolvedJob,
+        state: CronJobState,
+        now: float,
+        cooldown: float,
+    ) -> str | None:
+        """Edge-fire when ``field op value`` in chat_body_state.json goes
+        false→true. While the condition holds, no refire; when it clears,
+        the trigger re-arms. An edge observed inside the cooldown window
+        stays pending (``trigger_held`` is only consumed on a decision), so
+        it still fires once the window elapses if the condition holds."""
+        trig = resolved.spec.trigger
+        assert trig is not None
+        body_path = self._sessions_root / resolved.chat_id.replace("/", "_") / _BODY_STATE_FILENAME
+        try:
+            data = json.loads(body_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        current = data.get(trig.field) if isinstance(data, dict) else None
+        held = self._compare(current, trig.op, trig.value)
+        if not held:
+            if state.trigger_held:
+                state.trigger_held = False  # re-arm
+                self._state.update(state)
+            return None
+        if state.trigger_held:
+            return None
+        # New edge.
+        if state.running_task_id is not None:
+            state.trigger_held = True  # consume the edge once
+            if resolved.spec.overlap == "queue":
+                state.queued_due = True
+            else:
+                state.last_status = "skipped"
+            self._state.update(state)
+            return None
+        if state.trigger_fired_at is not None and now - state.trigger_fired_at < cooldown:
+            return None
+        state.trigger_held = True
+        self._state.update(state)
+        return f"body {trig.field} {trig.op} {trig.value!r} (now {current!r})"
+
+    def _resolve_trigger_path(self, resolved: _ResolvedJob, raw: str) -> Path | None:
+        """Resolve a file-trigger path, confined to the job's allowed roots.
+
+        ``session:<rel>`` selects the owning chat's session dir; other
+        relative paths resolve under the persona dir, and absolute paths
+        must land under an allowed root. Operator-global files may also
+        reach under ``$HOME`` — persona-authored jobs may not.
+        """
+        session_root = (self._sessions_root / resolved.chat_id.replace("/", "_")).resolve()
+        roots = [session_root]
+        if resolved.persona_dir is not None:
+            roots.insert(0, resolved.persona_dir.resolve())
+        if resolved.source_label == "global":
+            roots.append(Path.home().resolve())
+
+        if raw.startswith(_SESSION_TRIGGER_PREFIX):
+            candidate = (session_root / raw[len(_SESSION_TRIGGER_PREFIX) :]).resolve()
+            allowed = [session_root]
+        else:
+            candidate = Path(raw).expanduser()
+            if not candidate.is_absolute():
+                base = resolved.persona_dir or Path.cwd()
+                candidate = (base / candidate).resolve()
+            else:
+                candidate = candidate.resolve()
+            allowed = roots
+        for root in allowed:
+            if candidate == root or root in candidate.parents:
+                return candidate
+        return None
+
+    @staticmethod
+    def _compare(current: Any, op: str | None, value: Any) -> bool:
+        if current is None or op is None:
+            return False
+        fn = _TRIGGER_OPS.get(op)
+        if fn is None:
+            return False
+        try:
+            return bool(fn(current, value))
+        except TypeError:
+            return False
+
     def run_now(self, job_id: str) -> dict[str, Any]:
         """Fire a job immediately — the operator door behind POST /cron/<id>/run.
 
@@ -489,15 +698,19 @@ class CronService:
         *,
         catchup: bool = False,
         manual: bool = False,
+        reason: str | None = None,
     ) -> None:
         spec = resolved.spec
         cron_cfg = self._config.harness.cron
         plan_id = self._cron_plan_id(resolved.chat_id)
         cwd = Path(spec.call.cwd).expanduser() if spec.call.cwd else resolved.persona_dir
         tags = f"{', catchup' if catchup else ''}{', manual' if manual else ''}"
+        description = f"cron job {spec.id} ({resolved.source_label}{tags})"
+        if reason:
+            description += f" — {reason}"
         task = Task(
             name=f"cron:{spec.id}",
-            description=f"cron job {spec.id} ({resolved.source_label}{tags})",
+            description=description,
             chat_id=resolved.chat_id,
             cwd=cwd,
         )
@@ -506,7 +719,7 @@ class CronService:
             task.command = spec.call.command or ""
         else:
             task.type = TaskType.ACP
-            task.prompt = self._compose_phantom(resolved)
+            task.prompt = self._compose_phantom(resolved, reason=reason)
             task.acp_model = spec.call.model
             timeout = spec.call.timeout_seconds or cron_cfg.max_llm_timeout_seconds
             task.acp_timeout = min(timeout, cron_cfg.max_llm_timeout_seconds)
@@ -526,8 +739,12 @@ class CronService:
         # file changes (or the process restarts) mid-run.
         state.fired_spec = spec.model_dump_json()
         state.fired_chat_id = resolved.chat_id
-        if not manual:
+        if not manual and spec.schedule is not None:
             state.next_due_at = self._next_due(spec, now)
+        if not manual and spec.trigger is not None:
+            # Cooldown anchors on the fire itself, so a queued re-fire that
+            # lands after a run still gets a full cooldown before the next.
+            state.trigger_fired_at = now
         if catchup:
             state.last_status = "catchup"
         self._state.update(state)
@@ -607,12 +824,15 @@ class CronService:
                         f"consecutive failures: {state.last_summary}"
                     )
             if resolved is not None:
-                # Hot-edited schedule while the run was in flight: adopt the
-                # new schedule from the next fire.
-                schedule_key = resolved.spec.schedule.model_dump_json()
-                if state.schedule_key != schedule_key:
-                    state.schedule_key = schedule_key
-                    state.next_due_at = self._next_due(resolved.spec, state.last_finished_at)
+                # Hot-edited driver while the run was in flight: adopt the
+                # new schedule from the next fire / re-bootstrap the trigger.
+                driver_key = self._driver_key(resolved.spec)
+                if state.schedule_key != driver_key:
+                    state.schedule_key = driver_key
+                    if resolved.spec.trigger is not None:
+                        self._reset_trigger(state)
+                    else:
+                        state.next_due_at = self._next_due(resolved.spec, state.last_finished_at)
             self._state.update(state)
         # Delivery belongs to the spec that fired the run, so a hot edit or
         # a mid-run removal still lands the result where the firing spec said.
@@ -738,11 +958,7 @@ class CronService:
         # collides with a now-delivery — an overdue event effectively fires
         # at the next waker tick, while an arm for far beyond the window
         # must not push a ready result out behind it.
-        colliding = [
-            max(e.scheduled_at, now)
-            for e in pending
-            if e.scheduled_at < now + interval
-        ]
+        colliding = [max(e.scheduled_at, now) for e in pending if e.scheduled_at < now + interval]
         if colliding:
             scheduled_at = max(colliding) + interval
         summary = (task.result or task.log or "").strip()
@@ -796,7 +1012,7 @@ class CronService:
 
     # -------------------------------------------------------------- phantom
 
-    def _compose_phantom(self, resolved: _ResolvedJob) -> str:
+    def _compose_phantom(self, resolved: _ResolvedJob, reason: str | None = None) -> str:
         cron_cfg = self._config.harness.cron
         persona = resolved.persona or self._config.persona
         parts: list[str] = [f"# {persona.name if persona else 'agent'} — background job", ""]
@@ -825,6 +1041,7 @@ class CronService:
             "",
             "## Job",
             "",
+            *([f"Trigger: {reason}", ""] if reason else []),
             (resolved.spec.call.prompt or "").strip(),
             "",
             "## Output contract",
@@ -853,7 +1070,25 @@ class CronService:
                     "chat_id": resolved.chat_id,
                     "delivery": spec.delivery,
                     "call_type": spec.call.type,
-                    "schedule": spec.schedule.model_dump(exclude_none=True),
+                    "schedule": (
+                        spec.schedule.model_dump(exclude_none=True)
+                        if spec.schedule is not None
+                        else None
+                    ),
+                    "trigger": (
+                        spec.trigger.model_dump(exclude_none=True)
+                        if spec.trigger is not None
+                        else None
+                    ),
+                    "trigger_state": (
+                        {
+                            "seen_mtime": state.trigger_seen_mtime,
+                            "fired_at": state.trigger_fired_at,
+                            "held": state.trigger_held,
+                        }
+                        if state is not None and spec.trigger is not None
+                        else None
+                    ),
                     "next_due_at": state.next_due_at if state else None,
                     "last_run_at": state.last_run_at if state else None,
                     "last_status": state.last_status if state else None,

@@ -878,3 +878,459 @@ def test_removed_job_midrun_still_delivers(tmp_path: Path) -> None:
     # Result files still land under the firing spec; the row is then dropped.
     assert _last_file(tmp_path)["job_id"] == "tidy"
     assert svc._state.get("tidy") is None
+
+
+# ------------------------------------------------------------------ Wave C
+# File + body triggers: event-driven jobs on the same registry.
+
+
+def _file_job(path: str, **overrides) -> dict:
+    job = {
+        "id": "watcher",
+        "trigger": {"type": "file", "path": path},
+        "call": {"type": "script", "command": "echo hi"},
+        "chat_id": "chat-1",
+    }
+    job.update(overrides)
+    return job
+
+
+def _body_job(field: str = "energy", op: str = ">", value=25, **overrides) -> dict:
+    job = {
+        "id": "bodyguard",
+        "trigger": {"type": "body", "field": field, "op": op, "value": value},
+        "call": {"type": "script", "command": "echo hi"},
+        "chat_id": "chat-1",
+    }
+    job.update(overrides)
+    return job
+
+
+def _touch(path: Path, delta: float = 5.0) -> None:
+    """Move a file's mtime forward so the watcher sees a change."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"touched {time.time()}")
+    import os
+
+    t = time.time() + delta
+    os.utime(path, (t, t))
+
+
+def _finish_running(svc: CronService, job_id: str) -> None:
+    state = svc._state.get(job_id)
+    assert state is not None and state.running_task_id is not None
+    deadline = time.time() + 5
+    task = None
+    while time.time() < deadline:
+        task = svc._plan_manager.get_task(state.running_plan_id, state.running_task_id)
+        if task.status in (TaskStatus.DONE, TaskStatus.FAILED):
+            break
+        time.sleep(0.05)
+    assert task is not None and task.status == TaskStatus.DONE
+    svc._on_event(
+        Event(
+            type="task.completed",
+            payload={"plan_id": state.running_plan_id, "task_id": task.id},
+        )
+    )
+
+
+# --------------------------------------------------------- trigger validation
+
+
+def test_job_requires_exactly_one_driver() -> None:
+    with pytest.raises(ValueError, match="exactly one of schedule / trigger"):
+        CronJobSpec(id="j", call={"type": "script", "command": "true"})
+    with pytest.raises(ValueError, match="exactly one of schedule / trigger"):
+        CronJobSpec(
+            id="j",
+            schedule={"every_seconds": 60},
+            trigger={"type": "body", "field": "x", "op": ">", "value": 1},
+            call={"type": "script", "command": "true"},
+        )
+    assert (
+        CronJobSpec(
+            id="j",
+            trigger={"type": "file", "path": "watch.txt"},
+            call={"type": "script", "command": "true"},
+        ).trigger.type
+        == "file"
+    )
+
+
+def test_file_trigger_field_validation() -> None:
+    from diploid_agent.config import CronTriggerSpec
+
+    with pytest.raises(ValueError, match="requires path"):
+        CronTriggerSpec(type="file")
+    with pytest.raises(ValueError, match="only path"):
+        CronTriggerSpec(type="file", path="x", field="y")
+    assert CronTriggerSpec(type="file", path="w.txt", cooldown_seconds=10).path == "w.txt"
+
+
+def test_body_trigger_field_validation() -> None:
+    from diploid_agent.config import CronTriggerSpec
+
+    with pytest.raises(ValueError, match="requires field"):
+        CronTriggerSpec(type="body", op=">", value=1)
+    with pytest.raises(ValueError, match="requires op and value"):
+        CronTriggerSpec(type="body", field="e")
+    with pytest.raises(ValueError, match="only field/op/value"):
+        CronTriggerSpec(type="body", field="e", op=">", value=1, path="p")
+    # A falsy configured value is still a value.
+    spec = CronTriggerSpec(type="body", field="e", op="==", value=0)
+    assert spec.value == 0
+
+
+def test_trigger_cooldown_bounds() -> None:
+    from diploid_agent.config import CronTriggerSpec
+
+    with pytest.raises(ValueError):
+        CronTriggerSpec(type="file", path="w", cooldown_seconds=0)
+    with pytest.raises(ValueError):
+        CronTriggerSpec(type="file", path="w", cooldown_seconds=90000)
+
+
+def test_trigger_cooldown_below_floor_drops(tmp_path: Path) -> None:
+    config = _make_config(
+        tmp_path,
+        min_interval_seconds=300.0,
+        persona_crons={
+            "jobs": [
+                _file_job("w.txt", trigger={"type": "file", "path": "w.txt", "cooldown_seconds": 5})
+            ]
+        },
+    )
+    svc = _make_service(config, tmp_path)
+    assert "watcher" not in svc._jobs
+    assert any("min_interval" in w for w in svc._warnings)
+
+
+# ------------------------------------------------------------- file trigger
+
+
+def test_file_trigger_first_sight_observes(tmp_path: Path) -> None:
+    _touch(tmp_path / "persona" / "watch.txt")
+    config = _make_config(tmp_path, persona_crons={"jobs": [_file_job("watch.txt")]})
+    svc = _make_service(config, tmp_path)
+    svc._tick()
+    state = svc._state.get("watcher")
+    assert state.running_task_id is None  # pre-existing file is not a change
+    assert state.trigger_seen_mtime is not None
+
+
+def test_file_trigger_change_fires(tmp_path: Path) -> None:
+    watch = tmp_path / "persona" / "watch.txt"
+    _touch(watch)
+    config = _make_config(tmp_path, persona_crons={"jobs": [_file_job("watch.txt")]})
+    svc = _make_service(config, tmp_path)
+    svc._tick()  # observe
+    _touch(watch)
+    svc._tick()  # fire
+    state = svc._state.get("watcher")
+    assert state.running_task_id is not None
+    assert state.trigger_fired_at is not None
+    task = svc._plan_manager.get_task(state.running_plan_id, state.running_task_id)
+    assert "file changed" in task.description
+
+
+def test_file_trigger_cooldown_coalesces(tmp_path: Path) -> None:
+    watch = tmp_path / "persona" / "watch.txt"
+    _touch(watch)
+    job = _file_job("watch.txt")
+    job["trigger"]["cooldown_seconds"] = 600
+    config = _make_config(tmp_path, persona_crons={"jobs": [job]})
+    svc = _make_service(config, tmp_path)
+    svc._tick()
+    _touch(watch)
+    svc._tick()  # fire #1
+    _finish_running(svc, "watcher")
+    # A burst of changes inside the cooldown window collapses to one owed
+    # edge: observed mtime is not consumed until the fire.
+    _touch(watch, delta=10)
+    svc._tick()
+    _touch(watch, delta=20)
+    svc._tick()
+    state = svc._state.get("watcher")
+    assert state.running_task_id is None
+    # After the window elapses the pending edge fires once.
+    state.trigger_fired_at = time.time() - 700
+    svc._state.update(state)
+    svc._tick()
+    state = svc._state.get("watcher")
+    assert state.running_task_id is not None
+    assert state.trigger_seen_mtime == watch.stat().st_mtime
+
+
+def test_file_trigger_path_confinement(tmp_path: Path) -> None:
+    jobs = [
+        _file_job("../../escape.txt", id="esc-rel"),
+        _file_job("/etc/hostname", id="esc-abs"),
+        _file_job("session:../../escape.txt", id="esc-sess"),
+    ]
+    config = _make_config(tmp_path, persona_crons={"jobs": jobs})
+    svc = _make_service(config, tmp_path)
+    assert svc._jobs == {}
+    assert sum("escapes" in w for w in svc._warnings) == 3
+
+
+def test_file_trigger_session_prefix(tmp_path: Path) -> None:
+    config = _make_config(tmp_path, persona_crons={"jobs": [_file_job("session:watch.txt")]})
+    svc = _make_service(config, tmp_path)
+    svc._tick()
+    _touch(tmp_path / "sessions" / "chat-1" / "watch.txt")
+    svc._tick()  # first sight — adopt
+    _touch(tmp_path / "sessions" / "chat-1" / "watch.txt", delta=10)
+    svc._tick()  # change — fire
+    assert svc._state.get("watcher").running_task_id is not None
+
+
+def test_file_trigger_persona_cannot_reach_home(tmp_path: Path) -> None:
+    job = _file_job(str(Path.home() / "diploid-trigger-probe"))
+    config = _make_config(tmp_path, persona_crons={"jobs": [job]})
+    svc = _make_service(config, tmp_path)
+    assert svc._jobs == {}
+    assert any("escapes" in w for w in svc._warnings)
+
+
+def test_file_trigger_global_may_reach_home(tmp_path: Path, monkeypatch) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    _touch(home / "watched.txt")
+    config = _make_config(tmp_path, global_crons={"jobs": [_file_job(str(home / "watched.txt"))]})
+    svc = _make_service(config, tmp_path)
+    assert "watcher" in svc._jobs
+    svc._tick()
+    _touch(home / "watched.txt", delta=10)
+    svc._tick()
+    assert svc._state.get("watcher").running_task_id is not None
+
+
+def test_file_trigger_missing_and_recreate(tmp_path: Path) -> None:
+    watch = tmp_path / "persona" / "watch.txt"
+    config = _make_config(tmp_path, persona_crons={"jobs": [_file_job("watch.txt")]})
+    svc = _make_service(config, tmp_path)
+    svc._tick()
+    state = svc._state.get("watcher")
+    assert state.trigger_seen_mtime is None  # absent: nothing observed
+    _touch(watch)
+    svc._tick()  # appearing counts as first sight — adopt, no fire
+    assert svc._state.get("watcher").running_task_id is None
+    _touch(watch, delta=10)
+    svc._tick()  # change — fire
+    assert svc._state.get("watcher").running_task_id is not None
+    _finish_running(svc, "watcher")
+    # Deletion is not an edge; recreation after deletion is a change.
+    watch.unlink()
+    svc._tick()
+    _touch(watch, delta=20)
+    svc._tick()
+    assert svc._state.get("watcher").running_task_id is not None
+
+
+# ------------------------------------------------------------- body trigger
+
+
+def _body_file(tmp_path: Path) -> Path:
+    path = tmp_path / "sessions" / "chat-1" / "chat_body_state.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def test_body_trigger_edge_fires(tmp_path: Path) -> None:
+    config = _make_config(tmp_path, persona_crons={"jobs": [_body_job()]})
+    svc = _make_service(config, tmp_path)
+    svc._tick()  # no body file — condition false
+    assert svc._state.get("bodyguard").running_task_id is None
+    _body_file(tmp_path).write_text(json.dumps({"energy": 30}))
+    svc._tick()  # false→true edge
+    state = svc._state.get("bodyguard")
+    assert state.running_task_id is not None
+    assert state.trigger_held is True
+    task = svc._plan_manager.get_task(state.running_plan_id, state.running_task_id)
+    assert "body energy" in task.description
+
+
+def test_body_trigger_held_true_no_refire(tmp_path: Path) -> None:
+    config = _make_config(tmp_path, persona_crons={"jobs": [_body_job()]})
+    svc = _make_service(config, tmp_path)
+    _body_file(tmp_path).write_text(json.dumps({"energy": 30}))
+    svc._tick()
+    _finish_running(svc, "bodyguard")
+    svc._tick()
+    svc._tick()
+    assert svc._state.get("bodyguard").running_task_id is None
+
+
+def test_body_trigger_rearm_on_clear(tmp_path: Path) -> None:
+    body = _body_file(tmp_path)
+    body.write_text(json.dumps({"energy": 30}))
+    config = _make_config(tmp_path, persona_crons={"jobs": [_body_job()]})
+    svc = _make_service(config, tmp_path)
+    svc._tick()
+    _finish_running(svc, "bodyguard")
+    body.write_text(json.dumps({"energy": 10}))  # clear → re-arm
+    svc._tick()
+    assert svc._state.get("bodyguard").trigger_held is False
+    body.write_text(json.dumps({"energy": 30}))  # new edge → fire
+    svc._tick()
+    assert svc._state.get("bodyguard").running_task_id is not None
+
+
+def test_body_trigger_operators(tmp_path: Path) -> None:
+    assert CronService._compare(30, ">", 25) is True
+    assert CronService._compare(25, ">", 25) is False
+    assert CronService._compare(25, ">=", 25) is True
+    assert CronService._compare(3, "<", 25) is True
+    assert CronService._compare(30, "<=", 25) is False
+    assert CronService._compare("awake", "==", "awake") is True
+    assert CronService._compare("asleep", "!=", "awake") is True
+    assert CronService._compare(True, "==", True) is True
+    # Missing field / incompatible types never fire and never raise.
+    assert CronService._compare(None, ">", 25) is False
+    assert CronService._compare("hi", ">", 25) is False
+
+
+def test_body_trigger_malformed_state_safe(tmp_path: Path) -> None:
+    body = _body_file(tmp_path)
+    body.write_text("{{{{not json")
+    config = _make_config(tmp_path, persona_crons={"jobs": [_body_job()]})
+    svc = _make_service(config, tmp_path)
+    svc._tick()  # must not raise
+    assert svc._state.get("bodyguard").running_task_id is None
+    body.write_text(json.dumps({"other": 1}))  # field missing
+    svc._tick()
+    assert svc._state.get("bodyguard").running_task_id is None
+
+
+def test_body_trigger_cooldown_defers_edge(tmp_path: Path) -> None:
+    body = _body_file(tmp_path)
+    body.write_text(json.dumps({"energy": 30}))
+    job = _body_job()
+    job["trigger"]["cooldown_seconds"] = 600
+    config = _make_config(tmp_path, persona_crons={"jobs": [job]})
+    svc = _make_service(config, tmp_path)
+    svc._tick()  # edge fires (no prior fire)
+    _finish_running(svc, "bodyguard")
+    body.write_text(json.dumps({"energy": 10}))
+    svc._tick()  # re-arm
+    body.write_text(json.dumps({"energy": 40}))
+    svc._tick()  # new edge inside cooldown → pending, held not consumed
+    state = svc._state.get("bodyguard")
+    assert state.running_task_id is None
+    assert state.trigger_held is False
+    state.trigger_fired_at = time.time() - 700
+    svc._state.update(state)
+    svc._tick()  # window elapsed, condition still true → fire
+    assert svc._state.get("bodyguard").running_task_id is not None
+
+
+# ------------------------------------------------- overlap / edits / manual
+
+
+def test_file_trigger_overlap_skip_and_queue(tmp_path: Path) -> None:
+    watch = tmp_path / "persona" / "watch.txt"
+    _touch(watch)
+    jobs = [
+        _file_job("watch.txt", id="skipper", overlap="skip"),
+        _file_job("watch.txt", id="queuer", overlap="queue"),
+    ]
+    config = _make_config(tmp_path, persona_crons={"jobs": jobs})
+    svc = _make_service(config, tmp_path)
+    svc._tick()  # observe
+    from diploid_agent.plan.models import Task
+
+    plan = svc._plan_manager.create_plan(name="p", chat_id="chat-1")
+    running = svc._plan_manager.add_task(plan.id, Task(name="r"))
+    svc._plan_manager.start_task(plan.id, running.id)
+    for job_id in ("skipper", "queuer"):
+        state = svc._state.get(job_id)
+        state.running_task_id = running.id
+        state.running_plan_id = plan.id
+        svc._state.update(state)
+    _touch(watch, delta=10)
+    svc._tick()
+    assert svc._state.get("skipper").last_status == "skipped"
+    assert svc._state.get("queuer").queued_due is True
+    assert svc._state.get("skipper").trigger_seen_mtime == watch.stat().st_mtime
+
+
+def test_trigger_state_survives_restart(tmp_path: Path) -> None:
+    watch = tmp_path / "persona" / "watch.txt"
+    _touch(watch)
+    config = _make_config(tmp_path, persona_crons={"jobs": [_file_job("watch.txt")]})
+    svc = _make_service(config, tmp_path)
+    svc._tick()
+    _touch(watch)
+    svc._tick()
+    fired_at = svc._state.get("watcher").trigger_fired_at
+    assert fired_at is not None
+    # A fresh store over the same file sees the trigger bookkeeping.
+    store2 = CronStateStore(tmp_path / "cron_state.jsonl")
+    state2 = store2.get("watcher")
+    assert state2.trigger_seen_mtime == watch.stat().st_mtime
+    assert state2.trigger_fired_at == fired_at
+
+
+def test_hot_edit_trigger_resets_state(tmp_path: Path) -> None:
+    watch = tmp_path / "persona" / "watch.txt"
+    _touch(watch)
+    crons = tmp_path / "persona" / "crons.yaml"
+    config = _make_config(tmp_path, persona_crons={"jobs": [_file_job("watch.txt")]})
+    svc = _make_service(config, tmp_path)
+    svc._tick()
+    _touch(watch)
+    svc._tick()
+    _finish_running(svc, "watcher")
+    assert svc._state.get("watcher").trigger_fired_at is not None
+    # Hot-edit the trigger path: state re-bootstraps — first sight of the new
+    # path adopts without firing.
+    _touch(tmp_path / "persona" / "other.txt")
+    crons.write_text(yaml.safe_dump({"jobs": [_file_job("other.txt")]}))
+    svc._tick()
+    state = svc._state.get("watcher")
+    assert state.trigger_fired_at is None
+    assert state.trigger_seen_mtime is not None  # adopted the new file
+    assert state.running_task_id is None
+
+
+def test_run_now_trigger_job(tmp_path: Path) -> None:
+    watch = tmp_path / "persona" / "watch.txt"
+    _touch(watch)
+    config = _make_config(tmp_path, persona_crons={"jobs": [_file_job("watch.txt")]})
+    svc = _make_service(config, tmp_path)
+    svc._tick()
+    out = svc.run_now("watcher")
+    assert out["status"] == "started"
+    state = svc._state.get("watcher")
+    assert state.running_task_id is not None
+    assert state.trigger_fired_at is None  # manual runs don't consume cooldown
+
+
+def test_turn_delivery_for_trigger_job(tmp_path: Path) -> None:
+    body = _body_file(tmp_path)
+    body.write_text(json.dumps({"energy": 30}))
+    job = _body_job(delivery="turn")
+    config = _make_config(tmp_path, persona_crons={"jobs": [job]})
+    svc = _make_service(config, tmp_path)
+    svc._tick()
+    _finish_running(svc, "bodyguard")
+    events = [e for e in svc._wake_queue.pending(chat_id="chat-1") if e.reason == "cron:bodyguard"]
+    assert len(events) == 1
+
+
+def test_get_cron_route_shows_trigger(tmp_path: Path) -> None:
+    _touch(tmp_path / "persona" / "watch.txt")
+    config = _make_config(tmp_path, persona_crons={"jobs": [_file_job("watch.txt")]})
+    svc = _make_service(config, tmp_path)
+    svc._tick()  # persist the adopted observation for the runtime's store
+    from diploid_agent.runtime.agent_runtime import AgentRuntime
+
+    runtime = AgentRuntime(config)
+    with TestClient(create_app(config, runtime)) as client:
+        resp = client.get("/cron")
+    job = resp.json()["jobs"][0]
+    assert job["schedule"] is None
+    assert job["trigger"] == {"type": "file", "path": "watch.txt"}
+    assert job["trigger_state"]["seen_mtime"] is not None

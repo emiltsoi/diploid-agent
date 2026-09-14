@@ -448,6 +448,42 @@ class CronScheduleSpec(BaseModel):
         return self
 
 
+class CronTriggerSpec(BaseModel):
+    """An event condition that fires a job instead of a schedule.
+
+    ``file`` watches a path's mtime — the path must resolve under the
+    persona dir or the owning chat's session dir (``session:<rel>``
+    selects the session dir explicitly; operator-global files may also
+    reach under ``$HOME``). ``body`` edge-fires when a field in the owning
+    chat's ``chat_body_state.json`` crosses ``op``/``value``.
+
+    ``cooldown_seconds`` bounds refires (default: ``min_interval_seconds``).
+    """
+
+    type: Literal["file", "body"]
+    path: str | None = None  # file: path under an allowed root
+    field: str | None = None  # body: chat_body_state.json key
+    op: Literal[">", ">=", "<", "<=", "==", "!="] | None = None  # body
+    value: float | str | bool | None = None  # body
+    cooldown_seconds: float | None = Field(default=None, gt=0, le=86400)
+
+    @model_validator(mode="after")
+    def _fields_for_type(self) -> CronTriggerSpec:
+        if self.type == "file":
+            if not (self.path or "").strip():
+                raise ValueError("file trigger requires path")
+            if self.field is not None or self.op is not None or self.value is not None:
+                raise ValueError("file trigger takes only path (+ cooldown_seconds)")
+        else:
+            if not (self.field or "").strip():
+                raise ValueError("body trigger requires field")
+            if self.op is None or self.value is None:
+                raise ValueError("body trigger requires op and value")
+            if self.path is not None:
+                raise ValueError("body trigger takes only field/op/value (+ cooldown_seconds)")
+        return self
+
+
 class CronCallSpec(BaseModel):
     """What a cron job runs: a subprocess script or a phantom LLM turn."""
 
@@ -473,7 +509,8 @@ class CronJobSpec(BaseModel):
 
     id: str
     enabled: bool = True
-    schedule: CronScheduleSpec
+    schedule: CronScheduleSpec | None = None
+    trigger: CronTriggerSpec | None = None
     call: CronCallSpec
     delivery: Literal["silent", "digest", "turn"] = "silent"
     chat_id: str | None = None  # owning chat; persona jobs default to theirs
@@ -487,6 +524,12 @@ class CronJobSpec(BaseModel):
         if not _CRON_JOB_ID_RE.fullmatch(v):
             raise ValueError("job id must be a slug: [a-z0-9][a-z0-9_-]*")
         return v
+
+    @model_validator(mode="after")
+    def _exactly_one_driver(self) -> CronJobSpec:
+        if (self.schedule is None) == (self.trigger is None):
+            raise ValueError("job requires exactly one of schedule / trigger")
+        return self
 
 
 class CronFileSpec(BaseModel):

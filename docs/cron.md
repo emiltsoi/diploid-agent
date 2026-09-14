@@ -1,9 +1,10 @@
-# Cron — declarative scheduled jobs
+# Cron — declarative scheduled and triggered jobs
 
 Recurring (and one-shot) jobs defined in config files, run by a background
 `CronService` — without spending a conversational turn. Complements the
 [wake queue](wake.md): wakes are one-shot events that start a chat turn;
-cron jobs are declared schedules that run as tasks or phantoms.
+cron jobs are declared schedules — or declared event triggers — that run
+as tasks or phantoms.
 
 ## Files
 
@@ -26,6 +27,14 @@ jobs:
       cron: "0 */6 * * *"      # 5-field cron (croniter), OR
       # every_seconds: 21600   # plain interval, OR
       # at_daily: "06:30"      # named local wall-clock time
+    # — OR —
+    trigger:
+      type: file               # file | body
+      path: "session:jobs/inbox.flag"   # file only — confined path
+      # field: "energy"        # body only — chat_body_state.json key
+      # op: ">"                # body only — > >= < <= == !=
+      # value: 25              # body only — number, bool, or string
+      # cooldown_seconds: 900  # default: min_interval_seconds
     call:
       type: llm                # llm | script
       persona: vesper          # llm only — whose files the phantom loads
@@ -41,10 +50,60 @@ jobs:
     max_consecutive_failures: 3  # then auto-disable + forced digest entry
 ```
 
-Exactly one schedule field is required. Jobs whose interval is below
-`min_interval_seconds` (including cron expressions that fire too often)
-are dropped with a warning. Duplicate ids across files conflict — the
-first-seen wins and a warning names both files.
+Exactly one **driver** is required — `schedule` or `trigger`, never both.
+Exactly one schedule field is required inside `schedule:`. Jobs whose
+interval is below `min_interval_seconds` (including cron expressions that
+fire too often, or a `cooldown_seconds` under the floor) are dropped with
+a warning. Duplicate ids across files conflict — the first-seen wins and
+a warning names both files.
+
+## Triggers
+
+A `trigger:` job is event-driven rather than time-driven. It shares the
+same registry, state file, overlap policy, failure/auto-disable handling,
+`run_now` door, and all three delivery modes as scheduled jobs — only the
+firing condition differs.
+
+- **`file`** watches a path's mtime. The first observation *adopts* the
+  current mtime without firing — a pre-existing file is not a change. A
+  later change fires once if the cooldown has elapsed; a change observed
+  inside the window stays pending and collapses a burst into one fire.
+  A missing file is simply "no observation" — deletion is not an edge,
+  and recreation counts as the next change.
+- **`body`** reads the owning chat's `chat_body_state.json` and evaluates
+  `field op value`. It fires only on a **false→true edge**: a held-true
+  condition does not refire, and the condition clearing re-arms it. An
+  edge inside the cooldown window stays pending and fires once the window
+  elapses if the condition still holds. Missing file, missing field,
+  malformed JSON, and incompatible value types all evaluate false —
+  safely, without crashing the tick.
+
+`cooldown_seconds` bounds refires (default `min_interval_seconds`);
+explicit values below `min_interval_seconds` drop the job, because a
+trigger under the floor is a loop wearing a watch.
+
+### File trigger path confinement
+
+Persona-authored jobs may not watch arbitrary paths:
+
+- `session:<rel>` resolves under the owning chat's session directory.
+- Other relative paths resolve under the persona's `profile_root`.
+- Absolute paths must land under one of the allowed roots.
+- Operator-global files may additionally reach under `$HOME`.
+
+The resolved path is checked after `.resolve()` — symlinks and `..`
+cannot escape the roots. A job whose path escapes is dropped with a
+warning at merge time.
+
+### Trigger state
+
+Trigger observations persist on the job's `cron_state.jsonl` row
+(`trigger_seen_mtime`, `trigger_fired_at`, `trigger_held`) so cooldowns
+and edge state survive restarts. A hot edit to the `trigger:` block
+re-bootstraps the state — the first observation of the new spec adopts
+without firing. Converting a job between `schedule:` and `trigger:` is a
+hot edit like any other. `POST /cron/<id>/run` fires a trigger job
+without consuming its cooldown or edge state.
 
 ## Call types
 
@@ -140,7 +199,9 @@ Persona-authored files only load while the persona's authorship
 
 `GET /cron` returns the merged job list plus per-job state
 (`next_due_at`, `last_status`, `consecutive_failures`, `running`,
-`auto_disabled`, `turns_today`) and the current reload warnings.
+`auto_disabled`, `turns_today`) and the current reload warnings. Trigger
+jobs carry `trigger` (the spec) and `trigger_state` (`seen_mtime`,
+`fired_at`, `held`); `schedule`/`next_due_at` are null for them.
 
 `POST /cron/<id>/run` fires a job immediately — the operator door for
 testing and recovery. It requires the API key like every mutating route,

@@ -35,11 +35,14 @@ class CronJobState(BaseModel):
     last_summary: str = ""
     last_task_id: str | None = None  # survives restart for reconciliation
     queued_due: bool = False  # overlap=queue: a due fire is owed
-    schedule_key: str = ""  # schedule spec last seen — drift detection
+    schedule_key: str = ""  # schedule/trigger spec last seen — drift detection
     fired_spec: str = ""  # spec json that owns the in-flight run
     fired_chat_id: str = ""  # owning chat at fire time
     turn_count: int = 0  # turn deliveries on turn_date (local day)
     turn_date: str = ""  # YYYY-MM-DD the counter belongs to
+    trigger_seen_mtime: float | None = None  # file trigger: last consumed mtime
+    trigger_fired_at: float | None = None  # trigger cooldown anchor
+    trigger_held: bool = False  # body trigger: condition held last tick
     updated_at: float = Field(default_factory=time.time)
 
 
