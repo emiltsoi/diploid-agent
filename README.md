@@ -27,6 +27,12 @@ retention to a Hindsight memory server.
 - Splits long or pausing Telegram replies into separate intermediate messages so
   tool-call gaps do not mash into one confusing block; each new message shows
   only the text that has not already been sent.
+- Downloads Telegram message attachments (photos, documents, voice, video,
+  video notes, stickers, animations) into the chat workspace at
+  `sessions/<chat_id>/inbox/` via `getFile`, annotating the prompt with the
+  saved path so the agent can `read` the file like any workspace file;
+  `harness.telegram.attachments_*` controls enablement, byte cap, and folder
+  name, and a `session:` cron `file` trigger can watch the inbox.
 - Supports background dispatches that continue the conversation when they complete (`POST /dispatch`, `/continue`) and harness-native background subagents (`/subagent`, `harness_subagent` MCP tool) that survive the parent turn being stopped.
 - Supports live runtime configuration of task, waker, timer, notifications, and Telegram settings via HTTP and Telegram without restarting.
 - Supports state plugins with a rich lifecycle hook surface: plugins can intercept turns, sessions, dispatches, memory transitions, skill/MCP commands, retain/promote, and shutdown.
