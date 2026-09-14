@@ -100,9 +100,7 @@ def _make_restart(
 def test_toggle_disabled_rejects(tmp_path: Path) -> None:
     incidents = _Incidents()
     notices: list[tuple[str, str]] = []
-    restart = _make_restart(
-        _make_config(tmp_path, restart_enabled=False), incidents, notices
-    )
+    restart = _make_restart(_make_config(tmp_path, restart_enabled=False), incidents, notices)
     status = restart._on_service_restart("test-pilot.service", "maintenance")
     assert status.startswith("rejected")
     assert "restart_enabled" in status
@@ -170,9 +168,6 @@ def test_rejected_request_does_not_burn_cooldown(tmp_path: Path) -> None:
     """A 'no such unit' rejection must not consume the restart window."""
     restart = _make_restart(_make_config(tmp_path), _Incidents(), [])
     restart._unit_exists = lambda s: s != "test-pilot.service"  # type: ignore[method-assign]
-    assert (
-        restart._on_service_restart("test-pilot.service", "typo")
-        == "rejected: no such unit"
-    )
+    assert restart._on_service_restart("test-pilot.service", "typo") == "rejected: no such unit"
     restart._unit_exists = lambda s: True  # type: ignore[method-assign]
     assert restart._on_service_restart("test-pilot.service", "for real") == "scheduled"

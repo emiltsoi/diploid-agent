@@ -316,9 +316,7 @@ class ControlListener:
                             elif self._on_service_restart is None:
                                 status = "ignored"
                             else:
-                                status = (
-                                    self._on_service_restart(service, reason) or "ok"
-                                )
+                                status = self._on_service_restart(service, reason) or "ok"
                         conn.sendall(
                             json.dumps(
                                 {

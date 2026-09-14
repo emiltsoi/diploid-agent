@@ -37,9 +37,7 @@ def _listener(name: str, calls: list) -> ControlListener:
     )
 
 
-def _send_restart(
-    path: Path, service: str, reason: str = "test", token: str | None = None
-) -> dict:
+def _send_restart(path: Path, service: str, reason: str = "test", token: str | None = None) -> dict:
     payload = {"action": "restart_service", "service": service, "reason": reason}
     if token is not None:
         payload["token"] = token
