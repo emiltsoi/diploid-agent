@@ -10,10 +10,12 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from diploid_agent.config import AuthorshipConfig
 from diploid_agent.plugins.contexts import ShutdownContext
 from diploid_agent.runtime.state import RuntimeState
 
 if TYPE_CHECKING:
+    from diploid_agent.config import Config
     from diploid_agent.memory import MemoryManager
     from diploid_agent.models import ActiveTurn, ChatState
     from diploid_agent.plugin_incidents import PluginIncidentStore
@@ -37,6 +39,7 @@ class RuntimeRestart:
     def __init__(
         self,
         *,
+        config: Config,
         state: RuntimeState,
         lock: threading.RLock,
         wake_queue: WakeQueue | None,
@@ -51,7 +54,10 @@ class RuntimeRestart:
         suppress_auto_continue_fn: Callable[..., None],
         unit_exists_fn: Callable[[str], bool],
         memory_manager: Callable[[str], MemoryManager],
+        notify_fn: Callable[[str, str], None] | None = None,
     ) -> None:
+        self._config = config
+        self._notify_fn = notify_fn
         self._state = state
         self._lock = lock
         self._wake_queue = wake_queue
@@ -119,13 +125,81 @@ class RuntimeRestart:
                 exc_info=exc,
             )
 
-    def _on_service_restart(self, service: str, reason: str) -> None:
+    def _agent_restart_verdict(self, service: str, reason: str) -> str | None:
+        """Policy check for agent-initiated restarts. ``None`` means allowed.
+
+        Every agent door (the ACP control socket, the ``harness_restart`` MCP
+        tool, anything added later) converges on ``_on_service_restart``, so the
+        gate lives here — not in the sandbox shim or the tool schema. Operator
+        doors (``graceful_service_restart`` via HTTP/Telegram) never pass
+        through this function.
+        """
+        auth: AuthorshipConfig | None = None
+        for plugin in self._config.harness.plugins:
+            if plugin.name != "authorship":
+                continue
+            if plugin.enabled:
+                try:
+                    auth = AuthorshipConfig.model_validate(plugin.config or {})
+                except Exception:
+                    logger.exception("Invalid authorship plugin config")
+                    auth = None
+            break
+        if auth is None or not auth.restart_enabled:
+            return "restart is not enabled for this persona (authorship restart_enabled)"
+        if not reason or not reason.strip():
+            return "a non-empty reason is required"
+        allowed = self._config.harness.restart_allowed_units
+        if not allowed:
+            own = self._config.persona.name if self._config.persona else ""
+            allowed = [f"{own}.service"] if own else []
+        if service not in allowed:
+            return f"service {service!r} is not in restart_allowed_units"
+        return None
+
+    def _notify_agent_restart(self, service: str, reason: str) -> None:
+        """Post an operator notice that an agent-initiated restart is scheduled."""
+        if self._notify_fn is None:
+            return
+        chat_id = self._config.harness.mesh.fallback_chat_id
+        if not chat_id:
+            return
+        persona = self._config.persona.name if self._config.persona else "agent"
+        text = f"[harness] {persona} scheduled a graceful restart of {service}"
+        if reason.strip():
+            text += f" — {reason.strip()}"
+        try:
+            self._notify_fn(chat_id, text)
+        except Exception as exc:
+            logger.warning("Failed to enqueue agent-restart notice", exc_info=exc)
+
+    def _on_service_restart(self, service: str, reason: str) -> str:
         """Handle a service restart request from the ACP subprocess.
 
         Instead of letting the subprocess kill the harness directly, we schedule a
         short-delayed ``systemd-run`` that restarts the service after the current
         turn has a chance to finish and the final reply is delivered.
+
+        Returns an ack status string for the control-socket reply:
+        ``scheduled``, ``cooldown``, or ``rejected: <why>``.
         """
+        verdict = self._agent_restart_verdict(service, reason)
+        if verdict is not None:
+            logger.warning("Agent restart request refused: %s", verdict)
+            if self._incidents is not None:
+                try:
+                    self._incidents.record(
+                        plugin="self_management",
+                        phase="agent_restart_gate",
+                        error=f"{service}: {verdict}",
+                        action="rejected",
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to record restart-gate incident",
+                        exc_info=exc,
+                    )
+            return f"rejected: {verdict}"
         with self._lock:
             now = time.time()
             if (
@@ -136,7 +210,7 @@ class RuntimeRestart:
                     "Ignoring repeat restart request for %s (cooldown active)",
                     service,
                 )
-                return
+                return "cooldown"
             self._state.last_service_restart_at = now
 
         logger.warning(
@@ -173,7 +247,10 @@ class RuntimeRestart:
                 )
 
         # Drain in-flight turns, flush plugin state, then schedule the restart.
-        self._schedule_draining_restart(service, chat_id=None, reason=reason)
+        if not self._schedule_draining_restart(service, chat_id=None, reason=reason):
+            return "rejected: no such unit"
+        self._notify_agent_restart(service, reason)
+        return "scheduled"
 
     def _schedule_draining_restart(
         self,

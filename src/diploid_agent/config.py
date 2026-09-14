@@ -103,6 +103,7 @@ class AuthorshipConfig(BaseModel):
     self_inference_enabled: bool = False
     felt_authorship_enabled: bool = False
     cron_enabled: bool = False
+    restart_enabled: bool = False
     user_override: list[str] = Field(default_factory=list)
 
     @field_validator("user_override", mode="before")
@@ -643,6 +644,10 @@ class HarnessConfig(BaseModel):
     waker: WakerConfig = Field(default_factory=WakerConfig)
     timer: TimerConfig = Field(default_factory=TimerConfig)
     cron: CronConfig = Field(default_factory=CronConfig)
+    # Units an agent-initiated restart may name (the authorship
+    # ``restart_enabled`` toggle still gates it). Empty means "own unit
+    # only" — the persona's ``<name>.service``.
+    restart_allowed_units: list[str] = Field(default_factory=list)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     mesh: MeshConfig = Field(default_factory=MeshConfig)
     prompt_blocks: PromptBlocksConfig = Field(default_factory=PromptBlocksConfig)

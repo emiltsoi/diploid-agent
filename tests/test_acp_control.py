@@ -227,3 +227,20 @@ def test_no_callback_means_no_listener() -> None:
         assert listener._control_listener_thread is None
     finally:
         listener.close()
+
+
+def test_ack_carries_gate_status() -> None:
+    """The socket ack reflects the restart gate's verdict string."""
+    name = _name()
+    listener = ControlListener(
+        service_name=name,
+        on_service_restart=lambda service, reason: "rejected: gated",
+        control_timeout=30.0,
+        watchdog_timeout=30.0,
+    )
+    try:
+        ack = _send_restart(listener.socket_path, name, reason="gated")
+        assert ack["status"] == "rejected: gated"
+        assert ack["service"] == name
+    finally:
+        listener.close()

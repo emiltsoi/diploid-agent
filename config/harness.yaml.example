@@ -63,6 +63,13 @@ harness:
     min_interval_seconds: 300         # jobs firing faster are dropped
     max_llm_timeout_seconds: 600      # phantom turn cap
     max_script_timeout_seconds: 300
+  # Units an agent-initiated restart may name. Gated by the authorship
+  # plugin's restart_enabled toggle; a non-empty reason is required and
+  # every request is incident-recorded. Empty = own unit only
+  # (<persona>.service). Add a peer unit explicitly to allow sister-restart.
+  # Operator doors (POST /graceful-restart, Telegram /graceful-restart)
+  # bypass this entirely.
+  restart_allowed_units: []
   plan:
     root: plans
     store_filename: plans.jsonl

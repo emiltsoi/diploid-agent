@@ -86,6 +86,17 @@ tool calls including shell execution. This would let the agent run
   before the service goes down.
 - Restart requests are rate-limited and suppress `auto_continue` wakes so a single
   "restart now" thought cannot loop the service.
+- Agent-initiated restarts are policy-gated in `RuntimeRestart._on_service_restart`
+  (the convergence point for the control socket and the `harness_restart`
+  `diploid-harness` MCP tool): the authorship plugin's `restart_enabled` toggle
+  must be on, a non-empty `reason` is required, and the target unit must be in
+  `harness.restart_allowed_units` (empty = the persona's own `<name>.service`).
+  Rejections and accepted restarts are incident-recorded, and accepted restarts
+  enqueue an operator notice to `harness.mesh.fallback_chat_id`. Operator doors —
+  `POST /graceful-restart` and Telegram `/graceful-restart` — bypass the gate.
+- Task-spawned ACP children (subagents, cron phantoms) get no restart channel at
+  all: `TaskEngine._run_acp` builds their engine with `service_name=None`,
+  so their `DIPLOID_CONTROL_SOCKET` points at an unbound dead-end path.
 - Long-running background work is started through `harness_subagent` (the
   `diploid-harness` MCP tool), which runs in a fresh AcpEngine via the TaskEngine.
   The parent turn can be stopped while the subagent continues, and the harness

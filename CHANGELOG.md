@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Agent-initiated restart governance: the ACP control-socket restart channel
+  (and the new `harness_restart` `diploid-harness` MCP tool) now converge on a
+  policy gate in `RuntimeRestart._on_service_restart` — the authorship
+  plugin's `restart_enabled` toggle must be on, a non-empty `reason` is
+  required, and the target unit must be in `harness.restart_allowed_units`
+  (empty = the persona's own `<name>.service`). Rejections are
+  incident-recorded (`phase="agent_restart_gate"`); accepted restarts enqueue
+  an operator notice to `harness.mesh.fallback_chat_id`. The socket ack now
+  carries the gate's status (`scheduled` / `cooldown` / `rejected: <why>`).
+  Operator doors (`POST /graceful-restart`, Telegram `/graceful-restart`)
+  bypass the gate. Task-spawned ACP children (subagents, cron phantoms) are
+  built with `service_name=None`, so their `DIPLOID_CONTROL_SOCKET` points at
+  an unbound dead end — they cannot reach the restart channel at all.
+
 ## 0.6.4 — 2026-09-14
 
 ### Added

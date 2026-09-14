@@ -256,6 +256,7 @@ class AgentRuntime(RuntimeAPI):
             self._config_manager._save_runtime_overrides()
 
         self._restart = RuntimeRestart(
+            config=self.config,
             state=self._state,
             lock=self._lock,
             wake_queue=self.wake_queue,
@@ -270,6 +271,7 @@ class AgentRuntime(RuntimeAPI):
             suppress_auto_continue_fn=lambda *a, **k: self.suppress_auto_continue(*a, **k),
             unit_exists_fn=lambda s: self._unit_exists(s),
             memory_manager=self._memory_manager,
+            notify_fn=self._notify_agent_restart,
         )
 
         # Ingress handlers for pluggable transport protocols (e.g. mesh).
@@ -482,9 +484,16 @@ class AgentRuntime(RuntimeAPI):
     def _service_restart_cooldown_seconds(self, value: float) -> None:
         self._state.service_restart_cooldown_seconds = value
 
-    def _on_service_restart(self, service: str, reason: str) -> None:
+    def _on_service_restart(self, service: str, reason: str) -> str:
         """Handle a service restart request from the ACP subprocess."""
-        self._restart._on_service_restart(service, reason)
+        return self._restart._on_service_restart(service, reason)
+
+    def _notify_agent_restart(self, chat_id: str, text: str) -> None:
+        """Enqueue an operator notice for an agent-initiated restart."""
+        try:
+            self._enqueue_outbox(chat_id, ChatResult(reply=text))
+        except Exception as exc:
+            logger.warning("Failed to notify chat %s of agent restart", chat_id, exc_info=exc)
 
     def _unit_exists(self, service: str) -> bool:
         """Best-effort check that a user unit exists before draining for it."""

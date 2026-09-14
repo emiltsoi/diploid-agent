@@ -58,7 +58,7 @@ class ControlListener:
     def __init__(
         self,
         service_name: str,
-        on_service_restart: Callable[[str, str], None] | None,
+        on_service_restart: Callable[[str, str], str] | None,
         control_timeout: float,
         watchdog_timeout: float,
     ) -> None:
@@ -274,12 +274,18 @@ class ControlListener:
                         action = msg.get("action")
                         service = msg.get("service") or self._service_name or "unknown.service"
                         reason = msg.get("reason", "")
-                        if action == "restart_service" and self._on_service_restart is not None:
-                            self._on_service_restart(service, reason)
+                        status = "ok"
+                        if action == "restart_service":
+                            if self._on_service_restart is None:
+                                status = "ignored"
+                            else:
+                                status = (
+                                    self._on_service_restart(service, reason) or "ok"
+                                )
                         conn.sendall(
                             json.dumps(
                                 {
-                                    "status": "ok",
+                                    "status": status,
                                     "pid": os.getpid(),
                                     "service": self._service_name,
                                 }

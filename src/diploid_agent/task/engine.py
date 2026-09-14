@@ -250,12 +250,16 @@ class TaskEngine:
 
         if self.engine is None or isinstance(self.engine, AcpEngine):
             api_key = self.config.secrets.windsurf_api_key if self.config.secrets else None
-            service_name = f"{self.config.persona.name}.service" if self.config.persona else None
+            # Task-spawned children (subagents, cron phantoms) get no restart
+            # channel: service_name=None advertises a dead-end control socket
+            # and the listener never binds, so the shim cannot reach the gate.
+            # The conversational agent holds restart power; a child that needs
+            # one reports back instead.
             engine = build_engine(
                 self.config.engine,
                 api_key=api_key,
-                service_name=service_name,
-                on_service_restart=self._on_service_restart,
+                service_name=None,
+                on_service_restart=None,
             )
         else:
             engine = self.engine

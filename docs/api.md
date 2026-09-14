@@ -166,6 +166,12 @@ curl -X POST http://127.0.0.1:4003/graceful-restart \
   -d '{"chat_id": "test-1"}'
 ```
 
+This is an operator door: it bypasses the agent-restart gate. Agent-initiated
+restarts (control socket, `harness_restart` MCP tool) go through
+`RuntimeRestart._on_service_restart`, which enforces the authorship
+`restart_enabled` toggle, a required reason, and
+`harness.restart_allowed_units`. See `docs/security.md`.
+
 Response:
 
 ```json
