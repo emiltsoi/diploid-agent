@@ -733,9 +733,18 @@ class CronService:
         if len(pending) >= timer_cfg.self_wake_max_pending:
             return "turn_suppressed: wake budget reached"
         scheduled_at = now
-        latest = max((e.created_at for e in pending), default=0.0)
-        if latest and now - latest < timer_cfg.self_wake_min_interval_seconds:
-            scheduled_at = latest + timer_cfg.self_wake_min_interval_seconds
+        interval = timer_cfg.self_wake_min_interval_seconds
+        # Space fires, not arms: only a fire inside the interval window
+        # collides with a now-delivery — an overdue event effectively fires
+        # at the next waker tick, while an arm for far beyond the window
+        # must not push a ready result out behind it.
+        colliding = [
+            max(e.scheduled_at, now)
+            for e in pending
+            if e.scheduled_at < now + interval
+        ]
+        if colliding:
+            scheduled_at = max(colliding) + interval
         summary = (task.result or task.log or "").strip()
         message = (
             f"[cron: {resolved.spec.id} finished — {state.last_status}]\n"

@@ -670,6 +670,54 @@ def test_turn_delivery_min_interval_defers(tmp_path: Path) -> None:
     assert _last_file(tmp_path)["delivery_result"].startswith("turn_deferred")
 
 
+def test_turn_delivery_defers_past_pending_fire(tmp_path: Path) -> None:
+    """A deferred/imminent pool fire pushes the next delivery past *it* —
+    spacing fires, not arms."""
+    config = _make_config(tmp_path, persona_crons={"jobs": [_script_job(delivery="turn")]})
+    svc = _make_service(config, tmp_path)
+    other = svc._wake_queue.enqueue(
+        WakeEvent(
+            id="",
+            chat_id="chat-1",
+            reason="self_wake",
+            priority=1,
+            scheduled_at=time.time() + 120,
+            payload={},
+            created_at=time.time() - 3600,
+            ready=True,
+        )
+    )
+    _run_to_done(svc)
+    events = [e for e in svc._wake_queue.pending(chat_id="chat-1") if e.reason == "cron:tidy"]
+    assert len(events) == 1
+    min_interval = config.harness.timer.self_wake_min_interval_seconds
+    assert events[0].scheduled_at >= other.scheduled_at + min_interval - 5
+    assert _last_file(tmp_path)["delivery_result"].startswith("turn_deferred")
+
+
+def test_turn_delivery_far_future_arm_does_not_defer(tmp_path: Path) -> None:
+    """An arm outside the collision window doesn't push a ready result out."""
+    config = _make_config(tmp_path, persona_crons={"jobs": [_script_job(delivery="turn")]})
+    svc = _make_service(config, tmp_path)
+    svc._wake_queue.enqueue(
+        WakeEvent(
+            id="",
+            chat_id="chat-1",
+            reason="self_wake",
+            priority=1,
+            scheduled_at=time.time() + 7200,
+            payload={},
+            created_at=time.time() - 3600,
+            ready=True,
+        )
+    )
+    _run_to_done(svc)
+    events = [e for e in svc._wake_queue.pending(chat_id="chat-1") if e.reason == "cron:tidy"]
+    assert len(events) == 1
+    assert events[0].scheduled_at <= time.time() + 5
+    assert _last_file(tmp_path)["delivery_result"] == "turn"
+
+
 def test_turn_delivery_daily_cap(tmp_path: Path) -> None:
     config = _make_config(
         tmp_path,
