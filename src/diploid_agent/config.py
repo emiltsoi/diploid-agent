@@ -567,11 +567,20 @@ class CronConfig(BaseModel):
     phantom_persona_max_chars: int = Field(default=6000, ge=0)
     phantom_memory_max_chars: int = Field(default=4000, ge=0)
     phantom_promoted_max_chars: int = Field(default=1500, ge=0)
+    # Extra filesystem roots a file trigger may watch, for persona AND global
+    # jobs — the operator's door for shared spaces outside the persona/session
+    # confinement (e.g. a common-room directory on a shared mount).
+    trigger_allowed_roots: list[Path] = Field(default_factory=list)
 
     @field_validator("global_file", "state_path")
     @classmethod
     def _expand_cron_paths(cls, v: Path | None) -> Path | None:
         return v.expanduser() if v is not None else None
+
+    @field_validator("trigger_allowed_roots")
+    @classmethod
+    def _expand_trigger_roots(cls, v: list[Path]) -> list[Path]:
+        return [p.expanduser() for p in v]
 
 
 class ConversationBudget(BaseModel):

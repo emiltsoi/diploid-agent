@@ -1112,6 +1112,26 @@ def test_file_trigger_global_may_reach_home(tmp_path: Path, monkeypatch) -> None
     assert svc._state.get("watcher").running_task_id is not None
 
 
+def test_file_trigger_allowed_roots_open_shared_space(tmp_path: Path) -> None:
+    """Operator allowlist opens a shared root (e.g. a common-room mount) to
+    persona jobs; paths outside every root stay refused."""
+    common = tmp_path / "common-room"
+    _touch(common / "knock-vesper.txt")
+    job = _file_job(str(common / "knock-vesper.txt"))
+    outsider = _file_job(str(tmp_path / "elsewhere.txt"), id="outsider")
+    config = _make_config(tmp_path, persona_crons={"jobs": [job, outsider]})
+    config.harness.cron.trigger_allowed_roots = [common]
+    svc = _make_service(config, tmp_path)
+    assert "watcher" in svc._jobs
+    assert "outsider" not in svc._jobs
+    assert any("escapes" in w for w in svc._warnings)
+    svc._tick()
+    _touch(common / "knock-vesper.txt", delta=10)
+    svc._tick()
+    # Durable proof of a fire — a fast task may finalize before we read.
+    assert svc._state.get("watcher").last_task_id is not None
+
+
 def test_file_trigger_missing_and_recreate(tmp_path: Path) -> None:
     watch = tmp_path / "persona" / "watch.txt"
     config = _make_config(tmp_path, persona_crons={"jobs": [_file_job("watch.txt")]})

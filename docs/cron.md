@@ -93,6 +93,17 @@ Persona-authored jobs may not watch arbitrary paths:
 - Other relative paths resolve under the persona's `profile_root`.
 - Absolute paths must land under one of the allowed roots.
 - Operator-global files may additionally reach under `$HOME`.
+- `harness.cron.trigger_allowed_roots` (list of paths) opens extra roots
+  to **both** persona and global jobs — the operator's door for shared
+  spaces outside the persona/session confinement, e.g. a common-room
+  directory on a shared mount:
+
+  ```yaml
+  harness:
+    cron:
+      trigger_allowed_roots:
+        - /nas/emiltsoi/Agents/vault
+  ```
 
 The resolved path is checked after `.resolve()` — symlinks and `..`
 cannot escape the roots. A job whose path escapes is dropped with a

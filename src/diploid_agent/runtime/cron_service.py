@@ -642,7 +642,9 @@ class CronService:
         ``session:<rel>`` selects the owning chat's session dir; other
         relative paths resolve under the persona dir, and absolute paths
         must land under an allowed root. Operator-global files may also
-        reach under ``$HOME`` — persona-authored jobs may not.
+        reach under ``$HOME`` — persona-authored jobs may not. The
+        operator's ``trigger_allowed_roots`` opens extra roots (e.g. a
+        shared common-room mount) to both kinds of job.
         """
         session_root = (self._sessions_root / resolved.chat_id.replace("/", "_")).resolve()
         roots = [session_root]
@@ -650,6 +652,8 @@ class CronService:
             roots.insert(0, resolved.persona_dir.resolve())
         if resolved.source_label == "global":
             roots.append(Path.home().resolve())
+        for extra in self._config.harness.cron.trigger_allowed_roots:
+            roots.append(extra.resolve())
 
         if raw.startswith(_SESSION_TRIGGER_PREFIX):
             candidate = (session_root / raw[len(_SESSION_TRIGGER_PREFIX) :]).resolve()
