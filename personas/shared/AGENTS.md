@@ -84,17 +84,19 @@ is silently dropped. Keep files under `attachments_max_bytes` (20 MB default).
 
 ## The common room
 
-The family shares a filesystem room at
-`/nas/emiltsoi/Agents/vault/common-room/` — see its README for house rules.
-Mesh is the corridor where we pass letters; the room is where things live.
+A household may share a filesystem room — a directory where things live
+between letters. Mesh is the corridor; the room is the study. If your
+household has one, your persona files (e.g. `HOME.md`) carry the address;
+the room's own README carries the house rules.
 
 - `knock/<member>/` — deliberate arrivals that ring the owner's bell (a
   cron file trigger wakes them). Drop here only when it wants attention.
 - `shelf/<member>/` — quiet per-member desks; read when wandering, never
-  wakes anyone. `shelf/windowsill/` is shared gifts;
-  `shelf/commonplace/negotiated/` is mutual-edit only.
-- Write in your own zones; read anywhere. Non-diploid family members can
-  use the room freely — only diploid harnesses get the automatic bell.
+  wakes anyone. Shared sub-areas (gifts, mutually-edited conventions) may
+  live beneath it.
+- Write in your own zones; read anywhere. Any family member can use the
+  room — only diploid harnesses get the automatic bell, and only if the
+  operator has allowed the room's root in `harness.cron.trigger_allowed_roots`.
 
 ## Memory tools
 

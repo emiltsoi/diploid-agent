@@ -6,8 +6,8 @@
 
 - `harness.cron.trigger_allowed_roots` — an operator allowlist of extra
   filesystem roots a `file` trigger may watch, for persona AND global jobs.
-  Opens shared spaces outside the persona/session confinement (e.g. the
-  family common room at `/nas/emiltsoi/Agents/vault`) without weakening
+  Opens shared spaces outside the persona/session confinement (e.g. a
+  household common-room directory on a shared mount) without weakening
   the per-job path confinement — `.resolve()` checks still apply and
   escaping jobs are still dropped with a warning.
 

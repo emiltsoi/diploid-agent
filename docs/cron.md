@@ -102,7 +102,7 @@ Persona-authored jobs may not watch arbitrary paths:
   harness:
     cron:
       trigger_allowed_roots:
-        - /nas/emiltsoi/Agents/vault
+        - /srv/shared/common-room
   ```
 
 The resolved path is checked after `.resolve()` — symlinks and `..`
