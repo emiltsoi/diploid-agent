@@ -1203,6 +1203,50 @@ def test_body_trigger_rearm_on_clear(tmp_path: Path) -> None:
     assert svc._state.get("bodyguard").running_task_id is not None
 
 
+def test_body_trigger_unwraps_richer_field(tmp_path: Path) -> None:
+    """Richer body-state fields are {"value": ..., "set_at": ...} records —
+    the trigger compares on .value so `fatigue > 0.7` keeps the edge
+    vocabulary (negotiated richer-body-state design)."""
+    body = _body_file(tmp_path)
+    body.write_text(
+        json.dumps({"fatigue": {"value": 0.9, "set_at": time.time(), "derived": True}})
+    )
+    job = _body_job(field="fatigue", op=">", value=0.7)
+    config = _make_config(tmp_path, persona_crons={"jobs": [job]})
+    svc = _make_service(config, tmp_path)
+    svc._tick()
+    assert svc._state.get("bodyguard").running_task_id is not None
+
+
+def test_body_trigger_persona_scope_fallback(tmp_path: Path) -> None:
+    """Persona-scope fields (energy, mood_tint, persona attention fallback)
+    live in persona_body_state.json beside the chat dirs — one body, one
+    record. A field missing from the chat file resolves there."""
+    persona = tmp_path / "sessions" / "persona_body_state.json"
+    persona.parent.mkdir(parents=True, exist_ok=True)
+    persona.write_text(json.dumps({"energy": {"value": 0.2, "set_at": time.time()}}))
+    job = _body_job(field="energy", op="<", value=0.3)
+    config = _make_config(tmp_path, persona_crons={"jobs": [job]})
+    svc = _make_service(config, tmp_path)
+    svc._tick()
+    assert svc._state.get("bodyguard").running_task_id is not None
+
+
+def test_body_trigger_chat_field_beats_persona(tmp_path: Path) -> None:
+    """Scope precedence: a chat-level field wins over the persona record."""
+    persona = tmp_path / "sessions" / "persona_body_state.json"
+    persona.parent.mkdir(parents=True, exist_ok=True)
+    persona.write_text(json.dumps({"attention": {"value": "background", "set_at": 1.0}}))
+    _body_file(tmp_path).write_text(
+        json.dumps({"attention": {"value": "focused", "set_at": 1.0}})
+    )
+    job = _body_job(field="attention", op="==", value="focused")
+    config = _make_config(tmp_path, persona_crons={"jobs": [job]})
+    svc = _make_service(config, tmp_path)
+    svc._tick()
+    assert svc._state.get("bodyguard").running_task_id is not None
+
+
 def test_body_trigger_operators(tmp_path: Path) -> None:
     assert CronService._compare(30, ">", 25) is True
     assert CronService._compare(25, ">", 25) is False

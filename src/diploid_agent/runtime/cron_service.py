@@ -68,6 +68,7 @@ _TRIGGER_OPS = {
 }
 _SESSION_TRIGGER_PREFIX = "session:"
 _BODY_STATE_FILENAME = "chat_body_state.json"
+_PERSONA_BODY_STATE_FILENAME = "persona_body_state.json"
 
 
 @dataclass
@@ -610,6 +611,20 @@ class CronService:
         except (OSError, json.JSONDecodeError):
             data = {}
         current = data.get(trig.field) if isinstance(data, dict) else None
+        if current is None:
+            # Persona-scope fields (energy, mood_tint, persona attention
+            # fallback) live beside the chat dirs — one body, one record.
+            persona_path = self._sessions_root / _PERSONA_BODY_STATE_FILENAME
+            try:
+                pdata = json.loads(persona_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                pdata = {}
+            current = pdata.get(trig.field) if isinstance(pdata, dict) else None
+        # Richer body-state fields are {"value": ..., "set_at": ...} records —
+        # compare on the value so `fatigue > 0.7` and `attention == "background"`
+        # keep the existing false→true vocabulary.
+        if isinstance(current, dict) and "value" in current:
+            current = current["value"]
         held = self._compare(current, trig.op, trig.value)
         if not held:
             if state.trigger_held:
