@@ -9,6 +9,7 @@ converge on ``RuntimeRestart._on_service_restart``; the authorship
 
 from __future__ import annotations
 
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -171,3 +172,98 @@ def test_rejected_request_does_not_burn_cooldown(tmp_path: Path) -> None:
     assert restart._on_service_restart("test-pilot.service", "typo") == "rejected: no such unit"
     restart._unit_exists = lambda s: True  # type: ignore[method-assign]
     assert restart._on_service_restart("test-pilot.service", "for real") == "scheduled"
+
+
+def _unstub(restart: RuntimeRestart) -> RuntimeRestart:
+    """Rebind the real scheduler/watchdog the fixture stubs out."""
+    restart._schedule_systemd_restart = (  # type: ignore[method-assign]
+        RuntimeRestart._schedule_systemd_restart.__get__(restart)
+    )
+    restart._arm_restart_watchdog = (  # type: ignore[method-assign]
+        RuntimeRestart._arm_restart_watchdog.__get__(restart)
+    )
+    return restart
+
+
+def _wait_for(predicate, timeout: float = 5.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_systemd_run_failure_clears_drain_and_notifies(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A failed systemd-run must reopen the gate and tell the requester."""
+    incidents = _Incidents()
+    notices: list[tuple[str, str]] = []
+    restart = _unstub(_make_restart(_make_config(tmp_path), incidents, notices))
+    restart._state.restart_draining.set()
+    restart._state.last_service_restart_at = time.time()
+
+    class _Proc:
+        returncode = 1
+        stderr = "Failed to start transient timer unit: Unit not found."
+        stdout = ""
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Proc())
+
+    restart._schedule_systemd_restart(
+        "test-pilot.service", delay=0.1, chat_id="chat-9", reason="test"
+    )
+    assert _wait_for(lambda: not restart._state.restart_draining.is_set())
+    assert restart._state.last_service_restart_at == 0.0
+    assert notices and notices[0][0] == "chat-9"  # requester chat, not fallback
+    assert "test-pilot.service" in notices[0][1]
+    assert "did not fire" in notices[0][1]
+    assert incidents.records[0]["phase"] == "graceful_restart"
+    assert incidents.records[0]["action"] == "drain_cleared"
+    assert incidents.records[0]["chat_id"] == "chat-9"
+
+
+def test_systemd_run_success_keeps_drain(tmp_path: Path, monkeypatch) -> None:
+    """A clean systemd-run leaves the drain armed for the real restart."""
+    incidents = _Incidents()
+    notices: list[tuple[str, str]] = []
+    restart = _unstub(_make_restart(_make_config(tmp_path), incidents, notices))
+    restart._state.restart_draining.set()
+    restart._state.last_service_restart_at = time.time()
+
+    class _Proc:
+        returncode = 0
+        stderr = ""
+        stdout = "Running timer as unit: run-abc.timer"
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Proc())
+
+    restart._schedule_systemd_restart(
+        "test-pilot.service", delay=0.1, chat_id="chat-9", reason="test"
+    )
+    time.sleep(0.3)
+    assert restart._state.restart_draining.is_set()
+    assert restart._state.last_service_restart_at > 0.0
+    assert not notices
+    assert not incidents.records
+
+
+def test_watchdog_reaper_notifies_requester(tmp_path: Path) -> None:
+    """When the timer never fires, the reaper reopens the gate and says so."""
+    incidents = _Incidents()
+    notices: list[tuple[str, str]] = []
+    restart = _unstub(_make_restart(_make_config(tmp_path), incidents, notices))
+    restart._state.started = True
+    restart._state.restart_draining.set()
+    restart._state.last_service_restart_at = time.time()
+
+    restart._arm_restart_watchdog(
+        "test-pilot.service", due_in=0.05, chat_id="chat-9", margin=0.05
+    )
+    assert _wait_for(lambda: not restart._state.restart_draining.is_set())
+    assert restart._state.last_service_restart_at == 0.0
+    assert notices and notices[0][0] == "chat-9"
+    assert "did not fire" in notices[0][1]
+    assert incidents.records[0]["phase"] == "graceful_restart"
+    assert incidents.records[0]["action"] == "drain_cleared"

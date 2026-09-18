@@ -295,6 +295,53 @@ class RuntimeRestart:
         threading.Thread(target=_drain_then_restart, daemon=True, name="restart-drain").start()
         return True
 
+    def _notify_restart_failed(
+        self,
+        service: str,
+        chat_id: str | None,
+        detail: str,
+    ) -> None:
+        """Post an operator notice that a scheduled restart will not fire."""
+        if self._notify_fn is None:
+            return
+        target = chat_id or self._config.harness.mesh.fallback_chat_id
+        if not target:
+            return
+        persona = self._config.persona.name if self._config.persona else "agent"
+        text = f"[harness] {persona} restart of {service} did not fire — {detail}"
+        try:
+            self._notify_fn(target, text)
+        except Exception as exc:
+            logger.warning("Failed to enqueue restart-failure notice", exc_info=exc)
+
+    def _restart_failed(
+        self,
+        service: str,
+        chat_id: str | None,
+        cause: str,
+    ) -> None:
+        """A scheduled restart will not fire: reopen the gate, record, notify.
+
+        Called when ``systemd-run`` fails synchronously and by the watchdog
+        when the timer never fires — clears the drain so turns resume instead
+        of the service refusing work while still alive, and resets the
+        cooldown so a retry is not blocked.
+        """
+        self._state.restart_draining.clear()
+        self._state.last_service_restart_at = 0.0
+        if self._incidents is not None:
+            try:
+                self._incidents.record(
+                    plugin="self_management",
+                    phase="graceful_restart",
+                    error=f"Scheduled restart of {service} did not fire: {cause}",
+                    action="drain_cleared",
+                    chat_id=chat_id,
+                )
+            except Exception:
+                logger.exception("Failed to record failed-restart incident")
+        self._notify_restart_failed(service, chat_id, cause)
+
     def _arm_restart_watchdog(
         self,
         service: str,
@@ -303,32 +350,21 @@ class RuntimeRestart:
         margin: float = 60.0,
     ) -> None:
         """Self-heal when a scheduled restart never fires (missing unit,
-        systemd-run failure): clear the drain flag so the service does not
-        wedge refusing new turns forever.
+        timer dropped): clear the drain flag so the service does not wedge
+        refusing new turns forever, and tell the requester it is still alive.
         """
 
         def _reaper() -> None:
             time.sleep(due_in + margin)
             if not self._state.started or not self._state.restart_draining.is_set():
-                # A real restart/shutdown is already underway.
+                # A real restart/shutdown is already underway, or the schedule
+                # itself failed synchronously and was already reported.
                 return
-            self._state.restart_draining.clear()
-            self._state.last_service_restart_at = 0.0
             logger.error(
                 "Scheduled restart of %s never fired; cleared drain state so turns resume",
                 service,
             )
-            if self._incidents is not None:
-                try:
-                    self._incidents.record(
-                        plugin="self_management",
-                        phase="graceful_restart",
-                        error=f"Scheduled restart of {service} did not fire",
-                        action="drain_cleared",
-                        chat_id=chat_id,
-                    )
-                except Exception:
-                    logger.exception("Failed to record failed-restart incident")
+            self._restart_failed(service, chat_id, "scheduled restart never fired")
 
         threading.Thread(target=_reaper, daemon=True, name="restart-watchdog").start()
 
@@ -389,7 +425,7 @@ class RuntimeRestart:
 
         def _do_restart() -> None:
             try:
-                subprocess.Popen(
+                proc = subprocess.run(
                     [
                         "systemd-run",
                         "--user",
@@ -401,20 +437,34 @@ class RuntimeRestart:
                         service,
                     ],
                     start_new_session=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    check=False,
                 )
-                if chat_id is not None:
-                    logger.info(
-                        "Scheduled graceful restart of %s in %ss (from chat %s)",
-                        service,
-                        delay,
-                        chat_id,
-                    )
-                else:
-                    logger.info("Scheduled graceful restart of %s in %ss", service, delay)
-            except Exception:
+            except Exception as exc:
                 logger.exception("Failed to schedule graceful restart of %s", service)
+                self._restart_failed(service, chat_id, f"systemd-run error: {exc}")
+                return
+            if proc.returncode != 0:
+                detail = (proc.stderr or proc.stdout or "").strip() or f"exit {proc.returncode}"
+                logger.error(
+                    "systemd-run scheduling restart of %s exited %s: %s",
+                    service,
+                    proc.returncode,
+                    detail,
+                )
+                self._restart_failed(service, chat_id, detail)
+                return
+            if chat_id is not None:
+                logger.info(
+                    "Scheduled graceful restart of %s in %ss (from chat %s)",
+                    service,
+                    delay,
+                    chat_id,
+                )
+            else:
+                logger.info("Scheduled graceful restart of %s in %ss", service, delay)
 
         # Run the scheduler in its own thread so the ACP control listener is not
         # blocked.
