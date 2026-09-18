@@ -21,7 +21,7 @@ def register_skills(
     config: Config,
     _require_api_key: Callable[[str | None], None],
 ) -> None:
-    @app.get("/skill/{chat_id}")
+    @app.get("/skill/{chat_id}", dependencies=[Depends(_require_api_key)])
     def skill_get(chat_id: str) -> ChatResponse:
         raw = command_handler.call(
             method="skill_list",

@@ -24,7 +24,7 @@ def register_plugins(
     config: Config,
     _require_api_key: Callable[[str | None], None],
 ) -> None:
-    @app.get("/plugins/{chat_id}", response_model=PluginListResponse)
+    @app.get("/plugins/{chat_id}", response_model=PluginListResponse, dependencies=[Depends(_require_api_key)])
     def plugin_list(chat_id: str) -> PluginListResponse:
         raw = command_handler.call(
             method="plugin_list",

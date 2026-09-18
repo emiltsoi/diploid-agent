@@ -54,6 +54,7 @@ class TelegramCommandMixin:
                 resp = self.client.post(
                     f"{self.harness_url}/chat",
                     json={"chat_id": str(chat_id), "message": message},
+                    headers=self._harness_headers(),
                     timeout=self.reply_timeout,
                 )
                 resp.raise_for_status()

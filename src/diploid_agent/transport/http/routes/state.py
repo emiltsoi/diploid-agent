@@ -32,7 +32,7 @@ def register_state(
         )
         return _to_response(raw)
 
-    @app.get("/memory/{chat_id}")
+    @app.get("/memory/{chat_id}", dependencies=[Depends(_require_api_key)])
     def memory(chat_id: str) -> dict[str, object]:
         raw = command_handler.call(
             method="memory",

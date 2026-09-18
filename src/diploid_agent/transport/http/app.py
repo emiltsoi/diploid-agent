@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hmac
 from pathlib import Path
 
 import uvicorn
@@ -55,11 +56,16 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
     def _require_api_key(
         x_api_key: str | None = Header(None, alias="X-API-Key"),
     ) -> None:
-        """Require X-API-Key on POST endpoints when HARNESS_API_KEY is configured."""
+        """Require X-API-Key when HARNESS_API_KEY is configured.
+
+        Applied to every endpoint except ``GET /health``, which stays open
+        for uptime probes (it returns only status booleans). Mesh ingress
+        POSTs are separately authenticated by the signed mesh envelope.
+        """
         token = config.secrets.harness_api_key if config.secrets else None
         if token is None:
             return
-        if x_api_key != token:
+        if x_api_key is None or not hmac.compare_digest(x_api_key, token):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Invalid or missing X-API-Key",

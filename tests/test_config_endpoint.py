@@ -61,7 +61,7 @@ def client(tmp_path: Path) -> TestClient:
 
 
 def test_config_get_excludes_secrets(client: TestClient) -> None:
-    response = client.get("/config")
+    response = client.get("/config", headers={"X-API-Key": "harness-secret"})
     assert response.status_code == 200
     data = response.json()
     assert "secrets" not in data
@@ -90,7 +90,7 @@ def test_config_patch_telegram(client: TestClient) -> None:
     assert data["harness"]["telegram"]["stream_chunk_interval"] == 0.5
 
     # Change should persist in memory.
-    response = client.get("/config")
+    response = client.get("/config", headers={"X-API-Key": "harness-secret"})
     assert response.json()["harness"]["telegram"]["enabled"] is True
 
 

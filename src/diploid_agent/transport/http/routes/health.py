@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from starlette.responses import PlainTextResponse
 
 from diploid_agent.config import (
@@ -29,7 +29,7 @@ def register_health(
             catch=False,
         )
 
-    @app.get("/prometheus")
+    @app.get("/prometheus", dependencies=[Depends(_require_api_key)])
     def prometheus() -> PlainTextResponse:
         raw = command_handler.call(
             method="get_prometheus_metrics",
@@ -38,7 +38,7 @@ def register_health(
         )
         return PlainTextResponse(raw)
 
-    @app.get("/metrics")
+    @app.get("/metrics", dependencies=[Depends(_require_api_key)])
     def metrics() -> dict[str, Any]:
         return command_handler.call(
             method="get_metrics",
@@ -48,7 +48,7 @@ def register_health(
             catch=False,
         )
 
-    @app.get("/metrics/{chat_id}")
+    @app.get("/metrics/{chat_id}", dependencies=[Depends(_require_api_key)])
     def chat_metrics(chat_id: str) -> dict[str, Any]:
         return command_handler.call(
             method="get_metrics",

@@ -84,7 +84,7 @@ def register_plans(
             ) from exc
         return _task_to_response(raw)
 
-    @app.get("/plan/list", response_model=list[PlanResponse])
+    @app.get("/plan/list", response_model=list[PlanResponse], dependencies=[Depends(_require_api_key)])
     def plan_list() -> list[PlanResponse]:
         try:
             raw = command_handler.call(
@@ -97,7 +97,7 @@ def register_plans(
         plans = raw if isinstance(raw, list) else []
         return [_plan_to_response(p) for p in plans]
 
-    @app.get("/plan/{plan_id}", response_model=PlanResponse)
+    @app.get("/plan/{plan_id}", response_model=PlanResponse, dependencies=[Depends(_require_api_key)])
     def plan_get(plan_id: str) -> PlanResponse:
         try:
             raw = command_handler.call(

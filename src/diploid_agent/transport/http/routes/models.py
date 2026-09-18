@@ -21,7 +21,7 @@ def register_models(
     config: Config,
     _require_api_key: Callable[[str | None], None],
 ) -> None:
-    @app.get("/models")
+    @app.get("/models", dependencies=[Depends(_require_api_key)])
     def models() -> dict[str, list[str]]:
         raw = command_handler.call(
             method="list_models",
@@ -47,7 +47,7 @@ def register_models(
         )
         return _to_response(raw)
 
-    @app.get("/mcp/{chat_id}")
+    @app.get("/mcp/{chat_id}", dependencies=[Depends(_require_api_key)])
     def mcp_get(chat_id: str) -> ChatResponse:
         raw = command_handler.call(
             method="mcp_list",

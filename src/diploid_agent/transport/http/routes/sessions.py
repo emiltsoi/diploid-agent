@@ -34,7 +34,7 @@ def register_sessions(
         )
         return _to_response(raw)
 
-    @app.get("/sessions/{chat_id}")
+    @app.get("/sessions/{chat_id}", dependencies=[Depends(_require_api_key)])
     def sessions(chat_id: str) -> dict[str, Any]:
         return command_handler.call(
             method="list_sessions",
@@ -44,7 +44,7 @@ def register_sessions(
             catch=False,
         )
 
-    @app.get("/subagents/{chat_id}")
+    @app.get("/subagents/{chat_id}", dependencies=[Depends(_require_api_key)])
     def subagents(chat_id: str) -> dict[str, Any]:
         return command_handler.call(
             method="subagent_status",
@@ -54,7 +54,7 @@ def register_sessions(
             catch=False,
         )
 
-    @app.get("/outbox", response_model=OutboxResponse)
+    @app.get("/outbox", response_model=OutboxResponse, dependencies=[Depends(_require_api_key)])
     def outbox_global(wait: float = Query(0.0, ge=0, le=60)) -> OutboxResponse:
         """Long-poll the next outbox item for any chat."""
         raw = command_handler.call(
@@ -73,7 +73,7 @@ def register_sessions(
         # Fallback for older runtimes that don't support return_chat_id.
         return OutboxResponse(chat_id=None, result=_to_response(raw))
 
-    @app.get("/outbox/{chat_id}", response_model=OutboxResponse)
+    @app.get("/outbox/{chat_id}", response_model=OutboxResponse, dependencies=[Depends(_require_api_key)])
     def outbox(chat_id: str, wait: float = Query(0.0, ge=0, le=60)) -> OutboxResponse:
         raw = command_handler.call(
             method="outbox_pop",

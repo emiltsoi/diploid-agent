@@ -463,7 +463,24 @@ def test_post_with_correct_token_accepted(auth_client: TestClient) -> None:
     assert response.json()["reply"]
 
 
-def test_get_and_webhook_stay_open_with_auth(auth_client: TestClient, monkeypatch) -> None:
+def test_health_stays_open_with_auth(auth_client: TestClient) -> None:
+    """Health stays open for uptime probes; everything else needs the key."""
+    response = auth_client.get("/health")
+    assert response.status_code == 200
+
+
+def test_gets_rejected_without_token(auth_client: TestClient) -> None:
+    for path in ("/config", "/models", "/sessions/chat-1", "/outbox", "/runtime/status"):
+        response = auth_client.get(path)
+        assert response.status_code == 403, f"GET {path} should require X-API-Key"
+
+
+def test_gets_accepted_with_token(auth_client: TestClient) -> None:
+    response = auth_client.get("/models", headers={"X-API-Key": "harness-secret"})
+    assert response.status_code == 200
+
+
+def test_webhook_requires_token(auth_client: TestClient, monkeypatch) -> None:
     call: dict[str, Any] = {}
 
     def fake_process(
@@ -480,11 +497,6 @@ def test_get_and_webhook_stay_open_with_auth(auth_client: TestClient, monkeypatc
 
     monkeypatch.setattr(auth_client.app.state.harness, "process", fake_process)
 
-    # Health is always open.
-    response = auth_client.get("/health")
-    assert response.status_code == 200
-
-    # Telegram's /webhook must stay unauthenticated.
     payload = {
         "update_id": 1,
         "message": {
@@ -495,6 +507,12 @@ def test_get_and_webhook_stay_open_with_auth(auth_client: TestClient, monkeypatc
         },
     }
     response = auth_client.post("/webhook", json=payload)
+    assert response.status_code == 403
+    assert not call
+
+    response = auth_client.post(
+        "/webhook", json=payload, headers={"X-API-Key": "harness-secret"}
+    )
     assert response.status_code == 200
     assert call["chat_id"] == "42"
     assert call["message"] == "hello"

@@ -19,7 +19,7 @@ def register_cron(
     config: Config,
     _require_api_key: Callable[[str | None], None],
 ) -> None:
-    @app.get("/cron")
+    @app.get("/cron", dependencies=[Depends(_require_api_key)])
     def cron_get() -> dict[str, Any]:
         """Merged cron job list plus per-job state and reload warnings."""
         service = getattr(runtime, "cron_service", None)

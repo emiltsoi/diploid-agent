@@ -44,7 +44,7 @@ def register_runtime(
         )
         return {"ok": True}
 
-    @app.get("/runtime/status", response_model=RuntimeStatusResponse)
+    @app.get("/runtime/status", response_model=RuntimeStatusResponse, dependencies=[Depends(_require_api_key)])
     def runtime_status() -> RuntimeStatus:
         return command_handler.call(
             method="get_status",

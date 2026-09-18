@@ -203,6 +203,10 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
             client_provider=lambda: self.client,
         )
 
+    def _harness_headers(self) -> dict[str, str]:
+        """Auth headers for direct harness-URL calls (bypassing CommandHandler)."""
+        return {"X-API-Key": self._api_key} if self._api_key else {}
+
     @property
     def client(self) -> httpx.Client:
         """Return a thread-local httpx.Client so threads do not share one."""

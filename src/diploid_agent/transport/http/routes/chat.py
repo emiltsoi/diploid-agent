@@ -114,7 +114,7 @@ def register_chat(
         )
         return _to_response(raw)
 
-    @app.get("/turn/{chat_id}")
+    @app.get("/turn/{chat_id}", dependencies=[Depends(_require_api_key)])
     def turn_status(
         chat_id: str, wait: float = Query(0.0, ge=0, le=60, description="Long-poll wait in seconds")
     ) -> dict[str, Any]:
@@ -128,7 +128,7 @@ def register_chat(
             catch=False,
         )
 
-    @app.get("/status/{chat_id}")
+    @app.get("/status/{chat_id}", dependencies=[Depends(_require_api_key)])
     def chat_status(chat_id: str) -> dict[str, object]:
         return command_handler.call(
             method="status",

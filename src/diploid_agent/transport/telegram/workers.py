@@ -110,6 +110,7 @@ class TurnWorker(threading.Thread):
             resp = self.poller.client.post(
                 f"{self.poller.harness_url}/chat",
                 json=payload,
+                headers=self.poller._harness_headers(),
                 timeout=self.poller.reply_timeout,
             )
             resp.raise_for_status()
@@ -136,6 +137,7 @@ class TurnWorker(threading.Thread):
             resp = self.poller.client.get(
                 f"{self.poller.harness_url}/turn/{self.chat_id}",
                 params={"wait": wait},
+                headers=self.poller._harness_headers(),
                 timeout=max(wait + 30.0, 60.0),
             )
             resp.raise_for_status()

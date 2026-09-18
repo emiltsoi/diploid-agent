@@ -44,7 +44,7 @@ def register_config(
     config: Config,
     _require_api_key: Callable[[str | None], None],
 ) -> None:
-    @app.get("/config")
+    @app.get("/config", dependencies=[Depends(_require_api_key)])
     def config_get() -> dict[str, Any]:
         """Return the current live runtime configuration (excluding secrets)."""
         return command_handler.call(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from starlette.concurrency import run_in_threadpool
 
 from diploid_agent.config import (
@@ -20,7 +20,7 @@ def register_webhook(
     config: Config,
     _require_api_key: Callable[[str | None], None],
 ) -> None:
-    @app.post("/webhook")
+    @app.post("/webhook", dependencies=[Depends(_require_api_key)])
     async def telegram_webhook(request: Request) -> dict[str, object]:
         """Minimal Telegram webhook: extracts text and chat_id from update."""
         payload = await request.json()
