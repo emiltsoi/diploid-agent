@@ -187,8 +187,6 @@ class TurnProcess(TurnPipeline):
                 active = ActiveTurn(chat_id, None, user_message, time.time())
                 active.seed_from_wake(wake_event)
                 self.runtime._active_turns[chat_id] = active
-                if wake_event is not None:
-                    self.runtime._typing.on_turn_started(chat_id)
                 is_new = True
                 old_record: SessionRecord | None = record
             else:
@@ -212,8 +210,6 @@ class TurnProcess(TurnPipeline):
                 active = ActiveTurn(chat_id, record.session_id, user_message, time.time())
                 active.seed_from_wake(wake_event)
                 self.runtime._active_turns[chat_id] = active
-                if wake_event is not None:
-                    self.runtime._typing.on_turn_started(chat_id)
                 is_new = False
                 session_number = record.session_number
                 old_record = record
@@ -249,6 +245,10 @@ class TurnProcess(TurnPipeline):
         turn_start = time.perf_counter()
 
         try:
+            # Start inside the try so the finally's _cleanup_turn always
+            # drains the count; a failure before this point leaves nothing.
+            if wake_event is not None:
+                self.runtime._typing.on_turn_started(chat_id)
             outcome = self._call_engine(
                 chat_id=chat_id,
                 user_message=user_message,

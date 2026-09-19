@@ -157,7 +157,6 @@ class TurnDispatch(TurnPipeline):
             use_model = pctx.model or use_model
             active = ActiveTurn(chat_id, record.session_id, user_message, time.time())
             self.runtime._active_turns[chat_id] = active
-            self.runtime._typing.on_turn_started(chat_id)
             is_new = False
             old_record = record
             session_number = record.session_number
@@ -177,6 +176,9 @@ class TurnDispatch(TurnPipeline):
         stream = TurnStream(self.runtime, chat_id)
 
         try:
+            # Inside the try so _cleanup_turn always drains the count.
+            # A user-typed /continue can double-type with the poller — harmless.
+            self.runtime._typing.on_turn_started(chat_id)
             outcome = self._call_engine(
                 chat_id=chat_id,
                 user_message=user_message,
