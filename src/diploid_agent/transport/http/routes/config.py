@@ -72,148 +72,48 @@ def register_config(
                 detail=str(exc),
             ) from exc
 
-    @app.get(
-        "/task/config",
-        response_model=TaskConfig,
-        dependencies=[Depends(_require_api_key)],
-    )
-    def task_config_get() -> TaskConfig:
-        return command_handler.call(
-            method="get_task_config",
-            requires_chat_id=False,
-            catch=False,
-        )
+    def _section_get(get_method: str) -> Callable[[], Any]:
+        def _get() -> Any:
+            return command_handler.call(method=get_method, requires_chat_id=False, catch=False)
 
-    @app.post(
-        "/task/config",
-        response_model=TaskConfig,
-        dependencies=[Depends(_require_api_key)],
-    )
-    def task_config_update(req: TaskConfig) -> TaskConfig:
-        try:
-            command_handler.call(
-                method="update_task_config",
-                task_config=req,
-                requires_chat_id=False,
-                catch=False,
-            )
-        except ConfigPersistenceError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=str(exc),
-            ) from exc
-        return command_handler.call(
-            method="get_task_config",
-            requires_chat_id=False,
-            catch=False,
-        )
+        return _get
 
-    @app.get(
-        "/waker/config",
-        response_model=WakerConfig,
-        dependencies=[Depends(_require_api_key)],
-    )
-    def waker_config_get() -> WakerConfig:
-        return command_handler.call(
-            method="get_waker_config",
-            requires_chat_id=False,
-            catch=False,
-        )
+    def _section_update(
+        get_method: str, update_method: str, kwarg: str, cfg_cls: type
+    ) -> Callable[..., Any]:
+        def _update(req: Any) -> Any:
+            try:
+                command_handler.call(
+                    method=update_method,
+                    requires_chat_id=False,
+                    catch=False,
+                    **{kwarg: req},
+                )
+            except ConfigPersistenceError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=str(exc),
+                ) from exc
+            return command_handler.call(method=get_method, requires_chat_id=False, catch=False)
 
-    @app.post(
-        "/waker/config",
-        response_model=WakerConfig,
-        dependencies=[Depends(_require_api_key)],
-    )
-    def waker_config_update(req: WakerConfig) -> WakerConfig:
-        try:
-            command_handler.call(
-                method="update_waker_config",
-                waker_config=req,
-                requires_chat_id=False,
-                catch=False,
-            )
-        except ConfigPersistenceError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=str(exc),
-            ) from exc
-        return command_handler.call(
-            method="get_waker_config",
-            requires_chat_id=False,
-            catch=False,
-        )
+        # FastAPI reads the request-body model from this annotation.
+        _update.__annotations__ = {"req": cfg_cls, "return": cfg_cls}
+        return _update
 
-    @app.get(
-        "/timer/config",
-        response_model=TimerConfig,
-        dependencies=[Depends(_require_api_key)],
-    )
-    def timer_config_get() -> TimerConfig:
-        return command_handler.call(
-            method="get_timer_config",
-            requires_chat_id=False,
-            catch=False,
+    for section, cfg_cls in (
+        ("task", TaskConfig),
+        ("waker", WakerConfig),
+        ("timer", TimerConfig),
+        ("notifications", NotificationsConfig),
+    ):
+        path = f"/{section}/config"
+        get_method = f"get_{section}_config"
+        update_method = f"update_{section}_config"
+        app.get(path, response_model=cfg_cls, dependencies=[Depends(_require_api_key)])(
+            _section_get(get_method)
         )
-
-    @app.post(
-        "/timer/config",
-        response_model=TimerConfig,
-        dependencies=[Depends(_require_api_key)],
-    )
-    def timer_config_update(req: TimerConfig) -> TimerConfig:
-        try:
-            command_handler.call(
-                method="update_timer_config",
-                timer_config=req,
-                requires_chat_id=False,
-                catch=False,
-            )
-        except ConfigPersistenceError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=str(exc),
-            ) from exc
-        return command_handler.call(
-            method="get_timer_config",
-            requires_chat_id=False,
-            catch=False,
-        )
-
-    @app.get(
-        "/notifications/config",
-        response_model=NotificationsConfig,
-        dependencies=[Depends(_require_api_key)],
-    )
-    def notifications_config_get() -> NotificationsConfig:
-        return command_handler.call(
-            method="get_notifications_config",
-            requires_chat_id=False,
-            catch=False,
-        )
-
-    @app.post(
-        "/notifications/config",
-        response_model=NotificationsConfig,
-        dependencies=[Depends(_require_api_key)],
-    )
-    def notifications_config_update(req: NotificationsConfig) -> NotificationsConfig:
-        try:
-            command_handler.call(
-                method="update_notifications_config",
-                notifications_config=req,
-                requires_chat_id=False,
-                catch=False,
-            )
-        except ConfigPersistenceError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=str(exc),
-            ) from exc
-        return command_handler.call(
-            method="get_notifications_config",
-            requires_chat_id=False,
-            catch=False,
+        app.post(path, response_model=cfg_cls, dependencies=[Depends(_require_api_key)])(
+            _section_update(get_method, update_method, f"{section}_config", cfg_cls)
         )
 
     def _enforce_self_wake_policy(req: TimerRequest, now: float) -> None:
