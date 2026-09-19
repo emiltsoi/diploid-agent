@@ -3258,12 +3258,9 @@ def test_ask_keyboard_attached_to_last_chunk(tmp_path: Path) -> None:
     assert saved == [101]
 
 
-
 # ---------------------------------------------------------------------------
 # Voice synthesis bounds and piper cache/compat
 # ---------------------------------------------------------------------------
-
-
 
 def test_voice_synthesis_runs_outside_send_lock(tmp_path: Path) -> None:
     """A slow TTS call must not serialize every outbound message for the chat."""
@@ -3285,14 +3282,6 @@ def test_voice_synthesis_runs_outside_send_lock(tmp_path: Path) -> None:
 
     assert held == [False]
 
-
-
-# ---------------------------------------------------------------------------
-# Voice synthesis bounds and piper cache/compat
-# ---------------------------------------------------------------------------
-
-
-
 def test_synthesize_bounded_times_out(tmp_path: Path, monkeypatch: Any) -> None:
     """A wedged provider surfaces as None after the join deadline."""
     from diploid_agent.transport.telegram import voice as voice_mod
@@ -3300,14 +3289,6 @@ def test_synthesize_bounded_times_out(tmp_path: Path, monkeypatch: Any) -> None:
     monkeypatch.setattr(voice_mod, "synthesize", lambda *a, **kw: time.sleep(5))
     config = TelegramConfig(tts_provider="command", tts_command="cat")
     assert voice_mod.synthesize_bounded("hi", config, tmp_path, timeout=0.1) is None
-
-
-
-# ---------------------------------------------------------------------------
-# Voice synthesis bounds and piper cache/compat
-# ---------------------------------------------------------------------------
-
-
 
 def test_synthesize_bounded_passthrough_and_raise(
     tmp_path: Path, monkeypatch: Any
@@ -3329,6 +3310,7 @@ def test_synthesize_bounded_passthrough_and_raise(
         pass
     else:
         raise AssertionError("synthesize exception should propagate")
+
 
 class _FakeAudioChunk:
     sample_channels = 1
@@ -3445,12 +3427,9 @@ def test_piper_legacy_signature_fallback(tmp_path: Path, monkeypatch: Any) -> No
         voice_mod._voice_cache.clear()
 
 
-
 # ---------------------------------------------------------------------------
 # StreamDisplay — heartbeat cap and continuation commit lifecycle
 # ---------------------------------------------------------------------------
-
-
 
 def _stream_display(poller: TelegramPoller, **overrides: Any) -> Any:
     from diploid_agent.transport.telegram.stream_display import StreamDisplay
@@ -3468,14 +3447,6 @@ def _stream_display(poller: TelegramPoller, **overrides: Any) -> Any:
         message_id=overrides.get("message_id"),
         thought_id=None,
     )
-
-
-
-# ---------------------------------------------------------------------------
-# StreamDisplay — heartbeat cap and continuation commit lifecycle
-# ---------------------------------------------------------------------------
-
-
 
 def test_next_wait_derives_cap_from_heartbeat_interval(tmp_path: Path) -> None:
     """The long-poll cap follows _HEARTBEAT_INTERVAL, not a stale constant."""
