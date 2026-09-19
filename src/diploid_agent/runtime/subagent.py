@@ -74,11 +74,11 @@ class RuntimeSubagent:
         being stopped or killed. When it completes, the harness starts a new
         turn for the chat via the existing dispatch/continue flow.
         """
-        record = self._chat_store._active_record(chat_id)
+        record = self._chat_store.active_record(chat_id)
         if record is None:
             return ChatResult(reply="No active session for this chat.")
 
-        use_model = model or self._prompts._model(record)
+        use_model = model or self._prompts.model(record)
         started_at = time.time()
         dispatch = self.dispatch_store.add(
             chat_id,
@@ -99,7 +99,7 @@ class RuntimeSubagent:
                 self._mcp_skills._active_mcp_server_names(chat_id),
             ),
             dispatch_id=dispatch.id,
-            cwd=cwd or self._chat_store._chat_dir(chat_id),
+            cwd=cwd or self._chat_store.chat_dir(chat_id),
         )
         plan = self.plan_manager.create_plan(
             f"subagent-{dispatch.id[:8]}",
@@ -135,7 +135,7 @@ class RuntimeSubagent:
         Returns the path to the written file, or ``None`` on write failure.
         """
         chat_id = dispatch.chat_id
-        chat_dir = self._chat_store._chat_dir(chat_id)
+        chat_dir = self._chat_store.chat_dir(chat_id)
         result_dir = chat_dir / "subagent-results"
         result_dir.mkdir(parents=True, exist_ok=True)
         result_path = result_dir / f"subagent-{dispatch.id}.md"

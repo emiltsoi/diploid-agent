@@ -263,7 +263,7 @@ class RuntimeMetrics:
             logger.debug("Hindsight health check failed: %s", exc)
             return False
 
-    def _context_usage(self, record: SessionRecord) -> dict[str, Any]:
+    def context_usage(self, record: SessionRecord) -> dict[str, Any]:
         """Return context-window and prompt-budget usage for a chat record."""
         context_window: int | None = None
         try:

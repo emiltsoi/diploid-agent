@@ -199,8 +199,8 @@ class FakePluginRuntime:
     def subagent_status(self, chat_id: str) -> dict[str, Any]:
         return {"chat_id": chat_id, "subagents": []}
 
-    def _active_record(self, chat_id: str) -> SessionRecord | None:
+    def active_record(self, chat_id: str) -> SessionRecord | None:
         return None
 
-    def _append_record(self, record: SessionRecord) -> None:
+    def append_record(self, record: SessionRecord) -> None:
         return

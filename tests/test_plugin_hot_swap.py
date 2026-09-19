@@ -144,7 +144,7 @@ def test_rollback_names_masking_chat_overrides(tmp_path: Path) -> None:
         updated_at=time.time(),
     )
     record.plugin_overrides = {"continuity": False}
-    runtime._active_record = lambda chat_id: record if chat_id == "chat-1" else None  # type: ignore[attr-defined,method-assign]
+    runtime.active_record = lambda chat_id: record if chat_id == "chat-1" else None  # type: ignore[attr-defined,method-assign]
     runtime._plugins._instances["chat-1"]["continuity"] = MagicMock()
 
     runtime.plugin_toggle("continuity", enabled=False)
@@ -171,7 +171,7 @@ def test_rollback_silent_when_overrides_match(tmp_path: Path) -> None:
         updated_at=time.time(),
     )
     record.plugin_overrides = {"continuity": False}
-    runtime._active_record = lambda chat_id: record if chat_id == "chat-1" else None  # type: ignore[attr-defined,method-assign]
+    runtime.active_record = lambda chat_id: record if chat_id == "chat-1" else None  # type: ignore[attr-defined,method-assign]
     runtime._plugins._instances["chat-1"]["continuity"] = MagicMock()
 
     # Roll back to the snapshot where continuity is globally disabled —

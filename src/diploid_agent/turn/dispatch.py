@@ -33,7 +33,7 @@ class TurnDispatch(TurnPipeline):
         context: str | None = None,
     ) -> ChatResult:
         """Register a new dispatch for this chat and return its id."""
-        record = self.runtime._active_record(chat_id)
+        record = self.runtime.active_record(chat_id)
         if record is None:
             return ChatResult(reply="No active session for this chat.")
 
@@ -113,11 +113,11 @@ class TurnDispatch(TurnPipeline):
                     notice=f"dispatch:{dispatch_id}",
                 )
 
-            record = self.runtime._active_record(chat_id)
+            record = self.runtime.active_record(chat_id)
             if record is None:
                 return ChatResult(reply="No active session for this chat.")
 
-            use_model = self.runtime._prompts._model(record)
+            use_model = self.runtime._prompts.model(record)
             user_message = "Continue"
             route = self.runtime._prompts.resolve_model(chat_id, user_message, record)
             if route.budget_exceeded:
@@ -144,7 +144,7 @@ class TurnDispatch(TurnPipeline):
 
             self.runtime.skills.refresh_to_chat(
                 chat_id,
-                self.runtime._chat_dir(chat_id),
+                self.runtime.chat_dir(chat_id),
                 set(record.enabled_skills or []),
             )
             pctx = self.runtime.context_builder.build_follow_up(
@@ -171,7 +171,7 @@ class TurnDispatch(TurnPipeline):
             # Reserve a turn number up front and persist it.
             previous_updated_at = record.updated_at if record.turn_number > 0 else 0.0
             turn_number = record.reserve_turn_number()
-            self.runtime._append_record(record)
+            self.runtime.append_record(record)
 
         stream = TurnStream(self.runtime, chat_id)
 
@@ -235,7 +235,7 @@ class TurnDispatch(TurnPipeline):
                 budget_notice=budget_notice,
                 label="dispatch continuation",
                 after_turn_end=_retain_dispatch,
-                after_append=lambda: self.runtime._prune_and_compact(chat_id),
+                after_append=lambda: self.runtime.prune_and_compact(chat_id),
                 after_result=_after_result,
             )
         except Exception as exc:

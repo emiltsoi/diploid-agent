@@ -93,6 +93,37 @@ def test_openclaw_mesh_webhook_alias(client: TestClient) -> None:
     assert resp.text == "mesh-ok:hello"
 
 
+def test_mesh_notify_uses_public_runtime_api(client: TestClient) -> None:
+    runtime = client.app.state.runtime
+    calls: list[tuple[str, dict[str, str]]] = []
+    runtime.float_mesh_to_telegram = lambda chat_id, **kw: calls.append((chat_id, kw))
+    resp = client.post(
+        "/mesh/12345/notify",
+        json={
+            "sender": "aurelia",
+            "recipient": "vesper",
+            "body": "hello",
+            "action": "info",
+            "reply": "no",
+            "msg_id": "m-1",
+        },
+    )
+    assert resp.status_code == 202
+    assert calls == [
+        (
+            "12345",
+            {
+                "sender": "aurelia",
+                "recipient": "vesper",
+                "body": "hello",
+                "action": "info",
+                "reply": "no",
+                "msg_id": "m-1",
+            },
+        )
+    ]
+
+
 def test_ingress_unknown_protocol(client: TestClient) -> None:
     resp = client.post("/ingress/unknown", data="hello")
     assert resp.status_code == 404

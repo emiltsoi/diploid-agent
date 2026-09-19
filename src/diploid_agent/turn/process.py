@@ -74,8 +74,8 @@ class TurnProcess(TurnPipeline):
                     notice="Send /stop to cancel it, or wait for it to finish.",
                 )
 
-            record = self.runtime._active_record(chat_id)
-            current_model = self.runtime._prompts._model(record)
+            record = self.runtime.active_record(chat_id)
+            current_model = self.runtime._prompts.model(record)
             route = self.runtime._prompts.resolve_model(chat_id, user_message, record)
             if route.budget_exceeded:
                 return ChatResult(reply="", notice=route.notice)
@@ -154,7 +154,7 @@ class TurnProcess(TurnPipeline):
 
             if record is None or model_changed or hard_timeout_before or skills_changed:
                 if record and (model_changed or hard_timeout_before or skills_changed):
-                    self.runtime._archive_active_session(chat_id, record)
+                    self.runtime.archive_active_session(chat_id, record)
                 self.runtime._restore_plugin_states(chat_id)
                 pctx = self.runtime.context_builder.build_first(
                     chat_id,
@@ -180,8 +180,8 @@ class TurnProcess(TurnPipeline):
                 notice = pctx.notice
                 memory_flags = pctx.memory_flags
                 use_model = pctx.model or use_model
-                session_number = self.runtime._next_session_number(chat_id)
-                cwd = self.runtime._chat_dir(chat_id)
+                session_number = self.runtime.next_session_number(chat_id)
+                cwd = self.runtime.chat_dir(chat_id)
                 cwd.mkdir(parents=True, exist_ok=True)
                 self.runtime.skills.sync_to_chat(chat_id, cwd, active_skill_names)
                 active = ActiveTurn(chat_id, None, user_message, time.time())
@@ -191,7 +191,7 @@ class TurnProcess(TurnPipeline):
                 old_record: SessionRecord | None = record
             else:
                 self.runtime.skills.refresh_to_chat(
-                    chat_id, self.runtime._chat_dir(chat_id), active_skill_names
+                    chat_id, self.runtime.chat_dir(chat_id), active_skill_names
                 )
                 pctx = self.runtime.context_builder.build_follow_up(
                     chat_id,
@@ -222,7 +222,7 @@ class TurnProcess(TurnPipeline):
             if record is not None:
                 previous_updated_at = record.updated_at if record.turn_number > 0 else 0.0
                 turn_number = record.reserve_turn_number()
-                self.runtime._append_record(record)
+                self.runtime.append_record(record)
 
         telegram_config = self.runtime.config.harness.telegram
         notifier_stream = _NotifyStream(

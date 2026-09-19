@@ -58,7 +58,7 @@ class RuntimePlugins:
 
     def _snapshot_plugin_states(self, chat_id: str) -> None:
         """Snapshot durable plugin and body state files before a transport restart."""
-        chat_dir = self._chat_store._chat_dir(chat_id)
+        chat_dir = self._chat_store.chat_dir(chat_id)
         snapshot_dir = chat_dir / ".snapshots"
         snapshot_dir.mkdir(parents=True, exist_ok=True)
 
@@ -86,7 +86,7 @@ class RuntimePlugins:
         - live as new or newer         -> keep live (it has post-snapshot writes)
         - file not in the durable set  -> skip (frozen snapshot of a retired file)
         """
-        chat_dir = self._chat_store._chat_dir(chat_id)
+        chat_dir = self._chat_store.chat_dir(chat_id)
         snapshot_dir = chat_dir / ".snapshots"
         if not snapshot_dir.exists():
             return

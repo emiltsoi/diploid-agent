@@ -23,7 +23,7 @@ class TurnRehydrate(TurnComponent):
         active: ActiveTurn | None = self.runtime._active_turns.get(chat_id)
         if active is None:
             return None
-        record = self.runtime._active_record(chat_id)
+        record = self.runtime.active_record(chat_id)
         return PartialTurn.from_active(active, record)
 
     def _persisted_partial(self, chat_id: str, user_message: str) -> PartialTurn | None:
@@ -35,7 +35,7 @@ class TurnRehydrate(TurnComponent):
         ``ActiveTurn`` is fresh, so the on-disk snapshot is the only record of
         what the interrupted turn had already produced.
         """
-        chat_dir = self.runtime._chat_dir(chat_id)
+        chat_dir = self.runtime.chat_dir(chat_id)
         for name in ("chat_interrupted_turn.json", "chat_active_turn.json"):
             try:
                 data = json.loads((chat_dir / name).read_text())
@@ -97,12 +97,9 @@ class TurnRehydrate(TurnComponent):
         deliberate session boundary or knows the session is unreachable.
         """
         if rehydration_reason is None:
-            if restart_first:
-                rehydration_reason = RehydrationReason.RESTART
-            elif "stale" in log_prefix.lower() or "empty" in log_prefix.lower():
-                rehydration_reason = RehydrationReason.STALE
-            else:
-                rehydration_reason = RehydrationReason.STALE
+            rehydration_reason = (
+                RehydrationReason.RESTART if restart_first else RehydrationReason.STALE
+            )
         interrupted_anchor = self._interrupted_turn_anchor(
             chat_id, rehydration_reason, user_message
         )
@@ -161,7 +158,7 @@ class TurnRehydrate(TurnComponent):
                 resumed_id = self.runtime.call_engine_unlocked(
                     self.runtime.engine.resume_session,
                     old_record.session_id,
-                    cwd=self.runtime._chat_dir(chat_id),
+                    cwd=self.runtime.chat_dir(chat_id),
                     model=use_model,
                     mcp_servers=self.runtime._mcp_skills._active_mcp_servers(chat_id),
                     timeout=resume_timeout,
@@ -191,7 +188,7 @@ class TurnRehydrate(TurnComponent):
                 follow_model = pctx.model or use_model
                 request = TurnRequest(
                     prompt=pctx.prompt,
-                    cwd=self.runtime._chat_dir(chat_id),
+                    cwd=self.runtime.chat_dir(chat_id),
                     model=follow_model,
                     mcp_servers=None,
                     soft_timeout=self.runtime.config.engine.soft_timeout,
@@ -273,7 +270,7 @@ class TurnRehydrate(TurnComponent):
                 follow_model = pctx.model or use_model
                 request = TurnRequest(
                     prompt=pctx.prompt,
-                    cwd=self.runtime._chat_dir(chat_id),
+                    cwd=self.runtime.chat_dir(chat_id),
                     model=follow_model,
                     mcp_servers=None,
                     soft_timeout=self.runtime.config.engine.soft_timeout,

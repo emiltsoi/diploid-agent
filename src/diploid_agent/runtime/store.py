@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 # This set is intentionally keyed by file name, not full path. Durable files are
 # expected to live at the root of each session directory, and that convention is
-# enforced by _copy_session_dir. This is a known limitation/acceptance.
+# enforced by copy_session_dir. This is a known limitation/acceptance.
 _CHAT_DURABLE_FILES = {
     "chat_transcript.jsonl",
     "chat_MEMORY.md",
@@ -84,9 +84,18 @@ class ChatSessionStore:
     def context_builder(self) -> Any:
         return self._context_builder_fn()
 
+    @property
+    def states(self) -> dict[str, ChatState]:
+        """Shared chat-state registry handed to sibling runtime components.
+
+        The dict is mutable state guarded by ``self._lock``; readers iterate
+        it directly and mutators hold the lock.
+        """
+        return self._store
+
     # ---------------------------------------------------------------- load/save
 
-    def _load_store(self) -> None:
+    def load_store(self) -> None:
         if not self.store_path.exists():
             return
         for line in self.store_path.read_text().splitlines():
@@ -100,13 +109,13 @@ class ChatSessionStore:
             state.sessions[record.session_number] = record
             state.next_session_number = max(state.next_session_number, record.session_number + 1)
 
-    def _append_record(self, record: SessionRecord) -> None:
+    def append_record(self, record: SessionRecord) -> None:
         with self._lock:
             self.store_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.store_path, "a") as f:
                 f.write(json.dumps(record.to_dict(), default=str) + "\n")
 
-    def _compact_store(self) -> None:
+    def compact_store(self) -> None:
         """Rewrite the store without pruning churn; called after pruning."""
         with self._lock:
             lines = []
@@ -119,28 +128,28 @@ class ChatSessionStore:
 
     # ---------------------------------------------------------------- session dirs
 
-    def _chat_dir(self, chat_id: str) -> Path:
+    def chat_dir(self, chat_id: str) -> Path:
         safe = chat_id.replace("/", "_")
         return self.sessions_root / safe
 
     def telegram_message_registry_path(self, chat_id: str) -> Path:
-        return self._chat_dir(chat_id) / "telegram_messages.jsonl"
+        return self.chat_dir(chat_id) / "telegram_messages.jsonl"
 
     def load_telegram_message_registry(self, chat_id: str) -> dict[int, dict[str, Any]]:
         return load_message_registry(self.telegram_message_registry_path(chat_id))
 
-    def _archive_dir(self, chat_id: str, session_number: int) -> Path:
-        return self._chat_dir(chat_id) / ".archive" / str(session_number)
+    def archive_dir(self, chat_id: str, session_number: int) -> Path:
+        return self.chat_dir(chat_id) / ".archive" / str(session_number)
 
-    def _durable_file_names(self) -> set[str]:
+    def durable_file_names(self) -> set[str]:
         names = set(_CHAT_DURABLE_FILES)
         names.update(self._plugins.durable_files())
         return names
 
-    def _copy_session_dir(self, source: Path, target: Path) -> None:
+    def copy_session_dir(self, source: Path, target: Path) -> None:
         if source == target:
             return
-        durable = self._durable_file_names()
+        durable = self.durable_file_names()
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists():
             for item in target.iterdir():
@@ -163,19 +172,19 @@ class ChatSessionStore:
             else:
                 shutil.copy2(item, dest)
 
-    def _archive_active_session(self, chat_id: str, record: SessionRecord) -> None:
+    def archive_active_session(self, chat_id: str, record: SessionRecord) -> None:
         """Copy the active directory into the archive for `record`."""
-        active_dir = self._chat_dir(chat_id)
-        archive = self._archive_dir(chat_id, record.session_number)
+        active_dir = self.chat_dir(chat_id)
+        archive = self.archive_dir(chat_id, record.session_number)
         if active_dir.exists() and any(active_dir.iterdir()):
-            self._copy_session_dir(active_dir, archive)
+            self.copy_session_dir(active_dir, archive)
 
-    def _clear_active_session(self, chat_id: str) -> None:
-        active_dir = self._chat_dir(chat_id)
+    def clear_active_session(self, chat_id: str) -> None:
+        active_dir = self.chat_dir(chat_id)
         if not active_dir.exists():
             active_dir.mkdir(parents=True, exist_ok=True)
             return
-        durable = self._durable_file_names()
+        durable = self.durable_file_names()
         for item in active_dir.iterdir():
             if item.name in durable or item.name in (".archive", ".snapshots"):
                 continue
@@ -186,35 +195,35 @@ class ChatSessionStore:
 
     # ---------------------------------------------------------------- active state
 
-    def _chat_state(self, chat_id: str) -> ChatState:
+    def chat_state(self, chat_id: str) -> ChatState:
         with self._lock:
             return self._store.setdefault(chat_id, ChatState())
 
-    def _active_record(self, chat_id: str) -> SessionRecord | None:
+    def active_record(self, chat_id: str) -> SessionRecord | None:
         with self._lock:
             state = self._store.get(chat_id)
             if state is None or not state.sessions:
                 return None
             return max(state.sessions.values(), key=lambda r: r.updated_at)
 
-    def _next_session_number(self, chat_id: str) -> int:
-        state = self._chat_state(chat_id)
+    def next_session_number(self, chat_id: str) -> int:
+        state = self.chat_state(chat_id)
         number = state.next_session_number
         state.next_session_number = number + 1
         return number
 
-    def _generate_label(self, chat_id: str, user_message: str) -> str:
+    def generate_label(self, chat_id: str, user_message: str) -> str:
         """Auto-generate a short label from the first user message."""
         return self.context_builder.generate_label(chat_id, user_message)
 
     # ---------------------------------------------------------------- pruning
 
-    def _prune_chat(self, chat_id: str) -> None:
+    def prune_chat(self, chat_id: str) -> None:
         """Delete archived sessions older than the prune window."""
         if not self.config.harness.session_prune_enabled:
             return
-        state = self._chat_state(chat_id)
-        active = self._active_record(chat_id)
+        state = self.chat_state(chat_id)
+        active = self.active_record(chat_id)
         cutoff = time.time() - (self.config.harness.session_prune_days * 86400)
         to_remove: list[int] = []
         for number, record in state.sessions.items():
@@ -224,19 +233,19 @@ class ChatSessionStore:
                 continue
             to_remove.append(number)
         for number in to_remove:
-            archive = self._archive_dir(chat_id, number)
+            archive = self.archive_dir(chat_id, number)
             if archive.exists():
                 shutil.rmtree(archive)
             del state.sessions[number]
 
-    def _prune_and_compact(self, chat_id: str) -> None:
+    def prune_and_compact(self, chat_id: str) -> None:
         if self.config.harness.session_prune_enabled:
-            self._prune_chat(chat_id)
-            self._compact_store()
+            self.prune_chat(chat_id)
+            self.compact_store()
 
-    def _prune_all(self) -> None:
+    def prune_all(self) -> None:
         if not self.config.harness.session_prune_enabled:
             return
         for chat_id in list(self._store.keys()):
-            self._prune_chat(chat_id)
-        self._compact_store()
+            self.prune_chat(chat_id)
+        self.compact_store()

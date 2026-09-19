@@ -55,7 +55,7 @@ class RuntimeMcpSkills:
 
     def mcp_enable(self, chat_id: str, name: str) -> str:
         with self._lock:
-            record = self._chat_store._active_record(chat_id)
+            record = self._chat_store.active_record(chat_id)
             if record is None:
                 return "No active session. Start one with /new first."
             ctx = self._plugins.before_mcp_enabled(
@@ -72,7 +72,7 @@ class RuntimeMcpSkills:
             disabled = set(record.disabled_mcp_servers or [])
             disabled.discard(name)
             record.disabled_mcp_servers = sorted(disabled)
-            self._chat_store._append_record(record)
+            self._chat_store.append_record(record)
             self._plugins.after_mcp_enabled(
                 chat_id,
                 McpCommandContext(chat_id=chat_id, server_name=name, enabled=True, record=record),
@@ -81,7 +81,7 @@ class RuntimeMcpSkills:
 
     def mcp_disable(self, chat_id: str, name: str) -> str:
         with self._lock:
-            record = self._chat_store._active_record(chat_id)
+            record = self._chat_store.active_record(chat_id)
             if record is None:
                 return "No active session. Start one with /new first."
             ctx = self._plugins.before_mcp_disabled(
@@ -95,7 +95,7 @@ class RuntimeMcpSkills:
             disabled = set(record.disabled_mcp_servers or [])
             disabled.add(name)
             record.disabled_mcp_servers = sorted(disabled)
-            self._chat_store._append_record(record)
+            self._chat_store.append_record(record)
             self._plugins.after_mcp_disabled(
                 chat_id,
                 McpCommandContext(chat_id=chat_id, server_name=name, enabled=False, record=record),
@@ -116,7 +116,7 @@ class RuntimeMcpSkills:
 
     def skill_enable(self, chat_id: str, name: str) -> str:
         with self._lock:
-            record = self._chat_store._active_record(chat_id)
+            record = self._chat_store.active_record(chat_id)
             if record is None:
                 return "No active session. Start one with /new first."
             ctx = self._plugins.before_skill_enabled(
@@ -128,7 +128,7 @@ class RuntimeMcpSkills:
             enabled.add(name)
             record.enabled_skills = sorted(enabled)
             record.disabled_skills = sorted(set(record.disabled_skills or []) - {name})
-            self._chat_store._append_record(record)
+            self._chat_store.append_record(record)
             self._plugins.after_skill_enabled(
                 chat_id,
                 SkillCommandContext(chat_id=chat_id, skill_name=name, enabled=True, record=record),
@@ -137,7 +137,7 @@ class RuntimeMcpSkills:
 
     def skill_disable(self, chat_id: str, name: str) -> str:
         with self._lock:
-            record = self._chat_store._active_record(chat_id)
+            record = self._chat_store.active_record(chat_id)
             if record is None:
                 return "No active session. Start one with /new first."
             ctx = self._plugins.before_skill_disabled(
@@ -149,7 +149,7 @@ class RuntimeMcpSkills:
             enabled.discard(name)
             record.enabled_skills = sorted(enabled)
             record.disabled_skills = sorted(set(record.disabled_skills or []) | {name})
-            self._chat_store._append_record(record)
+            self._chat_store.append_record(record)
             self._plugins.after_skill_disabled(
                 chat_id,
                 SkillCommandContext(chat_id=chat_id, skill_name=name, enabled=False, record=record),
@@ -172,7 +172,7 @@ class RuntimeMcpSkills:
     def _active_mcp_server_names(self, chat_id: str) -> list[str]:
         if self._plugins is None or self.mcp is None:
             return []
-        record = self._chat_store._active_record(chat_id)
+        record = self._chat_store.active_record(chat_id)
         # Merge the chat record with the current default set so new default
         # servers (e.g. diploid-mesh) become available in older sessions.
         names: set[str] = set(self._default_mcp_names())
@@ -213,7 +213,7 @@ class RuntimeMcpSkills:
         return set(self.config.harness.skills.default_enabled) | plugin_skills
 
     def _active_skill_names(self, chat_id: str) -> set[str]:
-        record = self._chat_store._active_record(chat_id)
+        record = self._chat_store.active_record(chat_id)
         if record and record.enabled_skills is not None:
             base = set(record.enabled_skills)
         else:
@@ -227,7 +227,7 @@ class RuntimeMcpSkills:
         enabling is still tracked in ``record.enabled_skills``.
         """
         with self._lock:
-            record = self._chat_store._active_record(chat_id)
+            record = self._chat_store.active_record(chat_id)
             all_skills = {s.name for s in self.skills.list_skills(chat_id)}
             disabled = set(record.disabled_skills or []) if record else set()
             matched = self.skills.match_skills(

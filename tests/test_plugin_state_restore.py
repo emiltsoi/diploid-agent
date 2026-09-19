@@ -52,7 +52,7 @@ def _write(path: Path, content: str, mtime: float) -> None:
 
 
 def _snapshot_dir(runtime: AgentRuntime, chat_id: str) -> Path:
-    return runtime._chat_dir(chat_id) / ".snapshots"
+    return runtime.chat_dir(chat_id) / ".snapshots"
 
 
 def _set_durable(runtime: AgentRuntime, monkeypatch: pytest.MonkeyPatch, files: list[str]) -> None:
@@ -69,7 +69,7 @@ def test_restore_preserves_newer_live_file(tmp_path: Path, monkeypatch: pytest.M
     chat_id = "chat1"
     _set_durable(runtime, monkeypatch, ["chat_working_memory.json"])
 
-    live = runtime._chat_dir(chat_id) / "chat_working_memory.json"
+    live = runtime.chat_dir(chat_id) / "chat_working_memory.json"
     snapshot = _snapshot_dir(runtime, chat_id) / "chat_working_memory.json.snapshot"
     _write(snapshot, "stale snapshot content", T1)
     _write(live, "newer live content", T2)
@@ -91,7 +91,7 @@ def test_restore_recovers_missing_live_file(
 
     runtime._restore_plugin_states(chat_id)
 
-    live = runtime._chat_dir(chat_id) / "chat_working_memory.json"
+    live = runtime.chat_dir(chat_id) / "chat_working_memory.json"
     assert live.read_text() == "snapshot content"
 
 
@@ -100,7 +100,7 @@ def test_restore_applies_newer_snapshot(tmp_path: Path, monkeypatch: pytest.Monk
     chat_id = "chat1"
     _set_durable(runtime, monkeypatch, ["chat_working_memory.json"])
 
-    live = runtime._chat_dir(chat_id) / "chat_working_memory.json"
+    live = runtime.chat_dir(chat_id) / "chat_working_memory.json"
     snapshot = _snapshot_dir(runtime, chat_id) / "chat_working_memory.json.snapshot"
     _write(live, "older live content", T1)
     _write(snapshot, "newer snapshot content", T3)
@@ -117,7 +117,7 @@ def test_restore_skips_snapshot_outside_durable_set(
     chat_id = "chat1"
     _set_durable(runtime, monkeypatch, ["chat_other.json"])
 
-    live = runtime._chat_dir(chat_id) / "chat_retired_plugin.json"
+    live = runtime.chat_dir(chat_id) / "chat_retired_plugin.json"
     snapshot = _snapshot_dir(runtime, chat_id) / "chat_retired_plugin.json.snapshot"
     _write(live, "live content", T2)
     _write(snapshot, "frozen snapshot of a retired plugin", T1)
@@ -134,7 +134,7 @@ def test_restore_always_allows_body_state_files(
     chat_id = "chat1"
     _set_durable(runtime, monkeypatch, [])
 
-    live = runtime._chat_dir(chat_id) / "chat_body_state.json"
+    live = runtime.chat_dir(chat_id) / "chat_body_state.json"
     snapshot = _snapshot_dir(runtime, chat_id) / "chat_body_state.json.snapshot"
     _write(snapshot, "snapshot body", T3)
     _write(live, "older live body", T1)
@@ -147,7 +147,7 @@ def test_restore_always_allows_body_state_files(
 def test_restore_noop_without_snapshot_dir(tmp_path: Path) -> None:
     runtime = AgentRuntime(_make_config(tmp_path))
     chat_id = "chat1"
-    live = runtime._chat_dir(chat_id) / "chat_working_memory.json"
+    live = runtime.chat_dir(chat_id) / "chat_working_memory.json"
     _write(live, "live content", T2)
 
     runtime._restore_plugin_states(chat_id)
@@ -161,7 +161,7 @@ def test_snapshot_then_restore_roundtrip(tmp_path: Path, monkeypatch: pytest.Mon
     chat_id = "chat1"
     _set_durable(runtime, monkeypatch, ["chat_working_memory.json"])
 
-    live = runtime._chat_dir(chat_id) / "chat_working_memory.json"
+    live = runtime.chat_dir(chat_id) / "chat_working_memory.json"
     _write(live, "pre-restart content", T2)
 
     runtime._snapshot_plugin_states(chat_id)

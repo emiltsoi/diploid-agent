@@ -134,7 +134,7 @@ class TurnController:
         # prompting right now is the one that must be cancelled, so it comes
         # first; every distinct candidate is cancelled so a stale recorded id
         # can never mask the live one.
-        record = self.runtime._active_record(chat_id)
+        record = self.runtime.active_record(chat_id)
         live_session_id = self.runtime.engine.active_session_id()
         candidates = dict.fromkeys(
             sid

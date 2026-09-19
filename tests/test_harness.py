@@ -390,7 +390,7 @@ def test_model_switch_in_place_keeps_session(monkeypatch, tmp_path: Path) -> Non
         assert set_calls == [("session-1", "glm-5-2")]
         assert len(create_calls) == 1  # no new ACP session was started
 
-        record = harness._active_record("chat-ip")
+        record = harness.active_record("chat-ip")
         assert record.model == "glm-5-2"
 
         # Follow-up turns keep the switched model.
@@ -510,7 +510,7 @@ def test_model_switch_in_place_engine_error_leaves_record(monkeypatch, tmp_path:
         harness.process("chat-err", "hello")
         result = harness.switch_model("chat-err", "glm-5-2", in_place=True)
         assert "Could not switch" in result.reply
-        record = harness._active_record("chat-err")
+        record = harness.active_record("chat-err")
         assert record.model == "swe-1-7"
         assert record.session_id == "session-1"
     finally:
@@ -581,7 +581,7 @@ def test_session_op_blocks_turns_and_other_ops(monkeypatch, tmp_path: Path) -> N
         assert "glm-5-2" in result.reply
         assert result.session_id == "session-1"
         assert "chat-gate" not in harness._session_ops
-        record = harness._active_record("chat-gate")
+        record = harness.active_record("chat-gate")
         assert record.model == "glm-5-2"
     finally:
         release.set()
@@ -1288,7 +1288,7 @@ def test_new_session_syncs_skills(monkeypatch, tmp_path: Path) -> None:
 
     monkeypatch.setattr(harness.client, "create_session", fake_create_session)
     harness.new_session("chat-123")
-    assert (harness._chat_dir("chat-123") / ".devin" / "skills" / "review" / "SKILL.md").exists()
+    assert (harness.chat_dir("chat-123") / ".devin" / "skills" / "review" / "SKILL.md").exists()
 
 
 def test_soft_timeout_invites_continue(monkeypatch, tmp_path: Path) -> None:
@@ -1339,7 +1339,7 @@ def test_continue_uses_same_session_after_soft_timeout(monkeypatch, tmp_path: Pa
     result1 = harness.process("chat-continue", "hello")
     assert result1.session_number == 1
     assert result1.session_id == "s-1"
-    assert harness._active_record("chat-continue").last_stop_reason == "cancelled"
+    assert harness.active_record("chat-continue").last_stop_reason == "cancelled"
 
     sent: list[tuple[str, str]] = []
 
@@ -1388,7 +1388,7 @@ def test_user_stop_does_not_auto_continue(monkeypatch, tmp_path: Path) -> None:
     result1 = harness.process("chat-stop", "hello")
     assert result1.session_number == 1
     assert result1.session_id == "s-1"
-    assert harness._active_record("chat-stop").last_stop_reason == "stopped"
+    assert harness.active_record("chat-stop").last_stop_reason == "stopped"
 
 
 def test_hard_timeout_rehydrates_and_restarts_transport(monkeypatch, tmp_path: Path) -> None:
@@ -1414,7 +1414,7 @@ def test_hard_timeout_rehydrates_and_restarts_transport(monkeypatch, tmp_path: P
     assert result1.session_number == 1
     assert result1.reply == ""
     assert "Continue" in (result1.notice or "")
-    assert harness._active_record("chat-hard").last_stop_reason == "timeout"
+    assert harness.active_record("chat-hard").last_stop_reason == "timeout"
 
     restarts: list[None] = []
     monkeypatch.setattr(
@@ -1470,7 +1470,7 @@ def test_hard_timeout_ask_first_when_auto_resend_off(monkeypatch, tmp_path: Path
     assert result1.session_number == 1
     assert result1.reply == ""
     assert "Continue" in (result1.notice or "")
-    assert harness._active_record("chat-ask").last_stop_reason == "timeout"
+    assert harness.active_record("chat-ask").last_stop_reason == "timeout"
 
     second_calls: list[str] = []
 
@@ -1487,7 +1487,7 @@ def test_hard_timeout_ask_first_when_auto_resend_off(monkeypatch, tmp_path: Path
     assert "hard time limit" in result2.reply.lower()
     assert "Continue" in result2.reply
     assert len(second_calls) == 0
-    assert harness._active_record("chat-ask").last_stop_reason == "timeout"
+    assert harness.active_record("chat-ask").last_stop_reason == "timeout"
 
 
 def test_hard_timeout_auto_resend_does_not_ask(monkeypatch, tmp_path: Path) -> None:
@@ -1513,7 +1513,7 @@ def test_hard_timeout_auto_resend_does_not_ask(monkeypatch, tmp_path: Path) -> N
     assert result1.session_number == 1
     assert result1.reply == ""
     assert "Continue" in (result1.notice or "")
-    assert harness._active_record("chat-auto").last_stop_reason == "timeout"
+    assert harness.active_record("chat-auto").last_stop_reason == "timeout"
 
     def fake_create_session2(
         prompt: str, *, cwd: Path | None = None, model: str | None = None, **kwargs: Any
@@ -1527,7 +1527,7 @@ def test_hard_timeout_auto_resend_does_not_ask(monkeypatch, tmp_path: Path) -> N
     assert result2.session_id == "s-2"
     assert "Resumed." in result2.reply
 
-    transcript_path = harness._chat_dir("chat-auto") / "chat_transcript.jsonl"
+    transcript_path = harness.chat_dir("chat-auto") / "chat_transcript.jsonl"
     assert transcript_path.exists()
     transcript = [
         json.loads(line) for line in transcript_path.read_text().splitlines() if line.strip()
@@ -1777,9 +1777,9 @@ def test_interrupted_turn_number_is_not_reused(monkeypatch, tmp_path: Path) -> N
     harness.process("chat-turns", "hello", notify=False)
 
     # Simulate a harness kill mid-turn: the record was reserved but not completed.
-    record = harness.runtime._active_record("chat-turns")
+    record = harness.runtime.active_record("chat-turns")
     record.reserve_turn_number()
-    harness.runtime._append_record(record)
+    harness.runtime.append_record(record)
     chat_dir = tmp_path / "sessions" / "chat-turns"
     chat_dir.mkdir(parents=True, exist_ok=True)
     (chat_dir / "chat_active_turn.json").write_text(
@@ -1798,14 +1798,14 @@ def test_interrupted_turn_number_is_not_reused(monkeypatch, tmp_path: Path) -> N
     new_harness = ConversationHarness(config)
     monkeypatch.setattr(new_harness.client, "create_session", fake_create_session)
     monkeypatch.setattr(new_harness.client, "send_message", fake_send_message)
-    new_record = new_harness.runtime._active_record("chat-turns")
+    new_record = new_harness.runtime.active_record("chat-turns")
     assert new_record.turn_number == 1
     assert new_record.pending_turn_number == 2
 
     result = new_harness.process("chat-turns", "follow-up", notify=False)
     assert result.turn_number == 3
-    assert new_harness.runtime._active_record("chat-turns").turn_number == 3
-    assert new_harness.runtime._active_record("chat-turns").pending_turn_number is None
+    assert new_harness.runtime.active_record("chat-turns").turn_number == 3
+    assert new_harness.runtime.active_record("chat-turns").pending_turn_number is None
 
 
 def test_rehydrate_ignores_persisted_snapshot_for_other_message(
@@ -1931,14 +1931,14 @@ def test_first_turn_metrics_captured_per_session(monkeypatch, tmp_path: Path) ->
     monkeypatch.setattr(harness.client, "send_message", fake_send_message)
 
     harness.process("chat-ftm", "hello")
-    record = harness._active_record("chat-ftm")
+    record = harness.active_record("chat-ftm")
     assert record.first_turn_metrics is not None
     assert record.first_turn_metrics["input_tokens"] == 1000
     assert record.first_turn_metrics["prompt_chars"] > 0
 
     # A follow-up on the same session does not overwrite the first-turn sample.
     harness.process("chat-ftm", "follow-up")
-    record = harness._active_record("chat-ftm")
+    record = harness.active_record("chat-ftm")
     assert record.first_turn_metrics["input_tokens"] == 1000
     assert record.last_turn_metrics["input_tokens"] == 5000
 
@@ -1952,7 +1952,7 @@ def test_first_turn_metrics_captured_per_session(monkeypatch, tmp_path: Path) ->
 
     monkeypatch.setattr(harness.client, "create_session", fake_create_session2)
     harness.new_session("chat-ftm")
-    record = harness._active_record("chat-ftm")
+    record = harness.active_record("chat-ftm")
     assert record.first_turn_metrics["input_tokens"] == 2000
 
 
@@ -1992,7 +1992,7 @@ def test_turn_controller_rehydration_survives_model_error(monkeypatch, tmp_path:
     result2 = harness.process("chat-1", "follow-up")
     assert isinstance(result2, ChatResult)
     assert "Could not continue" in result2.reply
-    record = harness.runtime._active_record("chat-1")
+    record = harness.runtime.active_record("chat-1")
     assert record is not None
     assert record.last_stop_reason == "error"
 

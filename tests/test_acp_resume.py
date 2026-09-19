@@ -718,7 +718,7 @@ def test_rehydrate_skips_alive_probe_on_consistency_failure(
         # Known skills drift: record tracks an empty set while a turn-matched
         # skill remains active (record.enabled_skills is unioned into the
         # active set, so drift requires a source outside the record).
-        record = harness._active_record("chat-skill")
+        record = harness.active_record("chat-skill")
         record.enabled_skills = []
         harness.runtime._mcp_skills._active_chat_skills["chat-skill"] = {"matched-skill"}
 
@@ -779,7 +779,7 @@ def test_process_mcp_drift_resyncs_live_session(monkeypatch, tmp_path: Path) -> 
         assert result2.session_id == "session-1"
         assert "resume" in call_order
         assert call_order.count("create") == 1
-        record = harness._active_record("chat-mcp-live")
+        record = harness.active_record("chat-mcp-live")
         assert record.enabled_mcp_servers == ["a-new-default"]
     finally:
         harness.client.close()
@@ -925,7 +925,7 @@ def test_continue_turn_resyncs_mcp_drift(monkeypatch, tmp_path: Path) -> None:
         assert "resume" in call_order
         # The continuation prompt went to the resynced session.
         assert call_order[-1] == "send"
-        record = harness._active_record("chat-dispatch")
+        record = harness.active_record("chat-dispatch")
         assert record.enabled_mcp_servers == ["a-new-default"]
     finally:
         harness.client.close()
@@ -981,7 +981,7 @@ def test_mcp_disable_default_does_not_trigger_spurious_resync(monkeypatch, tmp_p
 
     try:
         harness.process("chat-mcp-off", "hello")
-        record = harness._active_record("chat-mcp-off")
+        record = harness.active_record("chat-mcp-off")
         assert record.enabled_mcp_servers == ["github"]
 
         harness.mcp_disable("chat-mcp-off", "github")
@@ -995,7 +995,7 @@ def test_mcp_disable_default_does_not_trigger_spurious_resync(monkeypatch, tmp_p
 
         # The disable is per-chat config and survives the session boundary.
         harness.new_session("chat-mcp-off")
-        record2 = harness._active_record("chat-mcp-off")
+        record2 = harness.active_record("chat-mcp-off")
         assert record2.disabled_mcp_servers == ["github"]
         assert harness.runtime._mcp_skills._active_mcp_server_names("chat-mcp-off") == []
     finally:
@@ -1101,7 +1101,7 @@ def test_implicit_boundary_preserves_mcp_disable(monkeypatch, tmp_path: Path) ->
 
         # The stale send forces rehydrate → session/new → new record.
         result = harness.process("chat-disable-boundary", "follow-up")
-        record = harness._active_record("chat-disable-boundary")
+        record = harness.active_record("chat-disable-boundary")
         assert result.session_id != "session-1"
         assert record.disabled_mcp_servers == ["github"]
         assert record.enabled_mcp_servers == []
@@ -1142,7 +1142,7 @@ def test_resume_command_probe_is_consistency_gated(monkeypatch, tmp_path: Path) 
 
         # The archived session-1 record carries a timeout stop reason —
         # consistency rules say it must not be revived.
-        state = harness.runtime._chat_state("chat-resume-cmd")
+        state = harness.runtime.chat_state("chat-resume-cmd")
         source = state.sessions[1]
         source.last_stop_reason = "timeout"
 
@@ -1172,7 +1172,7 @@ def test_can_resume_record_expected_skills_baseline(monkeypatch, tmp_path: Path)
 
     try:
         harness.process("chat-br", "hello")
-        record = harness._active_record("chat-br")
+        record = harness.active_record("chat-br")
         record.enabled_skills = ["skill-a"]
         # The active set drifts from the source's own skills.
         harness.runtime._mcp_skills._active_chat_skills["chat-br"] = {"skill-b"}

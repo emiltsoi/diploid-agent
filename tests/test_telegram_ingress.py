@@ -410,7 +410,7 @@ def test_state_event(client: TestClient) -> None:
     assert "Klingon" in response.json()["reply"]
 
     # The plugin should have persisted state.
-    chat_dir = client.app.state.harness._chat_dir("chat-state")
+    chat_dir = client.app.state.harness.chat_dir("chat-state")
     state_path = chat_dir / "chat_curriculum.json"
     assert state_path.exists()
 

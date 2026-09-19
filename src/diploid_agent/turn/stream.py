@@ -26,7 +26,7 @@ class TurnStream:
         a = self._runtime._active_turns.get(self._chat_id)
         if a is None:
             return
-        record = self._runtime._active_record(self._chat_id)
+        record = self._runtime.active_record(self._chat_id)
         self._runtime._plugins.on_partial(
             self._chat_id,
             PartialTurn.from_active(a, record),

@@ -109,8 +109,8 @@ class TurnSession(TurnComponent):
         if transition:
             notice = transition if notice is None else f"{notice}\n\n{transition}"
 
-        self.runtime._append_record(record)
-        self.runtime._prune_and_compact(chat_id)
+        self.runtime.append_record(record)
+        self.runtime.prune_and_compact(chat_id)
         self.runtime._plugins.after_session_active(
             chat_id,
             SessionActiveContext(chat_id=chat_id, record=record),
@@ -137,8 +137,8 @@ class TurnSession(TurnComponent):
         plugin_overrides: dict[str, bool] | None = None,
     ) -> ChatResult:
         """Archive any active session and start a fresh ACP session for the chat."""
-        record = self.runtime._active_record(chat_id)
-        current_model = self.runtime._prompts._model(record)
+        record = self.runtime.active_record(chat_id)
+        current_model = self.runtime._prompts.model(record)
         if record and desired_model == current_model and kind == "switch_model":
             return ChatResult(reply=f"Already using model `{desired_model}` for this chat.")
 
@@ -149,14 +149,14 @@ class TurnSession(TurnComponent):
                 chat_id,
                 SessionArchiveContext(chat_id=chat_id, old_record=record),
             )
-            self.runtime._archive_active_session(chat_id, record)
+            self.runtime.archive_active_session(chat_id, record)
 
         if clear_active:
             self.runtime._plugins.before_session_clear(
                 chat_id,
                 SessionClearContext(chat_id=chat_id, old_record=record),
             )
-            self.runtime._clear_active_session(chat_id)
+            self.runtime.clear_active_session(chat_id)
 
         user_message = (
             "Continue the conversation as your true self. "
@@ -164,7 +164,7 @@ class TurnSession(TurnComponent):
             "Do not claim to know the name of the model serving you. "
             "Do not sign your reply."
         )
-        session_number = self.runtime._next_session_number(chat_id)
+        session_number = self.runtime.next_session_number(chat_id)
         start_ctx = self.runtime._plugins.before_session_start(
             chat_id,
             SessionStartContext(
@@ -240,7 +240,7 @@ class TurnSession(TurnComponent):
         elif record is not None and record.plugin_overrides is not None:
             new_record.plugin_overrides = dict(record.plugin_overrides)
 
-        self.runtime._chat_state(chat_id).sessions[new_record.session_number] = new_record
+        self.runtime.chat_state(chat_id).sessions[new_record.session_number] = new_record
         return self._finalize_session_activation(
             chat_id,
             new_record,
@@ -269,8 +269,8 @@ class TurnSession(TurnComponent):
         if (busy := self._session_op_busy(chat_id)) is not None:
             return busy
         with self._hold_session_op(chat_id):
-            record = self.runtime._active_record(chat_id)
-            current_model = self.runtime._prompts._model(record)
+            record = self.runtime.active_record(chat_id)
+            current_model = self.runtime._prompts.model(record)
             if in_place and record is not None and record.session_id:
                 return self._switch_model_in_place(chat_id, record, model, current_model)
             return self._start_fresh_session(
@@ -311,14 +311,14 @@ class TurnSession(TurnComponent):
                     "retry the switch or use a fresh-session model switch."
                 ),
             )
-        if self.runtime._active_record(chat_id) is not record:
+        if self.runtime.active_record(chat_id) is not record:
             return ChatResult(
                 reply=f"Applied `{applied or desired}`, but the active session changed mid-switch.",
                 notice="Retry the model switch to update the current session.",
             )
         record.model = applied or desired
         record.updated_at = time.time()
-        self.runtime._append_record(record)
+        self.runtime.append_record(record)
         self.runtime.record_system_note(chat_id, f"[model switched to {record.model} in place]")
         if self.runtime.lifecycle_log is not None:
             self.runtime.lifecycle_log.write(
@@ -340,11 +340,11 @@ class TurnSession(TurnComponent):
         if (busy := self._session_op_busy(chat_id)) is not None:
             return busy
         with self._hold_session_op(chat_id):
-            record = self.runtime._active_record(chat_id)
+            record = self.runtime.active_record(chat_id)
             plugin_overrides = record.plugin_overrides if record else None
             return self._start_fresh_session(
                 chat_id,
-                desired_model=model or self.runtime._prompts._model(record),
+                desired_model=model or self.runtime._prompts.model(record),
                 kind="new",
                 label="new session",
                 system_message="new session started",
@@ -362,12 +362,12 @@ class TurnSession(TurnComponent):
             return self._resume_session(chat_id, session_number)
 
     def _resume_session(self, chat_id: str, session_number: int) -> ChatResult:
-        state = self.runtime._chat_state(chat_id)
+        state = self.runtime.chat_state(chat_id)
         source = state.sessions.get(session_number)
         if source is None:
             return ChatResult(reply=f"Session {session_number} not found for this chat.")
 
-        active = self.runtime._active_record(chat_id)
+        active = self.runtime.active_record(chat_id)
         if active and active.session_number == session_number:
             return ChatResult(reply=f"Session {session_number} is already active.")
 
@@ -377,11 +377,11 @@ class TurnSession(TurnComponent):
                 chat_id,
                 SessionArchiveContext(chat_id=chat_id, old_record=active),
             )
-            self.runtime._archive_active_session(chat_id, active)
+            self.runtime.archive_active_session(chat_id, active)
 
         # Copy the source session into the active directory.
-        self.runtime._copy_session_dir(
-            self.runtime._archive_dir(chat_id, session_number), self.runtime._chat_dir(chat_id)
+        self.runtime.copy_session_dir(
+            self.runtime.archive_dir(chat_id, session_number), self.runtime.chat_dir(chat_id)
         )
 
         source_mcp_names = (
@@ -407,7 +407,7 @@ class TurnSession(TurnComponent):
                 resumed_id = self.runtime._call_unlocked(
                     self.runtime.engine.resume_session,
                     source.session_id,
-                    cwd=self.runtime._chat_dir(chat_id),
+                    cwd=self.runtime.chat_dir(chat_id),
                     model=source.model,
                     mcp_servers=self.runtime.mcp.enabled_servers(chat_id, source_mcp_names),
                 )
@@ -434,13 +434,13 @@ class TurnSession(TurnComponent):
 
             if alive:
                 source.updated_at = time.time()
-                source.cwd = str(self.runtime._chat_dir(chat_id))
+                source.cwd = str(self.runtime.chat_dir(chat_id))
                 source.enabled_mcp_servers = source_mcp_names
                 source.enabled_skills = sorted(source_skill_names)
                 self.runtime.skills.sync_to_chat(
-                    chat_id, self.runtime._chat_dir(chat_id), source_skill_names
+                    chat_id, self.runtime.chat_dir(chat_id), source_skill_names
                 )
-                self.runtime._chat_state(chat_id).sessions[source.session_number] = source
+                self.runtime.chat_state(chat_id).sessions[source.session_number] = source
                 reply = "Resumed existing session."
             else:
                 user_message = "Continue the conversation as your true self."
@@ -477,7 +477,7 @@ class TurnSession(TurnComponent):
                 use_model = pctx.model or use_model
 
                 source.reserve_turn_number()
-                self.runtime._append_record(source)
+                self.runtime.append_record(source)
 
                 result, session_id = self.runtime._call_unlocked(
                     self.runtime._prompts._start_new_session,
@@ -491,7 +491,7 @@ class TurnSession(TurnComponent):
                 reply = result.reply
                 source.session_id = session_id
                 source.updated_at = time.time()
-                source.cwd = str(self.runtime._chat_dir(chat_id))
+                source.cwd = str(self.runtime.chat_dir(chat_id))
                 source.chat_memory_exceeded = memory_flags.get("chat_memory_exceeded", False)
                 source.persona_memory_exceeded = memory_flags.get("persona_memory_exceeded", False)
                 source.enabled_mcp_servers = source_mcp_names
@@ -530,11 +530,11 @@ class TurnSession(TurnComponent):
             use_model = pctx.model or use_model
 
             source.reserve_turn_number()
-            self.runtime._append_record(source)
+            self.runtime.append_record(source)
 
             request = TurnRequest(
                 prompt=prompt,
-                cwd=self.runtime._chat_dir(chat_id),
+                cwd=self.runtime.chat_dir(chat_id),
                 model=use_model,
                 mcp_servers=None,
                 soft_timeout=self.runtime.config.engine.soft_timeout,
@@ -548,14 +548,14 @@ class TurnSession(TurnComponent):
             reply = result.reply
             source.session_id = resumed_id
             source.updated_at = time.time()
-            source.cwd = str(self.runtime._chat_dir(chat_id))
+            source.cwd = str(self.runtime.chat_dir(chat_id))
             source.chat_memory_exceeded = memory_flags.get("chat_memory_exceeded", False)
             source.persona_memory_exceeded = memory_flags.get("persona_memory_exceeded", False)
             source.enabled_mcp_servers = source_mcp_names
             source.enabled_skills = sorted(source_skill_names)
             source.model = use_model
             self.runtime.skills.sync_to_chat(
-                chat_id, self.runtime._chat_dir(chat_id), source_skill_names
+                chat_id, self.runtime.chat_dir(chat_id), source_skill_names
             )
 
         return self._finalize_session_activation(
@@ -575,26 +575,26 @@ class TurnSession(TurnComponent):
             return self._branch_session(chat_id, session_number)
 
     def _branch_session(self, chat_id: str, session_number: int) -> ChatResult:
-        state = self.runtime._chat_state(chat_id)
+        state = self.runtime.chat_state(chat_id)
         source = state.sessions.get(session_number)
         if source is None:
             return ChatResult(reply=f"Session {session_number} not found for this chat.")
 
-        active = self.runtime._active_record(chat_id)
+        active = self.runtime.active_record(chat_id)
         if active:
             self.runtime._plugins.before_session_archive(
                 chat_id,
                 SessionArchiveContext(chat_id=chat_id, old_record=active),
             )
-            self.runtime._archive_active_session(chat_id, active)
+            self.runtime.archive_active_session(chat_id, active)
 
         # Copy the source session into the active directory.
-        self.runtime._copy_session_dir(
-            self.runtime._archive_dir(chat_id, session_number), self.runtime._chat_dir(chat_id)
+        self.runtime.copy_session_dir(
+            self.runtime.archive_dir(chat_id, session_number), self.runtime.chat_dir(chat_id)
         )
 
         user_message = "Continue the conversation as your true self."
-        new_number = self.runtime._next_session_number(chat_id)
+        new_number = self.runtime.next_session_number(chat_id)
         start_ctx = self.runtime._plugins.before_session_start(
             chat_id,
             SessionStartContext(
@@ -643,7 +643,7 @@ class TurnSession(TurnComponent):
                 resumed_id = self.runtime._call_unlocked(
                     self.runtime.engine.resume_session,
                     source.session_id,
-                    cwd=self.runtime._chat_dir(chat_id),
+                    cwd=self.runtime.chat_dir(chat_id),
                     model=use_model,
                     mcp_servers=start_ctx.mcp_servers
                     or self.runtime.mcp.enabled_servers(chat_id, source_mcp_names),
@@ -666,7 +666,7 @@ class TurnSession(TurnComponent):
             use_model = pctx.model or use_model
             request = TurnRequest(
                 prompt=prompt,
-                cwd=self.runtime._chat_dir(chat_id),
+                cwd=self.runtime.chat_dir(chat_id),
                 model=use_model,
                 mcp_servers=None,
                 soft_timeout=self.runtime.config.engine.soft_timeout,
@@ -719,7 +719,7 @@ class TurnSession(TurnComponent):
         new_record.disabled_mcp_servers = list(source.disabled_mcp_servers or [])
         new_record.enabled_skills = sorted(source_skill_names)
         new_record.plugin_overrides = dict(source.plugin_overrides or {})
-        self.runtime._chat_state(chat_id).sessions[new_record.session_number] = new_record
+        self.runtime.chat_state(chat_id).sessions[new_record.session_number] = new_record
         return self._finalize_session_activation(
             chat_id,
             new_record,

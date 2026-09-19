@@ -75,7 +75,18 @@ logger = logging.getLogger(__name__)
 
 
 class AgentRuntime(RuntimeAPI):
-    """Persistent chat runtime backed by Devin ACP."""
+    """Persistent chat runtime backed by Devin ACP.
+
+    Two surfaces live on this class: the ``RuntimeAPI`` methods transports
+    call (``process``, ``continue_turn``, ``outbox_pop``, ...) and a
+    delegation layer used by ``TurnController`` and sibling runtime
+    components (components are constructed here, so callers reach them
+    through it rather than importing each other). Members prefixed ``_``
+    are runtime-internal; the session-store mirrors (``active_record``,
+    ``append_record``, ``chat_dir``, ...) and the named component delegates
+    (``schedule_draining_restart``, ``float_mesh_to_telegram``) are the
+    public half of that seam.
+    """
 
     def __init__(self, config: Config):
         self.config = config
@@ -141,7 +152,7 @@ class AgentRuntime(RuntimeAPI):
             plugins_fn=lambda: self._plugins,
             context_builder_fn=lambda: self.context_builder,
         )
-        self._store = self._chat_store._store
+        self._store = self._chat_store.states
         self._runtime_metrics = RuntimeMetrics(
             metrics=self.metrics,
             store=self._store,
@@ -159,7 +170,7 @@ class AgentRuntime(RuntimeAPI):
             if plugin_path.exists() and str(plugin_path) not in sys.path:
                 sys.path.append(str(plugin_path))
 
-        self._chat_store._load_store()
+        self._chat_store.load_store()
         dispatch_store_path = Path(config.harness.dispatch_store_path).expanduser()
         self.dispatch_store = DispatchStore(dispatch_store_path)
 
@@ -218,7 +229,7 @@ class AgentRuntime(RuntimeAPI):
         )
 
         if config.harness.session_prune_enabled:
-            self._prune_all()
+            self.prune_all()
         self._runtime_metrics._rehydrate_metrics()
 
         # Durable record of plugin incidents (sandbox, lifecycle, health, watchdog).
@@ -500,7 +511,7 @@ class AgentRuntime(RuntimeAPI):
         """Best-effort check that a user unit exists before draining for it."""
         return self._restart._systemd_unit_exists(service)
 
-    def _schedule_draining_restart(
+    def schedule_draining_restart(
         self,
         service: str,
         chat_id: str | None,
@@ -508,7 +519,7 @@ class AgentRuntime(RuntimeAPI):
         drain_cap: float = 120.0,
     ) -> bool:
         """Begin the restart drain and schedule the real systemd restart."""
-        return self._restart._schedule_draining_restart(
+        return self._restart.schedule_draining_restart(
             service, chat_id, reason, drain_cap=drain_cap
         )
 
@@ -574,6 +585,28 @@ class AgentRuntime(RuntimeAPI):
         """Send a final ChatResult through the configured delivery channel."""
         self._outbox._deliver_chat_result(chat_id, chat_result)
 
+    def float_mesh_to_telegram(
+        self,
+        chat_id: str,
+        *,
+        sender: str,
+        recipient: str,
+        body: str,
+        action: str,
+        reply: str,
+        msg_id: str,
+    ) -> None:
+        """Mirror a sent mesh message to Telegram as a system notice."""
+        self._outbox.float_mesh_to_telegram(
+            chat_id,
+            sender=sender,
+            recipient=recipient,
+            body=body,
+            action=action,
+            reply=reply,
+            msg_id=msg_id,
+        )
+
     def outbox_pop(
         self,
         chat_id: str | None = None,
@@ -617,19 +650,19 @@ class AgentRuntime(RuntimeAPI):
 
     # ---------------------------------------------------------------- load/save
 
-    def _load_store(self) -> None:
-        self._chat_store._load_store()
+    def load_store(self) -> None:
+        self._chat_store.load_store()
 
-    def _append_record(self, record: SessionRecord) -> None:
-        self._chat_store._append_record(record)
+    def append_record(self, record: SessionRecord) -> None:
+        self._chat_store.append_record(record)
 
-    def _compact_store(self) -> None:
-        self._chat_store._compact_store()
+    def compact_store(self) -> None:
+        self._chat_store.compact_store()
 
     # ---------------------------------------------------------------- session dirs
 
-    def _chat_dir(self, chat_id: str) -> Path:
-        return self._chat_store._chat_dir(chat_id)
+    def chat_dir(self, chat_id: str) -> Path:
+        return self._chat_store.chat_dir(chat_id)
 
     def _snapshot_plugin_states(self, chat_id: str) -> None:
         """Snapshot durable plugin and body state files before a transport restart."""
@@ -639,36 +672,36 @@ class AgentRuntime(RuntimeAPI):
         """Restore durable plugin and body state files after a transport wake."""
         self._runtime_plugins._restore_plugin_states(chat_id)
 
-    def _archive_dir(self, chat_id: str, session_number: int) -> Path:
-        return self._chat_store._archive_dir(chat_id, session_number)
+    def archive_dir(self, chat_id: str, session_number: int) -> Path:
+        return self._chat_store.archive_dir(chat_id, session_number)
 
-    def _durable_file_names(self) -> set[str]:
-        return self._chat_store._durable_file_names()
+    def durable_file_names(self) -> set[str]:
+        return self._chat_store.durable_file_names()
 
-    def _copy_session_dir(self, source: Path, target: Path) -> None:
-        self._chat_store._copy_session_dir(source, target)
+    def copy_session_dir(self, source: Path, target: Path) -> None:
+        self._chat_store.copy_session_dir(source, target)
 
-    def _archive_active_session(self, chat_id: str, record: SessionRecord) -> None:
+    def archive_active_session(self, chat_id: str, record: SessionRecord) -> None:
         """Copy the active directory into the archive for `record`."""
-        self._chat_store._archive_active_session(chat_id, record)
+        self._chat_store.archive_active_session(chat_id, record)
 
-    def _clear_active_session(self, chat_id: str) -> None:
-        self._chat_store._clear_active_session(chat_id)
+    def clear_active_session(self, chat_id: str) -> None:
+        self._chat_store.clear_active_session(chat_id)
 
     # ---------------------------------------------------------------- active state
 
-    def _chat_state(self, chat_id: str) -> ChatState:
-        return self._chat_store._chat_state(chat_id)
+    def chat_state(self, chat_id: str) -> ChatState:
+        return self._chat_store.chat_state(chat_id)
 
-    def _active_record(self, chat_id: str) -> SessionRecord | None:
-        return self._chat_store._active_record(chat_id)
+    def active_record(self, chat_id: str) -> SessionRecord | None:
+        return self._chat_store.active_record(chat_id)
 
-    def _next_session_number(self, chat_id: str) -> int:
-        return self._chat_store._next_session_number(chat_id)
+    def next_session_number(self, chat_id: str) -> int:
+        return self._chat_store.next_session_number(chat_id)
 
-    def _generate_label(self, chat_id: str, user_message: str) -> str:
+    def generate_label(self, chat_id: str, user_message: str) -> str:
         """Auto-generate a short label from the first user message."""
-        return self._chat_store._generate_label(chat_id, user_message)
+        return self._chat_store.generate_label(chat_id, user_message)
 
     def mcp_list(self, chat_id: str) -> str:
         return self._mcp_skills.mcp_list(chat_id)
@@ -1147,12 +1180,12 @@ class AgentRuntime(RuntimeAPI):
 
     # ---------------------------------------------------------------- pruning
 
-    def _prune_chat(self, chat_id: str) -> None:
+    def prune_chat(self, chat_id: str) -> None:
         """Delete archived sessions older than the prune window."""
-        self._chat_store._prune_chat(chat_id)
+        self._chat_store.prune_chat(chat_id)
 
-    def _prune_and_compact(self, chat_id: str) -> None:
-        self._chat_store._prune_and_compact(chat_id)
+    def prune_and_compact(self, chat_id: str) -> None:
+        self._chat_store.prune_and_compact(chat_id)
 
-    def _prune_all(self) -> None:
-        self._chat_store._prune_all()
+    def prune_all(self) -> None:
+        self._chat_store.prune_all()

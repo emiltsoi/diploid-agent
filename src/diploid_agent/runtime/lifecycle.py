@@ -194,7 +194,7 @@ class RuntimeLifecycle:
         self._event_bus.stop()
         now = time.time()
         for chat_id in list(self._store.keys()):
-            record = self._chat_store._active_record(chat_id)
+            record = self._chat_store.active_record(chat_id)
             self._plugins.on_shutdown(
                 chat_id,
                 ShutdownContext(

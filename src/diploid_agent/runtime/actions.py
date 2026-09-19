@@ -217,13 +217,13 @@ class RuntimeActions:
     def status(self, chat_id: str) -> dict[str, Any]:
         """Return the harness-recorded status for a chat."""
         with self._lock:
-            record = self._chat_store._active_record(chat_id)
+            record = self._chat_store.active_record(chat_id)
             if not record:
                 return {"chat_id": chat_id, "active": False}
             # Usage and its stop_reason come from the same record read so a
             # record swap between locks cannot pair one session's usage with
             # another's last_stop_reason.
-            context_usage = self._runtime_metrics._context_usage(record)
+            context_usage = self._runtime_metrics.context_usage(record)
             if context_usage and record.last_stop_reason:
                 context_usage["last_turn"]["stop_reason"] = record.last_stop_reason
 
@@ -238,7 +238,7 @@ class RuntimeActions:
         active_turn = self.turn_controller.turn_status(chat_id, wait=0.0)
 
         with self._lock:
-            record = self._chat_store._active_record(chat_id)
+            record = self._chat_store.active_record(chat_id)
             if not record:
                 return {"chat_id": chat_id, "active": False}
 
@@ -269,8 +269,8 @@ class RuntimeActions:
     def list_sessions(self, chat_id: str) -> dict[str, Any]:
         """Return all non-pruned sessions for a chat, with the active one marked."""
         with self._lock:
-            state = self._chat_store._chat_state(chat_id)
-            active = self._chat_store._active_record(chat_id)
+            state = self._chat_store.chat_state(chat_id)
+            active = self._chat_store.active_record(chat_id)
             sessions = []
             for record in sorted(state.sessions.values(), key=lambda r: r.session_number):
                 sessions.append(
@@ -299,15 +299,15 @@ class RuntimeActions:
     @_actions_locked
     def summarize(self, chat_id: str) -> ChatResult:
         """Trigger a manual summarization for a chat."""
-        record = self._chat_store._active_record(chat_id)
-        model = self._prompts._model(record)
+        record = self._chat_store.active_record(chat_id)
+        model = self._prompts.model(record)
         mgr = self._memory_manager(chat_id)
         self._call_unlocked(mgr._summarize, model)
 
         notice = None
         if record:
             notice = self._prompts._check_chat_memory_transition(chat_id, record)
-            self._chat_store._append_record(record)
+            self._chat_store.append_record(record)
 
         return ChatResult(reply="Summarization complete.", notice=notice)
 
@@ -353,16 +353,16 @@ class RuntimeActions:
     @_actions_locked
     def promote(self, chat_id: str, fact: str) -> ChatResult:
         """Promote a fact to the chat's curated memory pocket."""
-        record = self._chat_store._active_record(chat_id)
+        record = self._chat_store.active_record(chat_id)
         ctx = self._plugins.before_promote(
             chat_id,
             PromoteContext(chat_id=chat_id, fact=fact, record=record),
         )
         self._memory_manager(chat_id).promote(ctx.fact)
 
-        record = self._chat_store._active_record(chat_id)
+        record = self._chat_store.active_record(chat_id)
         if record:
-            self._chat_store._append_record(record)
+            self._chat_store.append_record(record)
             self._plugins.after_promote(
                 chat_id,
                 PromoteContext(chat_id=chat_id, fact=ctx.fact, record=record),
@@ -382,7 +382,7 @@ class RuntimeActions:
         mesh_payload: dict[str, Any],
     ) -> ChatResult:
         """Persist a terminal mesh message (e.g. a DSN) without running a turn."""
-        record = self._chat_store._active_record(chat_id)
+        record = self._chat_store.active_record(chat_id)
 
         event = WakeEvent(
             id=f"mesh:{mesh_payload.get('message_id', 'unknown')}",
@@ -438,7 +438,7 @@ class RuntimeActions:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Failed to record restart incident for %s: %s", chat_id, exc)
 
-        if not self._restart._schedule_draining_restart(service, chat_id=chat_id, reason=reason):
+        if not self._restart.schedule_draining_restart(service, chat_id=chat_id, reason=reason):
             self._state.last_service_restart_at = 0.0
             return ChatResult(
                 reply=f"Could not restart {service}: no such systemd user unit.",

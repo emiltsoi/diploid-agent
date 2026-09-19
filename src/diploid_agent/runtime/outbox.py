@@ -101,7 +101,7 @@ class RuntimeOutbox:
         if self.config.harness.notifications.enabled and chat_result.reply:
             self._safe_notifier_send(chat_id, chat_result.reply)
 
-    def _float_mesh_to_telegram(
+    def float_mesh_to_telegram(
         self,
         chat_id: str,
         sender: str,

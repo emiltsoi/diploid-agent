@@ -231,6 +231,20 @@ class RuntimeAPI(abc.ABC):
     def update_notifications_config(self, notifications_config: NotificationsConfig) -> str:
         """Update the live notifications configuration."""
 
+    def float_mesh_to_telegram(
+        self,
+        chat_id: str,
+        *,
+        sender: str,
+        recipient: str,
+        body: str,
+        action: str,
+        reply: str,
+        msg_id: str,
+    ) -> None:
+        """Mirror a sent mesh message to Telegram as a system notice."""
+        raise NotImplementedError
+
     def register_ingress_handler(self, protocol: str, handler: IngressHandler) -> None:
         """Register a protocol-specific inbound HTTP handler."""
         raise NotImplementedError

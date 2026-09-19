@@ -87,7 +87,7 @@ class TurnPipeline(TurnComponent):
         try:
             request = TurnRequest(
                 prompt=prompt,
-                cwd=self.runtime._chat_dir(chat_id),
+                cwd=self.runtime.chat_dir(chat_id),
                 model=use_model,
                 mcp_servers=(
                     self.runtime._mcp_skills._active_mcp_servers(chat_id)
@@ -151,7 +151,7 @@ class TurnPipeline(TurnComponent):
                             resumed_id = self.runtime.call_engine_unlocked(
                                 self.runtime.engine.resume_session,
                                 old_record.session_id,
-                                cwd=self.runtime._chat_dir(chat_id),
+                                cwd=self.runtime.chat_dir(chat_id),
                                 model=use_model,
                                 mcp_servers=self.runtime._mcp_skills._active_mcp_servers(chat_id),
                                 timeout=self.runtime.config.engine.acp_resume_timeout,
@@ -331,7 +331,7 @@ class TurnPipeline(TurnComponent):
         Returns ``(chat_result, record)`` — the record may be a *new* object
         when the turn crossed an ACP session boundary, so callers rebind their
         local. ``after_turn_end`` runs inside the record lock right after
-        ``on_turn_end``; ``after_append`` right after ``_append_record``;
+        ``on_turn_end``; ``after_append`` right after ``append_record``;
         ``after_result`` after the ChatResult is assembled.
         """
         result = outcome.result
@@ -369,7 +369,7 @@ class TurnPipeline(TurnComponent):
             # sessions instead of mutating the old record's session_id.
             if record_is_new:
                 if not is_new:
-                    session_number = self.runtime._next_session_number(chat_id)
+                    session_number = self.runtime.next_session_number(chat_id)
                 record = self.runtime._prompts._create_record(
                     chat_id,
                     session_number,
@@ -394,7 +394,7 @@ class TurnPipeline(TurnComponent):
                     # be mutated by later writes on the new record.
                     record.disabled_mcp_servers = list(old_record.disabled_mcp_servers or [])
                     record.plugin_overrides = dict(old_record.plugin_overrides or {})
-                self.runtime._chat_state(chat_id).sessions[record.session_number] = record
+                self.runtime.chat_state(chat_id).sessions[record.session_number] = record
             else:
                 record = old_record
                 record.enabled_mcp_servers = mcp_names
@@ -496,7 +496,7 @@ class TurnPipeline(TurnComponent):
             if transition:
                 turn.notice = join_notices(turn.notice, transition)
 
-            self.runtime._append_record(record)
+            self.runtime.append_record(record)
             if after_append is not None:
                 after_append()
 

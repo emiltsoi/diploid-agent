@@ -118,7 +118,7 @@ class RuntimePrompts:
         continuation_anchor: str | None = None,
     ) -> tuple[str, str | None, dict[str, bool]]:
         """Build a first-turn prompt and any memory truncation notice."""
-        record = self._chat_store._active_record(chat_id)
+        record = self._chat_store.active_record(chat_id)
         pctx = self.context_builder.build_first(
             chat_id,
             user_message,
@@ -142,7 +142,7 @@ class RuntimePrompts:
         continuation_anchor: str | None = None,
     ) -> str:
         """Build a follow-up prompt for an existing session."""
-        record = self._chat_store._active_record(chat_id)
+        record = self._chat_store.active_record(chat_id)
         pctx = self.context_builder.build_follow_up(
             chat_id,
             user_message,
@@ -154,7 +154,7 @@ class RuntimePrompts:
         )
         return pctx.prompt
 
-    def _model(self, record: SessionRecord | None) -> str:
+    def model(self, record: SessionRecord | None) -> str:
         return record.model if record else self.config.engine.model
 
     def resolve_model(
@@ -231,7 +231,7 @@ class RuntimePrompts:
         parent: int | None = None,
         label: str | None = None,
     ) -> SessionRecord:
-        cwd = self._chat_store._chat_dir(chat_id)
+        cwd = self._chat_store.chat_dir(chat_id)
         now = time.time()
         return SessionRecord(
             chat_id=chat_id,
@@ -261,7 +261,7 @@ class RuntimePrompts:
         on_update: Callable[[dict[str, Any]], None] | None = None,
     ) -> tuple[TurnResult, str]:
         """Create a new ACP session and return the prompt result + session id."""
-        cwd = self._chat_store._chat_dir(chat_id)
+        cwd = self._chat_store.chat_dir(chat_id)
         cwd.mkdir(parents=True, exist_ok=True)
         self.skills.sync_to_chat(
             chat_id, cwd, skill_names or self._mcp_skills._active_skill_names(chat_id)
@@ -379,4 +379,4 @@ class RuntimePrompts:
     def get_model(self, chat_id: str) -> str:
         """Return the model currently used for a chat, or the default."""
         with self._lock:
-            return self._model(self._chat_store._active_record(chat_id))
+            return self.model(self._chat_store.active_record(chat_id))

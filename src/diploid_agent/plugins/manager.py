@@ -234,7 +234,7 @@ class PluginManager:
         global_enabled = {p.name: p.enabled for p in self._plugins}
         notes: list[str] = []
         for chat_id in sorted(self._instances):
-            record = self._runtime._active_record(chat_id)
+            record = self._runtime.active_record(chat_id)
             if record is None or not record.plugin_overrides:
                 continue
             masked = sorted(
@@ -403,7 +403,7 @@ class PluginManager:
         return JsonStatePlugin(config, chat_id, self._sessions_root, self._runtime)
 
     def _is_enabled_for(self, chat_id: str, config: PluginConfig) -> bool:
-        record = self._runtime._active_record(chat_id) if self._runtime else None
+        record = self._runtime.active_record(chat_id) if self._runtime else None
         if record and record.plugin_overrides and config.name in record.plugin_overrides:
             return record.plugin_overrides[config.name]
         return config.enabled
@@ -412,13 +412,13 @@ class PluginManager:
         return self._hooks._plugins_for(chat_id)
 
     def set_plugin_enabled(self, chat_id: str, name: str, enabled: bool) -> str:
-        record = self._runtime._active_record(chat_id) if self._runtime else None
+        record = self._runtime.active_record(chat_id) if self._runtime else None
         if record is None:
             return f"No active session for {chat_id}"
         if record.plugin_overrides is None:
             record.plugin_overrides = {}
         record.plugin_overrides[name] = enabled
-        self._runtime._append_record(record)
+        self._runtime.append_record(record)
         instance = self._instances[chat_id].pop(name, None)
         if instance is not None and not isinstance(instance, FailedPlugin):
             try:

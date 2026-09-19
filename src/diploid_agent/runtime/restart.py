@@ -246,7 +246,7 @@ class RuntimeRestart:
                 )
 
         # Drain in-flight turns, flush plugin state, then schedule the restart.
-        if not self._schedule_draining_restart(service, chat_id=None, reason=reason):
+        if not self.schedule_draining_restart(service, chat_id=None, reason=reason):
             return "rejected: no such unit"
         # Stamp the cooldown only after the unit is known to exist, so a
         # rejected request does not burn the window for a legitimate one.
@@ -255,7 +255,7 @@ class RuntimeRestart:
         self._notify_agent_restart(service, reason)
         return "scheduled"
 
-    def _schedule_draining_restart(
+    def schedule_draining_restart(
         self,
         service: str,
         chat_id: str | None,
@@ -399,7 +399,7 @@ class RuntimeRestart:
         for chat_id in list(self._store.keys()):
             try:
                 with self._lock:
-                    record = self._chat_store._active_record(chat_id)
+                    record = self._chat_store.active_record(chat_id)
                 self._plugins.on_shutdown(
                     chat_id,
                     ShutdownContext(

@@ -250,11 +250,11 @@ def test_conversation_harness_delegates_to_runtime(tmp_path: Path) -> None:
         assert hasattr(harness, name)
         assert getattr(harness, name).__func__ is getattr(harness.runtime, name).__func__
 
-    # Private helpers that live on the runtime are accessible via __getattr__.
+    # Helpers that live on the runtime are accessible via __getattr__.
     for name in (
         "_memory_manager",
-        "_active_record",
-        "_chat_dir",
+        "active_record",
+        "chat_dir",
     ):
         assert hasattr(harness, name)
     assert hasattr(harness, "_prompts")
@@ -463,7 +463,7 @@ def test_graceful_restart_cap_expires_with_active_turn(tmp_path: Path, monkeypat
     with runtime._lock:
         runtime._active_turns["chat-1"] = ActiveTurn("chat-1", None, "hello", time.time())
 
-    runtime._schedule_draining_restart(
+    runtime.schedule_draining_restart(
         "test.service", chat_id="chat-1", reason="test", drain_cap=0.2
     )
 
@@ -478,8 +478,8 @@ def test_graceful_restart_cap_expires_with_active_turn(tmp_path: Path, monkeypat
 def test_restart_flush_runs_plugin_shutdown(tmp_path: Path, monkeypatch) -> None:
     """Before the timer fires, on_shutdown reaches every chat's plugin instances."""
     runtime = AgentRuntime(_make_config(tmp_path))
-    runtime._chat_state("chat-1")
-    runtime._chat_state("chat-2")
+    runtime.chat_state("chat-1")
+    runtime.chat_state("chat-2")
 
     calls: list[tuple[str, str]] = []
     monkeypatch.setattr(
@@ -764,7 +764,7 @@ def test_dispatch_failed_wake_continues_and_updates_status(tmp_path: Path) -> No
 
     runtime.process("chat-1", "hello")
 
-    active = runtime._active_record("chat-1")
+    active = runtime.active_record("chat-1")
     assert active is not None
     dispatch = runtime.dispatch_store.add("chat-1", active.session_id)
     _enqueue_dispatch_wake(runtime, dispatch.id)
