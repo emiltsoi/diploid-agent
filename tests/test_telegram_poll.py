@@ -3490,3 +3490,46 @@ def test_next_wait_derives_cap_from_heartbeat_interval(tmp_path: Path) -> None:
     wait = display.next_wait()
     # With the old 25.0 constant this would return exactly 25.0.
     assert 25.0 < wait <= _HEARTBEAT_INTERVAL
+
+def test_continuation_deletes_committed_and_restreams(tmp_path: Path) -> None:
+    """On continuation the committed intermediate is deleted because the next
+    turn's fresh display re-streams the cumulative text — the live placeholder
+    survives so the continuing stream has a message to fill."""
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    sent_ids = iter(range(100, 110))
+    edits: list[tuple[int, str]] = []
+    deletes: list[int] = []
+
+    poller._send_message = lambda chat_id, text, **kw: next(sent_ids)
+    poller._edit_message_text = lambda chat_id, mid, text, **kw: edits.append(
+        (mid, text)
+    ) or True
+    poller._delete_message = lambda chat_id, mid: deletes.append(mid)
+    poller._save_placeholder_state = lambda *a, **kw: None
+
+    display = _stream_display(poller)
+    status = {"status": "running", "message_text": "First paragraph ends here. "}
+    display.update(status)  # creates placeholder 100, shows the paragraph
+    display.update(status)  # idle tail → commits 100, opens placeholder 101
+    assert display.committed_message_id == 100
+    assert display.message_id == 101
+
+    display.finalize({"continuation": True})
+    # The already-visible committed message is deleted; the live placeholder
+    # is kept for the continuing stream.
+    assert deletes == [100]
+
+    # The continuation turn builds a fresh display with no committed baseline,
+    # so the cumulative message_text re-streams the deleted paragraph.
+    cont = _stream_display(poller)
+    cont.update(
+        {
+            "status": "running",
+            "message_text": "First paragraph ends here. Second part arrives.",
+        }
+    )
+    assert edits[-1][1].startswith("First paragraph ends here.")
