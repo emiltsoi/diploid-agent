@@ -194,9 +194,7 @@ def _wait_for(predicate, timeout: float = 5.0) -> bool:
     return False
 
 
-def test_systemd_run_failure_clears_drain_and_notifies(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_systemd_run_failure_clears_drain_and_notifies(tmp_path: Path, monkeypatch) -> None:
     """A failed systemd-run must reopen the gate and tell the requester."""
     incidents = _Incidents()
     notices: list[tuple[str, str]] = []
@@ -299,9 +297,7 @@ def test_watchdog_reaper_notifies_requester(tmp_path: Path) -> None:
     restart._state.restart_draining.set()
     restart._state.last_service_restart_at = time.time()
 
-    restart._arm_restart_watchdog(
-        "test-pilot.service", due_in=0.05, chat_id="chat-9", margin=0.05
-    )
+    restart._arm_restart_watchdog("test-pilot.service", due_in=0.05, chat_id="chat-9", margin=0.05)
     assert _wait_for(lambda: not restart._state.restart_draining.is_set())
     assert restart._state.last_service_restart_at == 0.0
     assert notices and notices[0][0] == "chat-9"

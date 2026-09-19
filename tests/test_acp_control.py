@@ -181,9 +181,7 @@ def test_foreign_live_socket_is_not_stolen(monkeypatch) -> None:
     monkeypatch.setattr(control_mod, "_PROBE_LIVE_RETRY_INTERVAL", 0.05)
 
     name = _name()
-    base = Path(
-        os.environ.get("DIPLOID_CONTROL_DIR") or control_mod.tempfile.gettempdir()
-    )
+    base = Path(os.environ.get("DIPLOID_CONTROL_DIR") or control_mod.tempfile.gettempdir())
     path = base / f"diploid-ctl-{name}" / "control.sock"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.unlink(missing_ok=True)

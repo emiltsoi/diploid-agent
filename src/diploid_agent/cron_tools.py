@@ -71,11 +71,7 @@ def count_appends(args: argparse.Namespace) -> int:
     day[bucket] = int(day.get(bucket, 0)) + appended
 
     # Keep the ledger small: yesterday's counts are already history.
-    stale = [
-        d
-        for d in days
-        if (now - time.mktime(time.strptime(d, "%Y-%m-%d"))) > 7 * DAY_SECONDS
-    ]
+    stale = [d for d in days if (now - time.mktime(time.strptime(d, "%Y-%m-%d"))) > 7 * DAY_SECONDS]
     for d in stale:
         del days[d]
 
@@ -120,7 +116,9 @@ def guarded_digest(args: argparse.Namespace) -> int:
             p = repo / f
             try:
                 st = p.stat()
-                print(f"- {f}: {st.st_size} bytes, mtime {time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime))}")
+                print(
+                    f"- {f}: {st.st_size} bytes, mtime {time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime))}"
+                )
             except OSError:
                 print(f"- {f}: missing")
         return 0

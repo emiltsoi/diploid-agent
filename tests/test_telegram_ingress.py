@@ -510,9 +510,7 @@ def test_webhook_requires_token(auth_client: TestClient, monkeypatch) -> None:
     assert response.status_code == 403
     assert not call
 
-    response = auth_client.post(
-        "/webhook", json=payload, headers={"X-API-Key": "harness-secret"}
-    )
+    response = auth_client.post("/webhook", json=payload, headers={"X-API-Key": "harness-secret"})
     assert response.status_code == 200
     assert call["chat_id"] == "42"
     assert call["message"] == "hello"

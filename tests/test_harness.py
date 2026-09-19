@@ -1573,9 +1573,7 @@ def test_continuation_triggers_normalize_config_side(tmp_path: Path) -> None:
     from diploid_agent.context.anchors import PromptAnchors
 
     anchors = PromptAnchors(
-        SimpleNamespace(
-            engine=SimpleNamespace(continuation_triggers=["Keep Going!", "don't stop"])
-        )
+        SimpleNamespace(engine=SimpleNamespace(continuation_triggers=["Keep Going!", "don't stop"]))
     )
     assert anchors.is_continuation_message("keep going") is True
     assert anchors.is_continuation_message("keep going.") is True

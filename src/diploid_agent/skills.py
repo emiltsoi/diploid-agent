@@ -173,9 +173,7 @@ class SkillManager:
 
     def list_skills(self, chat_id: str | None = None) -> list[Skill]:
         """Return all available skills, chat-scoped first."""
-        memo: dict[str | None, list[Skill]] | None = getattr(
-            self._scan_tls, "memo", None
-        )
+        memo: dict[str | None, list[Skill]] | None = getattr(self._scan_tls, "memo", None)
         if memo is not None and chat_id in memo:
             return list(memo[chat_id])
         seen: set[str] = set()

@@ -379,8 +379,7 @@ class HindsightMemoryBackend(MemoryBackend):
         with self._health_lock:
             if (
                 self._health_checked_at
-                and time.monotonic() - self._health_checked_at
-                < self._HEALTH_CACHE_SECONDS
+                and time.monotonic() - self._health_checked_at < self._HEALTH_CACHE_SECONDS
             ):
                 return self._health_ok
             self._health_checked_at = time.monotonic()
@@ -460,9 +459,7 @@ class HindsightMemoryBackend(MemoryBackend):
                 # appended mid-flush sits past them and is preserved.
                 with self._spool_lock, open(self._spool_path, "r+") as f:
                     current = f.readlines()
-                    remaining = [
-                        line for i, line in enumerate(current) if i not in flushed
-                    ]
+                    remaining = [line for i, line in enumerate(current) if i not in flushed]
                     f.seek(0)
                     f.writelines(remaining)
                     f.truncate()

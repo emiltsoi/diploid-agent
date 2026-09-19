@@ -778,9 +778,7 @@ def test_turn_delivery_armed_wake_counts_toward_daily_cap(tmp_path: Path) -> Non
     _run_to_done(svc, "sweep")
     events = [e for e in svc._wake_queue.pending(chat_id="chat-1") if e.reason == "cron:tidy"]
     assert len(events) == 1
-    assert not [
-        e for e in svc._wake_queue.pending(chat_id="chat-1") if e.reason == "cron:sweep"
-    ]
+    assert not [e for e in svc._wake_queue.pending(chat_id="chat-1") if e.reason == "cron:sweep"]
     assert _last_file(tmp_path, "sweep")["delivery_result"] == (
         "turn_suppressed: daily cap reached"
     )
@@ -1262,9 +1260,7 @@ def test_body_trigger_unwraps_richer_field(tmp_path: Path) -> None:
     the trigger compares on .value so `fatigue > 0.7` keeps the edge
     vocabulary (negotiated richer-body-state design)."""
     body = _body_file(tmp_path)
-    body.write_text(
-        json.dumps({"fatigue": {"value": 0.9, "set_at": time.time(), "derived": True}})
-    )
+    body.write_text(json.dumps({"fatigue": {"value": 0.9, "set_at": time.time(), "derived": True}}))
     job = _body_job(field="fatigue", op=">", value=0.7)
     config = _make_config(tmp_path, persona_crons={"jobs": [job]})
     svc = _make_service(config, tmp_path)
@@ -1291,9 +1287,7 @@ def test_body_trigger_chat_field_beats_persona(tmp_path: Path) -> None:
     persona = tmp_path / "sessions" / "persona_body_state.json"
     persona.parent.mkdir(parents=True, exist_ok=True)
     persona.write_text(json.dumps({"attention": {"value": "background", "set_at": 1.0}}))
-    _body_file(tmp_path).write_text(
-        json.dumps({"attention": {"value": "focused", "set_at": 1.0}})
-    )
+    _body_file(tmp_path).write_text(json.dumps({"attention": {"value": "focused", "set_at": 1.0}}))
     job = _body_job(field="attention", op="==", value="focused")
     config = _make_config(tmp_path, persona_crons={"jobs": [job]})
     svc = _make_service(config, tmp_path)

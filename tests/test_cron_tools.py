@@ -10,9 +10,7 @@ from diploid_agent.cron_tools import count_appends, main
 
 
 def _args(mem: Path, state: Path, bucket: str = "persona", budget: int = 10) -> argparse.Namespace:
-    return argparse.Namespace(
-        file=str(mem), state=str(state), bucket=bucket, budget=budget
-    )
+    return argparse.Namespace(file=str(mem), state=str(state), bucket=bucket, budget=budget)
 
 
 def test_count_appends_adopts_baseline(tmp_path: Path, capsys) -> None:
@@ -105,9 +103,7 @@ def test_cli_dispatch(tmp_path: Path) -> None:
 def test_guarded_digest_reports(tmp_path: Path, capsys) -> None:
     from diploid_agent.cron_tools import guarded_digest
 
-    args = argparse.Namespace(
-        repo=str(tmp_path), files=["SOUL.md"], max_diff_lines=80
-    )
+    args = argparse.Namespace(repo=str(tmp_path), files=["SOUL.md"], max_diff_lines=80)
     (tmp_path / "SOUL.md").write_text("soul\n")
     assert guarded_digest(args) == 0
     out = capsys.readouterr().out

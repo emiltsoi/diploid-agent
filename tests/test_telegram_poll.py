@@ -447,7 +447,11 @@ def test_handle_update_sub_command_arity_and_usage(tmp_path: Path) -> None:
     assert sent == [
         # plugin takes the first token only; extras are ignored.
         (12345, "plugin x True", 7),
-        (12345, "Usage: /plugin list | /plugin enable <name> | /plugin disable <name> | /plugin reload <name>", 7),
+        (
+            12345,
+            "Usage: /plugin list | /plugin enable <name> | /plugin disable <name> | /plugin reload <name>",
+            7,
+        ),
         (12345, "plugins", 7),
         # mcp passes the rest through as one name, like the old split(None, 1).
         (12345, "mcp two words", 7),
@@ -455,7 +459,11 @@ def test_handle_update_sub_command_arity_and_usage(tmp_path: Path) -> None:
         (12345, "Usage: /mcp list | /mcp enable <name> | /mcp disable <name>", 7),
         # create consumes name + remaining content.
         (12345, "skill name: markdown body here", 7),
-        (12345, "Usage: /skill list | /skill enable <name> | /skill disable <name> | /skill create <name> <markdown>", 7),
+        (
+            12345,
+            "Usage: /skill list | /skill enable <name> | /skill disable <name> | /skill create <name> <markdown>",
+            7,
+        ),
     ]
 
 
@@ -3229,9 +3237,11 @@ def test_file_block_caption_preserved_on_failure(tmp_path: Path) -> None:
     poller._send_text(5, "```file\ngone.txt\nkeep these words\n```")
     assert sent == ["[file] gone.txt\nkeep these words"]
 
+
 # ---------------------------------------------------------------------------
 # P3 review fixes — turn-worker ordering, delivery backoff, voice, stream caps
 # ---------------------------------------------------------------------------
+
 
 def test_placeholder_sent_before_attachment_ingest(tmp_path: Path) -> None:
     """The "..." placeholder is visible before any download/STT work begins."""
@@ -3266,9 +3276,8 @@ def test_placeholder_sent_before_attachment_ingest(tmp_path: Path) -> None:
 
     assert order[:2] == ["placeholder", "ingest"]
 
-def test_delivery_worker_empty_backoff_is_interruptible(
-    tmp_path: Path, monkeypatch: Any
-) -> None:
+
+def test_delivery_worker_empty_backoff_is_interruptible(tmp_path: Path, monkeypatch: Any) -> None:
     """An empty outbox must not park the worker on an uninterruptible sleep."""
     monkeypatch.setattr(DeliveryWorker, "_EMPTY_BACKOFF", 60.0)
     runtime = _FakeDeliveryRuntime()
@@ -3284,6 +3293,7 @@ def test_delivery_worker_empty_backoff_is_interruptible(
     worker.join(timeout=5.0)
     # With Event.wait the worker exits promptly; time.sleep(60) would still be parked.
     assert not worker.is_alive()
+
 
 def test_ask_keyboard_attached_to_last_chunk(tmp_path: Path) -> None:
     """A multi-chunk ask puts the keyboard on the final chunk, not nowhere."""
@@ -3319,6 +3329,7 @@ def test_ask_keyboard_attached_to_last_chunk(tmp_path: Path) -> None:
 # Voice synthesis bounds and piper cache/compat
 # ---------------------------------------------------------------------------
 
+
 def test_voice_synthesis_runs_outside_send_lock(tmp_path: Path) -> None:
     """A slow TTS call must not serialize every outbound message for the chat."""
     poller = TelegramPoller(
@@ -3339,6 +3350,7 @@ def test_voice_synthesis_runs_outside_send_lock(tmp_path: Path) -> None:
 
     assert held == [False]
 
+
 def test_synthesize_bounded_times_out(tmp_path: Path, monkeypatch: Any) -> None:
     """A wedged provider surfaces as None after the join deadline."""
     from diploid_agent.transport.telegram import voice as voice_mod
@@ -3347,9 +3359,8 @@ def test_synthesize_bounded_times_out(tmp_path: Path, monkeypatch: Any) -> None:
     config = TelegramConfig(tts_provider="command", tts_command="cat")
     assert voice_mod.synthesize_bounded("hi", config, tmp_path, timeout=0.1) is None
 
-def test_synthesize_bounded_passthrough_and_raise(
-    tmp_path: Path, monkeypatch: Any
-) -> None:
+
+def test_synthesize_bounded_passthrough_and_raise(tmp_path: Path, monkeypatch: Any) -> None:
     from diploid_agent.transport.telegram import voice as voice_mod
 
     out = tmp_path / "say.ogg"
@@ -3375,12 +3386,14 @@ class _FakeAudioChunk:
     sample_rate = 22050
     audio_int16_bytes = b"\x00\x01" * 64
 
+
 def _fake_ffmpeg(monkeypatch: Any, voice_mod: Any) -> None:
     def run(cmd: list[str], **kw: Any) -> SimpleNamespace:
         Path(cmd[-1]).write_bytes(b"OggS" + b"\x00" * 32)
         return SimpleNamespace(returncode=0, stderr=b"")
 
     monkeypatch.setattr(voice_mod, "subprocess", SimpleNamespace(run=run))
+
 
 def test_piper_voice_cache_idle_eviction(tmp_path: Path, monkeypatch: Any) -> None:
     """Loaded piper voices are evicted after the idle TTL."""
@@ -3415,9 +3428,8 @@ def test_piper_voice_cache_idle_eviction(tmp_path: Path, monkeypatch: Any) -> No
     finally:
         voice_mod._voice_cache.clear()
 
-def test_piper_typeerror_mid_iteration_is_real_failure(
-    tmp_path: Path, monkeypatch: Any
-) -> None:
+
+def test_piper_typeerror_mid_iteration_is_real_failure(tmp_path: Path, monkeypatch: Any) -> None:
     """A TypeError while consuming synthesis output must not retry the legacy API."""
     import sys
 
@@ -3449,6 +3461,7 @@ def test_piper_typeerror_mid_iteration_is_real_failure(
         assert calls == [1]
     finally:
         voice_mod._voice_cache.clear()
+
 
 def test_piper_legacy_signature_fallback(tmp_path: Path, monkeypatch: Any) -> None:
     """Old piper releases (synthesize(text, wav)) still work via the TypeError shim."""
@@ -3488,6 +3501,7 @@ def test_piper_legacy_signature_fallback(tmp_path: Path, monkeypatch: Any) -> No
 # StreamDisplay — heartbeat cap and continuation commit lifecycle
 # ---------------------------------------------------------------------------
 
+
 def _stream_display(poller: TelegramPoller, **overrides: Any) -> Any:
     from diploid_agent.transport.telegram.stream_display import StreamDisplay
 
@@ -3505,6 +3519,7 @@ def _stream_display(poller: TelegramPoller, **overrides: Any) -> Any:
         thought_id=None,
     )
 
+
 def test_next_wait_derives_cap_from_heartbeat_interval(tmp_path: Path) -> None:
     """The long-poll cap follows _HEARTBEAT_INTERVAL, not a stale constant."""
     from diploid_agent.transport.telegram.formatting import _HEARTBEAT_INTERVAL
@@ -3518,6 +3533,7 @@ def test_next_wait_derives_cap_from_heartbeat_interval(tmp_path: Path) -> None:
     wait = display.next_wait()
     # With the old 25.0 constant this would return exactly 25.0.
     assert 25.0 < wait <= _HEARTBEAT_INTERVAL
+
 
 def test_continuation_deletes_committed_and_restreams(tmp_path: Path) -> None:
     """On continuation the committed intermediate is deleted because the next
@@ -3533,9 +3549,7 @@ def test_continuation_deletes_committed_and_restreams(tmp_path: Path) -> None:
     deletes: list[int] = []
 
     poller._send_message = lambda chat_id, text, **kw: next(sent_ids)
-    poller._edit_message_text = lambda chat_id, mid, text, **kw: edits.append(
-        (mid, text)
-    ) or True
+    poller._edit_message_text = lambda chat_id, mid, text, **kw: edits.append((mid, text)) or True
     poller._delete_message = lambda chat_id, mid: deletes.append(mid)
     poller._save_placeholder_state = lambda *a, **kw: None
 

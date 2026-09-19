@@ -73,7 +73,9 @@ def register_sessions(
         # Fallback for older runtimes that don't support return_chat_id.
         return OutboxResponse(chat_id=None, result=_to_response(raw))
 
-    @app.get("/outbox/{chat_id}", response_model=OutboxResponse, dependencies=[Depends(_require_api_key)])
+    @app.get(
+        "/outbox/{chat_id}", response_model=OutboxResponse, dependencies=[Depends(_require_api_key)]
+    )
     def outbox(chat_id: str, wait: float = Query(0.0, ge=0, le=60)) -> OutboxResponse:
         raw = command_handler.call(
             method="outbox_pop",

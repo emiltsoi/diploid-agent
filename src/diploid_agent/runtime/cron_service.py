@@ -980,9 +980,7 @@ class CronService:
             if e.reason.startswith(WAKE_BUDGET_REASON_PREFIXES)
         ]
         turns_today = sum(s.turn_count for s in self._state.all().values() if s.turn_date == today)
-        armed_cron = sum(
-            1 for e in pending if e.reason.startswith(CRON_WAKE_REASON_PREFIX)
-        )
+        armed_cron = sum(1 for e in pending if e.reason.startswith(CRON_WAKE_REASON_PREFIX))
         if turns_today + armed_cron >= cron_cfg.turn_delivery_max_per_day:
             return "turn_suppressed: daily cap reached"
         if len(pending) >= timer_cfg.self_wake_max_pending:

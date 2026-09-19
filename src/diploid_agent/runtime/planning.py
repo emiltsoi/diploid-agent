@@ -36,9 +36,7 @@ class RuntimePlanning:
         if plan.chat_id is None:
             return
         total = len(plan.tasks)
-        done = sum(
-            1 for t in plan.tasks if t.status in (TaskStatus.DONE, TaskStatus.INCOMPLETE)
-        )
+        done = sum(1 for t in plan.tasks if t.status in (TaskStatus.DONE, TaskStatus.INCOMPLETE))
         failed = sum(1 for t in plan.tasks if t.status == TaskStatus.FAILED)
         completed_count = done + failed
         detail = (

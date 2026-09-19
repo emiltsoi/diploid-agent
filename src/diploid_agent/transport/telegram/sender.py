@@ -626,9 +626,7 @@ class TelegramSenderMixin:
         # Voice synthesis + upload run outside the send lock: a slow or wedged
         # piper call must not serialize every outbound message for this chat.
         if say_text is not None:
-            self._maybe_send_voice(
-                chat_id, say_text, reply_to_message_id=reply_to_message_id
-            )
+            self._maybe_send_voice(chat_id, say_text, reply_to_message_id=reply_to_message_id)
         return sent
 
     def _send_text_locked(

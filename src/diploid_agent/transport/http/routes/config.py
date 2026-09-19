@@ -187,9 +187,7 @@ def register_config(
         """
         now = time.time()
         if not req.reason.startswith(WAKE_BUDGET_REASON_PREFIXES):
-            req = req.model_copy(
-                update={"reason": f"{SELF_WAKE_REASON}:{req.reason}"}
-            )
+            req = req.model_copy(update={"reason": f"{SELF_WAKE_REASON}:{req.reason}"})
         _enforce_self_wake_policy(req, now)
         return _enqueue_timer(req, now)
 

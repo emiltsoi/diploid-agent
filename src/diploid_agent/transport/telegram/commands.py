@@ -62,12 +62,8 @@ class _ArgCommand(NamedTuple):
 
 _ARG_COMMANDS: dict[str, _ArgCommand] = {
     "/recall": _ArgCommand("Usage: /recall <query>", "_harness_recall"),
-    "/promote": _ArgCommand(
-        "Usage: /promote <fact>", "_harness_promote", reply_kind="result"
-    ),
-    "/subagent": _ArgCommand(
-        "Usage: /subagent <prompt>", "_harness_subagent", reply_kind="result"
-    ),
+    "/promote": _ArgCommand("Usage: /promote <fact>", "_harness_promote", reply_kind="result"),
+    "/subagent": _ArgCommand("Usage: /subagent <prompt>", "_harness_subagent", reply_kind="result"),
     "/resume": _ArgCommand(
         "Usage: /resume <number>", "_harness_resume", arg_kind="int", reply_kind="result"
     ),

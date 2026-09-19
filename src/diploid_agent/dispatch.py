@@ -121,16 +121,12 @@ class DispatchStore:
         ``get``/``set_result`` return ``None`` as for any unknown id.
         """
         now = time.time()
-        terminal = [
-            d for d in self._dispatches.values() if d.status in _TERMINAL_STATUSES
-        ]
+        terminal = [d for d in self._dispatches.values() if d.status in _TERMINAL_STATUSES]
         for d in terminal:
             stamp = _age_key(d)
             if stamp and now - stamp > _TERMINAL_RETENTION_SECONDS:
                 del self._dispatches[d.id]
-        remaining = [
-            d for d in self._dispatches.values() if d.status in _TERMINAL_STATUSES
-        ]
+        remaining = [d for d in self._dispatches.values() if d.status in _TERMINAL_STATUSES]
         if len(remaining) > _TERMINAL_MAX_KEPT:
             remaining.sort(key=_age_key)
             for d in remaining[: len(remaining) - _TERMINAL_MAX_KEPT]:

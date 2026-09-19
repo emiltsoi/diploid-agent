@@ -169,9 +169,7 @@ def test_hindsight_spool_flush_checks_success_and_keeps_invalid_lines(
     assert len(posted[0]) == 2
 
 
-def test_hindsight_append_system_note_spools_and_posts(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_hindsight_append_system_note_spools_and_posts(tmp_path: Path, monkeypatch) -> None:
     backend = HindsightMemoryBackend(
         base_url="http://127.0.0.1:1",
         bank="test",
@@ -1155,9 +1153,7 @@ def test_memory_manager_non_file_backend_contract(tmp_path: Path) -> None:
     assert not (tmp_path / "chat-1" / "chat_MEMORY.md").exists()
 
 
-def test_file_backend_load_transcript_reads_only_new_tail(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_file_backend_load_transcript_reads_only_new_tail(tmp_path: Path, monkeypatch) -> None:
     """Repeat loads parse only the appended tail, not the whole transcript."""
     backend = FileMemoryBackend(tmp_path, "chat-1")
     backend.append_transcript("u1", "a1")
@@ -1201,9 +1197,7 @@ def test_hindsight_health_check_is_cached(tmp_path: Path, monkeypatch) -> None:
     class OKResp:
         status_code = 200
 
-    monkeypatch.setattr(
-        backend._client, "get", lambda *a, **k: calls.append(a) or OKResp()
-    )
+    monkeypatch.setattr(backend._client, "get", lambda *a, **k: calls.append(a) or OKResp())
     assert backend.health() is True
     assert backend.health() is True
     assert len(calls) == 1
@@ -1232,9 +1226,7 @@ def test_hindsight_health_failure_is_cached_too(tmp_path: Path, monkeypatch) -> 
     assert len(calls) == 1
 
 
-def test_hindsight_flush_does_not_hold_spool_lock_for_network(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_hindsight_flush_does_not_hold_spool_lock_for_network(tmp_path: Path, monkeypatch) -> None:
     """_spool() appends must not stall behind a slow Hindsight round-trip."""
     spool_path = tmp_path / "spool.jsonl"
     spool_path.write_text(json.dumps({"content": "g1", "document_id": "d1"}) + "\n")
@@ -1268,9 +1260,7 @@ def test_hindsight_flush_does_not_hold_spool_lock_for_network(
     assert spool_path.read_text().splitlines() == []
 
 
-def test_hindsight_flush_preserves_appends_mid_flush(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_hindsight_flush_preserves_appends_mid_flush(tmp_path: Path, monkeypatch) -> None:
     """Items spooled while a flush is in flight survive the rewrite."""
     spool_path = tmp_path / "spool.jsonl"
     spool_path.write_text(json.dumps({"content": "g1", "document_id": "d1"}) + "\n")
@@ -1301,9 +1291,7 @@ def test_hindsight_flush_preserves_appends_mid_flush(
     assert [p["document_id"] for p in remaining] == ["d2"]
 
 
-def test_hindsight_flush_skips_when_flush_in_progress(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_hindsight_flush_skips_when_flush_in_progress(tmp_path: Path, monkeypatch) -> None:
     """A second flush pass does not queue behind a running one."""
     spool_path = tmp_path / "spool.jsonl"
     spool_path.write_text(json.dumps({"content": "g1", "document_id": "d1"}) + "\n")
@@ -1316,9 +1304,7 @@ def test_hindsight_flush_skips_when_flush_in_progress(
     )
     monkeypatch.setattr(backend, "health", lambda: True)
     posted: list[Any] = []
-    monkeypatch.setattr(
-        backend._client, "post", lambda *a, **k: posted.append(a)
-    )
+    monkeypatch.setattr(backend._client, "post", lambda *a, **k: posted.append(a))
 
     backend._flush_lock.acquire()
     try:

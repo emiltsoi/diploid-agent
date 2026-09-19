@@ -239,9 +239,7 @@ class PlanManager:
             if task is None:
                 return None
             task.status = (
-                TaskStatus.INCOMPLETE
-                if (cancelled or partial or timed_out)
-                else TaskStatus.DONE
+                TaskStatus.INCOMPLETE if (cancelled or partial or timed_out) else TaskStatus.DONE
             )
             task.result = result
             task.log = log
