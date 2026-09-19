@@ -128,12 +128,18 @@ class PromptAnchors:
 
         return "\n\n".join(parts)
 
+    @staticmethod
+    def _normalize_trigger(text: str) -> str:
+        return re.sub(r"[^\w\s]", "", text).strip().lower()
+
     def is_continuation_message(self, user_message: str) -> bool:
         """Return True if the user message is a continuation trigger."""
-        normalized = re.sub(r"[^\w\s]", "", user_message).strip().lower()
+        normalized = self._normalize_trigger(user_message)
         if not normalized:
             return False
-        return normalized in {t.strip().lower() for t in self.config.engine.continuation_triggers}
+        return normalized in {
+            self._normalize_trigger(t) for t in self.config.engine.continuation_triggers
+        }
 
     def continuation_anchor(self, record: SessionRecord | None, user_message: str) -> str | None:
         """Return a prompt anchor when resuming an interrupted turn."""

@@ -1566,6 +1566,23 @@ def test_continuation_triggers_match_punctuation(monkeypatch, tmp_path: Path) ->
     assert harness._prompts.is_continuation_message("what to continue") is False
 
 
+def test_continuation_triggers_normalize_config_side(tmp_path: Path) -> None:
+    """A configured trigger carrying punctuation still matches a bare message."""
+    from types import SimpleNamespace
+
+    from diploid_agent.context.anchors import PromptAnchors
+
+    anchors = PromptAnchors(
+        SimpleNamespace(
+            engine=SimpleNamespace(continuation_triggers=["Keep Going!", "don't stop"])
+        )
+    )
+    assert anchors.is_continuation_message("keep going") is True
+    assert anchors.is_continuation_message("keep going.") is True
+    assert anchors.is_continuation_message("dont stop") is True
+    assert anchors.is_continuation_message("halt") is False
+
+
 def test_harness_has_dispatch_store_and_notifier(tmp_path: Path) -> None:
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
     config = _make_config(tmp_path, fixture_root)
