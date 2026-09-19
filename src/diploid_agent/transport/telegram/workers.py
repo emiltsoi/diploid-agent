@@ -27,6 +27,25 @@ logger = logging.getLogger("telegram_poll")
 _MIN_POLL_INTERVAL = 0.5
 
 
+def _coerce_outbox_result(raw: Any) -> ChatResult | None:
+    """Coerce one outbox payload (envelope dict or bare result) to ChatResult."""
+    if raw is None:
+        return None
+    if isinstance(raw, ChatResult):
+        return raw
+    if isinstance(raw, dict):
+        if "error" in raw:
+            return None
+        if "result" not in raw:
+            return None
+        raw = raw["result"]
+        if raw is None:
+            return None
+        if isinstance(raw, ChatResult):
+            return raw
+    return _coerce_chat_result(raw)
+
+
 class TurnWorker(threading.Thread):
     """Run a single turn, stream partial output to Telegram, and support steering."""
 
@@ -285,57 +304,32 @@ class DeliveryWorker(threading.Thread):
                 http_method="GET",
                 wait=self._POLL_WAIT,
             )
-        else:
-            self._next_chat_id = None
-            raw = self.poller.command_handler.call(
-                method="outbox_pop",
-                http_path="/outbox",
-                http_method="GET",
-                wait=self._POLL_WAIT,
-                requires_chat_id=False,
-                return_chat_id=True,
-            )
-            if raw is None:
-                return None
-            if isinstance(raw, tuple):
-                chat_id = raw[0]
-                if chat_id is None or not _is_telegram_chat_id(str(chat_id)):
-                    logger.debug("Skipping non-Telegram outbox item for chat %s", chat_id)
-                    return None
-                self._next_chat_id = int(str(chat_id))
-                return raw[1]
-            if isinstance(raw, dict):
-                if "error" in raw:
-                    return None
-                chat_id = raw.get("chat_id")
-                if chat_id is None or not _is_telegram_chat_id(str(chat_id)):
-                    logger.debug("Skipping non-Telegram outbox item for chat %s", chat_id)
-                    return None
-                self._next_chat_id = int(str(chat_id))
-                result = raw.get("result")
-                if result is None:
-                    return None
-                if isinstance(result, dict):
-                    return _coerce_chat_result(result)
-                if isinstance(result, ChatResult):
-                    return result
-                return _coerce_chat_result(result)
+            return _coerce_outbox_result(raw)
 
+        self._next_chat_id = None
+        raw = self.poller.command_handler.call(
+            method="outbox_pop",
+            http_path="/outbox",
+            http_method="GET",
+            wait=self._POLL_WAIT,
+            requires_chat_id=False,
+            return_chat_id=True,
+        )
         if raw is None:
             return None
-        if isinstance(raw, ChatResult):
-            return raw
-        if isinstance(raw, dict):
+        if isinstance(raw, tuple):
+            chat_id, result = raw[0], _coerce_outbox_result(raw[1])
+        elif isinstance(raw, dict):
             if "error" in raw:
                 return None
-            result = raw.get("result")
-            if result is None:
-                return None
-            if isinstance(result, dict):
-                return _coerce_chat_result(result)
-            if isinstance(result, ChatResult):
-                return result
-        return _coerce_chat_result(raw)
+            chat_id, result = raw.get("chat_id"), _coerce_outbox_result(raw)
+        else:
+            return _coerce_outbox_result(raw)
+        if chat_id is None or not _is_telegram_chat_id(str(chat_id)):
+            logger.debug("Skipping non-Telegram outbox item for chat %s", chat_id)
+            return None
+        self._next_chat_id = int(str(chat_id))
+        return result
 
     def run(self) -> None:
         while not self._should_stop.is_set() and not self.poller._stop.is_set():
