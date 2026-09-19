@@ -63,6 +63,16 @@ placeholder is updated with a liveness suffix such as `(still working, 1m
 `⏳ Still thinking... (1m 30s)` result to the outbox after 30 seconds, and every
 90 seconds after that, so the user knows the agent is alive.
 
+During think/tool phases — when the streamed tail is empty — the placeholder
+shows what the turn is actually running instead of a bare `...`: the runtime
+exposes the latest tool side effect on `GET /turn/{chat_id}` as
+`last_side_effect` (e.g. `exec: pytest (running)`), and the display renders it
+as `· exec: pytest (running)`, updating on each distinct tool transition and
+inside the heartbeat. The line is deliberately empty-tail-only — while reply
+text is streaming it is already the liveness signal — and stays out of the
+intermediate-commit accounting. `harness.telegram.tool_progress` (default
+`true`) gates it; it applies to both user turns and streamed wake turns.
+
 Wake-driven turns also get the same live rendering as user turns. When a
 non-silent wake turn starts, the runtime pushes a `turn_started` marker onto
 the outbox ahead of the result; the `DeliveryWorker` consumes it inline and
@@ -424,6 +434,7 @@ For the `telegram` section, the following keys may be updated live:
 | `intermediate_idle` | seconds | How long the streamed text must be idle before an intermediate chunk is committed. |
 | `intermediate_min_chars` | integer | Minimum length of the uncommitted tail before it can become its own message. |
 | `stream_thoughts` | `true` / `false` | Toggle the real-time thought stream. |
+| `tool_progress` | `true` / `false` | Show the current tool side effect in the placeholder during think/tool phases. |
 | `stream_chunk_interval` | seconds | Reserved; currently unused. |
 | `message_format` | `plain` / `markdown_v2` | How the final reply is formatted. |
 

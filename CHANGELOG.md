@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Tool-progress line in the streaming placeholder**: `GET /turn/{chat_id}`
+  now exposes `last_side_effect` + `last_side_effect_at` from the active
+  turn's breadcrumbs, and the long-poll wakes on side-effect transitions
+  (notified only when the composed `title (status)` string changes, so
+  progress-chunk duplicates don't spam wakes). While the streamed tail is
+  empty, the placeholder renders `· exec: pytest (running)` instead of a
+  bare `...` — on each distinct transition and in the heartbeat — kept out
+  of the intermediate-commit accounting. `harness.telegram.tool_progress`
+  (default `true`) gates it and is live-updatable via `/config telegram`.
+  Applies to user turns and streamed wake turns alike.
+
 ## 0.6.10 — 2026-09-20
 
 ### Added
