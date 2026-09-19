@@ -3227,3 +3227,32 @@ def test_delivery_worker_empty_backoff_is_interruptible(
     worker.join(timeout=5.0)
     # With Event.wait the worker exits promptly; time.sleep(60) would still be parked.
     assert not worker.is_alive()
+
+def test_ask_keyboard_attached_to_last_chunk(tmp_path: Path) -> None:
+    """A multi-chunk ask puts the keyboard on the final chunk, not nowhere."""
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    calls: list[tuple[str, dict]] = []
+    next_id = iter(range(100, 110))
+
+    def fake_api(method: str, **params: Any) -> dict:
+        calls.append((method, params))
+        return {"ok": True, "result": {"message_id": next(next_id)}}
+
+    poller._api = fake_api  # type: ignore[method-assign]
+    saved: list[int | None] = []
+    poller._save_pending_question = lambda chat_id, block, msg_id: saved.append(msg_id)  # type: ignore[method-assign]
+
+    text = ("word " * 900).strip() + '\n```ask\n{"options": ["a", "b"]}\n```'
+    poller._send_text(12345, text)
+
+    sends = [p for m, p in calls if m == "sendMessage"]
+    assert len(sends) == 2
+    assert "reply_markup" not in sends[0]
+    markup = json.loads(sends[1]["reply_markup"])
+    assert markup["inline_keyboard"]
+    # The pending question is bound to the message that carries the keyboard.
+    assert saved == [101]

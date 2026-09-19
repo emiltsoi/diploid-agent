@@ -698,7 +698,7 @@ class TelegramSenderMixin:
                 content = chunk
 
             reply_markup: dict[str, Any] | None = None
-            if ask_block is not None and i == 1 and total == 1:
+            if ask_block is not None and i == total:
                 cancel = ask_block.cancel_label if ask_block.cancellable else None
                 reply_markup = build_inline_keyboard(ask_block.options, cancel=cancel)
 
@@ -738,15 +738,8 @@ class TelegramSenderMixin:
                     break
                 sent.append(msg_id)
 
-            if i == 1 and ask_block is not None:
+            if i == total and ask_block is not None:
                 self._save_pending_question(chat_id, ask_block, msg_id if sent else None)
-
-            if i == 1 and first_message_id is None and ask_block is not None and total > 1:
-                logger.warning(
-                    "Question in chat %s was split into %d chunks; dropping keyboard",
-                    chat_id,
-                    total,
-                )
 
         if not chunks and first_message_id is not None:
             # The whole reply was consumed by a say block; clear the placeholder.
