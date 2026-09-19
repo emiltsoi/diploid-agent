@@ -33,10 +33,6 @@ from diploid_agent.transport.command_handler import CommandHandler
 
 # The Telegram token is part of the request URL, so suppress httpx's default
 # request logging to avoid leaking it.
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
@@ -182,6 +178,8 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
         self._max_telegram_backoff = max_telegram_backoff
         self.offset: int | None = None
         self._local = threading.local()
+        self._clients: set[httpx.Client] = set()
+        self._clients_lock = threading.Lock()
         self._client_timeout = 35.0
         self._stream_thoughts: dict[int, bool] = {}
         self._active_workers: dict[int, TurnWorker] = {}
@@ -214,6 +212,8 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
         if client is None:
             client = httpx.Client(timeout=self._client_timeout)
             self._local.client = client
+            with self._clients_lock:
+                self._clients.add(client)
         return client
 
     @property
@@ -234,6 +234,16 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
         if client is not None:
             client.close()
             self._local.client = None
+            with self._clients_lock:
+                self._clients.discard(client)
+
+    def _close_all_clients(self) -> None:
+        """Close every httpx.Client created so far, across all threads."""
+        with self._clients_lock:
+            clients = list(self._clients)
+            self._clients.clear()
+        for client in clients:
+            client.close()
 
     def _stream_thoughts_enabled(self, chat_id: int) -> bool:
         return self._stream_thoughts.get(chat_id, self._live_telegram_config.stream_thoughts)
@@ -512,40 +522,46 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
         logger.info("Starting Telegram poller for %s", target)
         self._stop.clear()
         self._cleanup_orphaned_placeholders()
-        # Wait briefly for the harness to come up, then start the global
-        # outbox worker so mesh wakes, subagent completions and other outbox
-        # items can be delivered before any new Telegram user message arrives.
-        startup_deadline = time.monotonic() + 10.0
-        while time.monotonic() < startup_deadline:
-            if self._stop.is_set():
-                break
-            self._ensure_delivery_worker(0)
-            if self._global_delivery_worker is not None and self._global_delivery_worker.is_alive():
-                break
-            time.sleep(0.5)
-        while not self._stop.is_set():
-            # Keep trying to start the global outbox worker if it failed
-            # during startup (e.g. the harness wasn't ready yet).
-            self._ensure_delivery_worker(0)
-            try:
-                params: dict[str, int] = {"limit": 100, "timeout": 25}
-                if self.offset is not None:
-                    params["offset"] = self.offset
-                data = self._api("getUpdates", throttle=False, **params)
-                for update in data.get("result", []):
+        try:
+            # Wait briefly for the harness to come up, then start the global
+            # outbox worker so mesh wakes, subagent completions and other outbox
+            # items can be delivered before any new Telegram user message arrives.
+            startup_deadline = time.monotonic() + 10.0
+            while time.monotonic() < startup_deadline:
+                if self._stop.is_set():
+                    break
+                self._ensure_delivery_worker(0)
+                if (
+                    self._global_delivery_worker is not None
+                    and self._global_delivery_worker.is_alive()
+                ):
+                    break
+                time.sleep(0.5)
+            while not self._stop.is_set():
+                # Keep trying to start the global outbox worker if it failed
+                # during startup (e.g. the harness wasn't ready yet).
+                self._ensure_delivery_worker(0)
+                try:
+                    params: dict[str, int] = {"limit": 100, "timeout": 25}
+                    if self.offset is not None:
+                        params["offset"] = self.offset
+                    data = self._api("getUpdates", throttle=False, **params)
+                    for update in data.get("result", []):
+                        if self._stop.is_set():
+                            break
+                        self._handle_update(update)
+                except Exception:
+                    logger.exception("Poller error")
                     if self._stop.is_set():
                         break
-                    self._handle_update(update)
-            except Exception:
-                logger.exception("Poller error")
+                    time.sleep(self.poll_interval)
+                    continue
+
                 if self._stop.is_set():
                     break
                 time.sleep(self.poll_interval)
-                continue
-
-            if self._stop.is_set():
-                break
-            time.sleep(self.poll_interval)
+        finally:
+            self._close_all_clients()
 
     def _handle_update(self, update: dict) -> None:
         update_id = update.get("update_id")

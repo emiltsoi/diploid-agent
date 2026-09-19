@@ -332,20 +332,23 @@ class DeliveryWorker(threading.Thread):
         return result
 
     def run(self) -> None:
-        while not self._should_stop.is_set() and not self.poller._stop.is_set():
-            try:
-                chat_result = self._fetch_outbox()
-                if chat_result is None:
-                    self._should_stop.wait(self._EMPTY_BACKOFF)
-                    continue
-                if self.chat_id is not None:
-                    self.poller._deliver_outbox_result(self.chat_id, chat_result)
-                else:
-                    chat_id = self._next_chat_id
-                    if chat_id is None:
-                        time.sleep(self._POLL_WAIT)
+        try:
+            while not self._should_stop.is_set() and not self.poller._stop.is_set():
+                try:
+                    chat_result = self._fetch_outbox()
+                    if chat_result is None:
+                        self._should_stop.wait(self._EMPTY_BACKOFF)
                         continue
-                    self.poller._deliver_outbox_result(chat_id, chat_result)
-            except Exception:
-                logger.exception("DeliveryWorker error for chat %s", self.chat_id)
-                time.sleep(self._POLL_WAIT)
+                    if self.chat_id is not None:
+                        self.poller._deliver_outbox_result(self.chat_id, chat_result)
+                    else:
+                        chat_id = self._next_chat_id
+                        if chat_id is None:
+                            time.sleep(self._POLL_WAIT)
+                            continue
+                        self.poller._deliver_outbox_result(chat_id, chat_result)
+                except Exception:
+                    logger.exception("DeliveryWorker error for chat %s", self.chat_id)
+                    time.sleep(self._POLL_WAIT)
+        finally:
+            self.poller._close_client()

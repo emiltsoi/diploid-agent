@@ -59,7 +59,7 @@ class TelegramTransport(Transport):
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=5.0)
         self._thread = None
-        self._poller._close_client()
+        self._poller._close_all_clients()
 
     def send(self, message: OutboundMessage) -> list[int]:
         chat_id_value: int | str = message.chat_id
@@ -106,6 +106,10 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+    )
     config = Config.load(args.config)
     token = config.harness.telegram.token or os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
