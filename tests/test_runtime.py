@@ -5,6 +5,7 @@ legacy ConversationHarness by delegating turn logic to TurnController while
 keeping the service container and non-turn API on AgentRuntime.
 """
 
+import json
 import threading
 import time
 from collections.abc import Callable
@@ -29,6 +30,7 @@ from diploid_agent.notifier import NoopNotifier
 from diploid_agent.plan.models import Task, TaskStatus, TaskType
 from diploid_agent.runtime import AgentRuntime, TurnController
 from diploid_agent.runtime.plugin_runtime import PluginRuntime
+from diploid_agent.runtime.store import ChatSessionStore
 from diploid_agent.transport.base import RuntimeAPI
 
 
@@ -60,6 +62,38 @@ def _make_config_with_outbox(tmp_path: Path) -> Config:
 def test_agent_runtime_implements_runtime_api(tmp_path: Path) -> None:
     runtime = AgentRuntime(_make_config(tmp_path))
     assert isinstance(runtime, RuntimeAPI)
+
+
+def test_load_store_skips_malformed_records(tmp_path: Path) -> None:
+    """Store lines missing required fields or unparseable are skipped, not fatal."""
+    config = _make_config(tmp_path)
+    store_path = tmp_path / "sessions.jsonl"
+    good = {
+        "chat_id": "chat-1",
+        "session_id": "s1",
+        "model": "m1",
+        "cwd": "/tmp",
+        "created_at": 1.0,
+        "updated_at": 2.0,
+    }
+    store_path.write_text(
+        json.dumps({"chat_id": "missing-required-fields"})
+        + "\n"
+        + json.dumps(good)
+        + "\nnot-json\n"
+    )
+    store = ChatSessionStore(
+        sessions_root=tmp_path / "sessions",
+        store_path=store_path,
+        lock=threading.RLock(),
+        config=config,
+        plugins_fn=lambda: None,
+        context_builder_fn=lambda: None,
+    )
+    store.load_store()
+    record = store.active_record("chat-1")
+    assert record is not None
+    assert record.session_id == "s1"
 
 
 def test_agent_runtime_implements_plugin_runtime(tmp_path: Path) -> None:

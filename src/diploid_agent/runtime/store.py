@@ -103,7 +103,7 @@ class ChatSessionStore:
                 continue
             try:
                 record = SessionRecord.from_dict(json.loads(line))
-            except (json.JSONDecodeError, KeyError):
+            except (json.JSONDecodeError, KeyError, TypeError):
                 continue
             state = self._store.setdefault(record.chat_id, ChatState())
             state.sessions[record.session_number] = record
