@@ -1,5 +1,6 @@
 """Tests for outbound notifications."""
 
+import json
 from unittest.mock import MagicMock
 
 import httpx
@@ -107,3 +108,124 @@ def test_telegram_notifier_default_client_uses_30s_timeout(monkeypatch) -> None:
 
     assert client is notifier.client
     assert client.post.call_count == 1
+
+
+def _tg_response(payload: dict, status: int = 200):
+    resp = MagicMock()
+    resp.status_code = status
+    resp.json = MagicMock(return_value=payload)
+    if status >= 400:
+        resp.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError(
+                f"{status}", request=MagicMock(), response=resp
+            )
+        )
+    else:
+        resp.raise_for_status = MagicMock()
+    return resp
+
+
+def test_update_task_board_sends_first_then_edits(tmp_path) -> None:
+    client = MagicMock()
+    client.post.return_value = _tg_response({"ok": True, "result": {"message_id": 42}})
+
+    notifier = TelegramNotifier("test-token", client=client, state_dir=tmp_path)
+    assert notifier.update_task_board("12345", "☐ a") is True
+    assert notifier.update_task_board("12345", "◐ a") is True
+
+    calls = client.post.call_args_list
+    assert calls[0][0][0].endswith("/sendMessage")
+    assert "parse_mode" not in calls[0][1]["data"]
+    assert calls[1][0][0].endswith("/editMessageText")
+    assert calls[1][1]["data"]["message_id"] == 42
+    assert calls[1][1]["data"]["text"] == "◐ a"
+
+
+def test_update_task_board_persists_id_across_restart(tmp_path) -> None:
+    client = MagicMock()
+    client.post.return_value = _tg_response({"ok": True, "result": {"message_id": 42}})
+
+    TelegramNotifier("test-token", client=client, state_dir=tmp_path).update_task_board(
+        "12345", "☐ a"
+    )
+    assert (tmp_path / "12345.board.json").exists()
+
+    client2 = MagicMock()
+    client2.post.return_value = _tg_response({"ok": True, "result": True})
+    notifier2 = TelegramNotifier("test-token", client=client2, state_dir=tmp_path)
+    assert notifier2.update_task_board("12345", "☑ a") is True
+
+    call = client2.post.call_args_list[0]
+    assert call[0][0].endswith("/editMessageText")
+    assert call[1]["data"]["message_id"] == 42
+
+
+def test_update_task_board_resends_and_rekeys_on_deleted_message(tmp_path) -> None:
+    client = MagicMock()
+    client.post.side_effect = [
+        _tg_response({"ok": True, "result": {"message_id": 42}}),
+        _tg_response(
+            {"ok": False, "error_code": 400, "description": "Bad Request: message to edit not found"},
+            status=400,
+        ),
+        _tg_response({"ok": True, "result": {"message_id": 99}}),
+    ]
+
+    notifier = TelegramNotifier("test-token", client=client, state_dir=tmp_path)
+    notifier.update_task_board("12345", "☐ a")
+    assert notifier.update_task_board("12345", "☑ a") is True
+
+    calls = client.post.call_args_list
+    assert calls[1][0][0].endswith("/editMessageText")
+    assert calls[2][0][0].endswith("/sendMessage")
+    assert json.loads((tmp_path / "12345.board.json").read_text())["message_id"] == 99
+
+
+def test_update_task_board_not_modified_counts_as_ok(tmp_path) -> None:
+    client = MagicMock()
+    client.post.side_effect = [
+        _tg_response({"ok": True, "result": {"message_id": 42}}),
+        _tg_response(
+            {
+                "ok": False,
+                "error_code": 400,
+                "description": "Bad Request: message is not modified",
+            },
+            status=400,
+        ),
+    ]
+
+    notifier = TelegramNotifier("test-token", client=client, state_dir=tmp_path)
+    notifier.update_task_board("12345", "☐ a")
+    assert notifier.update_task_board("12345", "☐ a") is True
+    assert client.post.call_count == 2
+
+
+def test_update_task_board_keeps_id_on_transient_error(tmp_path) -> None:
+    client = MagicMock()
+    client.post.side_effect = [
+        _tg_response({"ok": True, "result": {"message_id": 42}}),
+        _tg_response(
+            {"ok": False, "error_code": 500, "description": "Internal Server Error"},
+            status=500,
+        ),
+        _tg_response({"ok": True, "result": True}),
+    ]
+
+    notifier = TelegramNotifier("test-token", client=client, state_dir=tmp_path)
+    notifier.update_task_board("12345", "☐ a")
+    assert notifier.update_task_board("12345", "◐ a") is False
+    assert notifier.update_task_board("12345", "◐ a") is True
+
+    calls = client.post.call_args_list
+    assert calls[1][0][0].endswith("/editMessageText")
+    assert calls[2][0][0].endswith("/editMessageText")
+
+
+def test_update_task_board_rejects_non_telegram_chat_id(tmp_path) -> None:
+    client = MagicMock()
+    notifier = TelegramNotifier("test-token", client=client, state_dir=tmp_path)
+
+    assert notifier.update_task_board("mesh:vesper", "☐ a") is False
+    assert notifier.update_task_board("not-a-chat", "☐ a") is False
+    client.post.assert_not_called()

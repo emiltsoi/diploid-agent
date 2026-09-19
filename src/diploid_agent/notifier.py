@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
 from abc import ABC, abstractmethod
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# editMessageText descriptions that mean the board message is gone and a
+# fresh send should re-key the board (Telegram reports a deleted message as
+# 400 "message to edit not found", not 404).
+_BOARD_EDIT_MISSING_MARKERS = ("not found", "can't be edited", "identifier is not specified")
 
 
 class Notifier(ABC):
@@ -71,11 +78,14 @@ class TelegramNotifier(Notifier):
         *,
         client: httpx.Client | None = None,
         metrics: Any | None = None,
+        state_dir: Path | str | None = None,
     ) -> None:
         self.token = token
         self.base_url = f"https://api.telegram.org/bot{token}"
         self.client = client or httpx.Client(timeout=30.0)
         self.metrics = metrics
+        self.state_dir = Path(state_dir) if state_dir is not None else None
+        self._board_ids: dict[str, int] = {}
         self._lock = threading.Lock()
         self._typing_threads: dict[str, tuple[threading.Thread, threading.Event]] = {}
         self._typing_lock = threading.RLock()
@@ -227,6 +237,120 @@ class TelegramNotifier(Notifier):
         except Exception:
             logger.exception("Failed to delete Telegram message %s in chat %s", message_id, chat_id)
             return False
+
+    def update_task_board(self, chat_id: str, text: str) -> bool:
+        """Send or edit the per-chat task board message.
+
+        Edits the stored board message when one exists; a deleted board
+        (Telegram 400 "message to edit not found") triggers a fresh send
+        and re-keys the stored id. Rendered text is sent without
+        parse_mode so task names never hit the markdown fallback path.
+        Returns False on transient failure, keeping the stored id so the
+        next debounced update retries the edit.
+        """
+        try:
+            int(chat_id)
+        except (TypeError, ValueError):
+            return False
+        text = text[:4096]
+        if not text:
+            return False
+        message_id = self._board_message_id(chat_id)
+        if message_id is not None:
+            result = self._edit_board_message(chat_id, message_id, text)
+            if result == "ok":
+                return True
+            if result != "missing":
+                return False
+        new_id = self.send(chat_id, text)
+        if new_id is None:
+            return False
+        self._board_ids[chat_id] = new_id
+        self._save_board_id(chat_id, new_id)
+        return True
+
+    def _board_state_path(self, chat_id: str) -> Path | None:
+        if self.state_dir is None:
+            return None
+        return self.state_dir / f"{chat_id}.board.json"
+
+    def _board_message_id(self, chat_id: str) -> int | None:
+        if chat_id in self._board_ids:
+            return self._board_ids[chat_id]
+        path = self._board_state_path(chat_id)
+        if path is None or not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text())
+            message_id = int(data["message_id"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        self._board_ids[chat_id] = message_id
+        return message_id
+
+    def _save_board_id(self, chat_id: str, message_id: int) -> None:
+        path = self._board_state_path(chat_id)
+        if path is None:
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(path.suffix + ".new")
+            tmp.write_text(json.dumps({"message_id": message_id}))
+            tmp.replace(path)
+        except OSError:
+            logger.warning("Could not persist task board id for chat %s", chat_id)
+
+    def _edit_board_message(
+        self, chat_id: str, message_id: int, text: str
+    ) -> Literal["ok", "missing", "error"]:
+        """Edit the board message, preserving the failure reason.
+
+        Unlike ``edit_message`` this does not collapse the Telegram error
+        into a bare bool: a deleted board needs a resend while a transient
+        failure must keep the stored id for the next update.
+        """
+        payload: dict[str, Any] = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+        }
+        description = ""
+        try:
+            resp = self._post(f"{self.base_url}/editMessageText", data=payload)
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("ok"):
+                return "ok"
+            description = str(data.get("description", ""))
+        except httpx.HTTPStatusError as exc:
+            try:
+                description = str(exc.response.json().get("description", ""))
+            except (ValueError, TypeError):
+                description = ""
+        except Exception:
+            logger.exception(
+                "Failed to edit task board message %s in chat %s", message_id, chat_id
+            )
+            return "error"
+        lowered = description.lower()
+        if "not modified" in lowered:
+            return "ok"
+        if any(marker in lowered for marker in _BOARD_EDIT_MISSING_MARKERS):
+            logger.info(
+                "Task board message %s in chat %s is gone (%s); resending",
+                message_id,
+                chat_id,
+                description,
+            )
+            self._board_ids.pop(chat_id, None)
+            return "missing"
+        logger.warning(
+            "Task board edit failed for message %s in chat %s: %s",
+            message_id,
+            chat_id,
+            description,
+        )
+        return "error"
 
     def begin_typing(self, chat_id: str) -> None:
         """Start a continuous typing indicator for this chat."""

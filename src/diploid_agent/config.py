@@ -122,6 +122,7 @@ class TelegramConfig(BaseModel):
     intermediate_min_chars: int = 20
     min_telegram_interval: float = 1.0
     min_edit_message_interval: float = 2.0
+    task_board: bool = True
     message_format: Literal["plain", "markdown_v2"] = "plain"
     code_style: Literal["inline", "box"] = "inline"
     attachments_enabled: bool = True

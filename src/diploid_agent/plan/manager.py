@@ -8,6 +8,7 @@ import logging
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -31,7 +32,25 @@ class PlanManager:
         self._lock_path = self._path.with_suffix(self._path.suffix + ".lock")
         self._plans: dict[str, Plan] = {}
         self._lock = threading.Lock()
+        self.on_change: Callable[[Plan], None] | None = None
         self._load()
+
+    def _notify_change(self, plan: Plan) -> None:
+        """Invoke the on_change subscriber for a mutated plan.
+
+        Must only be called after ``_transaction`` has released the lock:
+        subscribers typically re-enter the manager (``list_plans``) for
+        selection, and ``self._lock`` is not re-entrant. Callback failures
+        are logged, never propagated — a subscriber bug must not fail a
+        plan mutation.
+        """
+        callback = self.on_change
+        if callback is None:
+            return
+        try:
+            callback(plan)
+        except Exception:
+            logger.exception("PlanManager on_change callback failed for plan %s", plan.id)
 
     def _load(self) -> None:
         self._plans = {}
@@ -160,6 +179,7 @@ class PlanManager:
         self._update_plan_status(plan)
         with self._transaction():
             self._plans[plan.id] = plan
+        self._notify_change(plan)
         return plan
 
     def get_plan(self, plan_id: str) -> Plan | None:
@@ -187,7 +207,8 @@ class PlanManager:
             self._resolve_statuses(plan)
             self._update_plan_status(plan)
             plan.updated_at = time.time()
-            return task
+        self._notify_change(plan)
+        return task
 
     def get_task(self, plan_id: str, task_id: str) -> Task | None:
         with self._transaction():
@@ -217,7 +238,8 @@ class PlanManager:
             task.started_at = now
             self._update_plan_status(plan)
             plan.updated_at = now
-            return task
+        self._notify_change(plan)
+        return task
 
     def complete_task(
         self,
@@ -251,7 +273,8 @@ class PlanManager:
             self._resolve_statuses(plan)
             self._update_plan_status(plan)
             plan.updated_at = time.time()
-            return task
+        self._notify_change(plan)
+        return task
 
     def fail_task(
         self,
@@ -281,4 +304,5 @@ class PlanManager:
             self._resolve_statuses(plan)
             self._update_plan_status(plan)
             plan.updated_at = time.time()
-            return task
+        self._notify_change(plan)
+        return task

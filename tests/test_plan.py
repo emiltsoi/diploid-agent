@@ -164,3 +164,65 @@ def test_incomplete_status_persists(tmp_path: Path) -> None:
     assert loaded is not None
     assert loaded.tasks[0].status == TaskStatus.INCOMPLETE
     assert loaded.tasks[0].cancelled is True
+
+
+def test_on_change_fires_once_per_mutator(tmp_path: Path) -> None:
+    mgr = PlanManager(tmp_path)
+    fired: list[str] = []
+    mgr.on_change = lambda plan: fired.append(plan.id)
+
+    plan = mgr.create_plan("board", chat_id="123", tasks=[Task(name="a")])
+    task_b = mgr.add_task(plan.id, Task(name="b"))
+    assert task_b is not None
+    mgr.start_task(plan.id, plan.tasks[0].id)
+    mgr.complete_task(plan.id, plan.tasks[0].id, result="ok")
+    mgr.fail_task(plan.id, task_b.id, log="nope")
+
+    assert fired == [plan.id] * 5
+
+
+def test_on_change_not_fired_on_reads_or_failed_mutations(tmp_path: Path) -> None:
+    mgr = PlanManager(tmp_path)
+    fired: list[str] = []
+    mgr.on_change = lambda plan: fired.append(plan.id)
+    plan = mgr.create_plan("quiet", tasks=[Task(name="a")])
+    fired.clear()
+
+    mgr.get_plan(plan.id)
+    mgr.list_plans()
+    mgr.get_task(plan.id, plan.tasks[0].id)
+    mgr.get_ready_tasks(plan.id)
+    assert mgr.add_task("missing-plan", Task(name="b")) is None
+    assert mgr.add_task(plan.id, Task(id=plan.tasks[0].id, name="dup")) is None
+    assert mgr.start_task(plan.id, "missing-task") is None
+    assert mgr.complete_task(plan.id, "missing-task") is None
+    assert mgr.fail_task(plan.id, "missing-task") is None
+
+    assert fired == []
+
+
+def test_on_change_fires_after_transaction_released(tmp_path: Path) -> None:
+    mgr = PlanManager(tmp_path)
+
+    def handler(plan) -> None:
+        # Re-enters the manager for selection; would deadlock if the
+        # callback fired while _transaction still held the lock.
+        assert mgr.get_plan(plan.id) is not None
+        assert mgr.list_plans(plan.chat_id)
+
+    mgr.on_change = handler
+    mgr.create_plan("reentry", chat_id="7", tasks=[Task(name="a")])
+
+
+def test_on_change_callback_exception_does_not_fail_mutation(tmp_path: Path) -> None:
+    mgr = PlanManager(tmp_path)
+
+    def boom(_plan) -> None:
+        raise RuntimeError("board broke")
+
+    mgr.on_change = boom
+    plan = mgr.create_plan("resilient", tasks=[Task(name="a")])
+
+    loaded = mgr.get_plan(plan.id)
+    assert loaded is not None
+    assert loaded.name == "resilient"
