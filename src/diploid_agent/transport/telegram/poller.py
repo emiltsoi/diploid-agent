@@ -547,6 +547,7 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
         logger.info("Starting Telegram poller for %s", target)
         self._stop.clear()
         self._cleanup_orphaned_placeholders()
+        self._sync_bot_menu()
         try:
             # Wait briefly for the harness to come up, then start the global
             # outbox worker so mesh wakes, subagent completions and other outbox

@@ -334,6 +334,11 @@ A short summary for September.
 
 ## Commands
 
+At startup the poller pushes these to Telegram via `setMyCommands`, so the
+client's "/" menu lists them with descriptions (Telegram menu names allow
+only lowercase letters, digits, and underscores — hence `/graceful_restart`).
+Disable with `harness.telegram.bot_menu: false`.
+
 | Command | Action |
 |---|---|
 | `/status` | Show current model, session id, working directory, and context-window usage. |
@@ -356,7 +361,7 @@ A short summary for September.
 | `/new` | Start a fresh Devin session for this chat while keeping chat memory. |
 | `/stop` | Cancel the current turn and return a partial reply. |
 | `/restart` | Kill the ACP subprocess and start a fresh transport. |
-| `/graceful-restart [service]` | Schedule a graceful `systemd-run` restart of the named service. If `service` is omitted, the current persona's `.service` unit is restarted. |
+| `/graceful_restart [service]` | Schedule a graceful `systemd-run` restart of the named service. If `service` is omitted, the current persona's `.service` unit is restarted. |
 | `/subagent <prompt>` | Start a background ACP subagent. The harness continues the chat with the result when it finishes. |
 | `/subagents` | List background subagents for this chat. |
 | `/continue` | Resume the previous turn after a partial reply or timeout. |

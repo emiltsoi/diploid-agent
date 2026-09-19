@@ -2800,7 +2800,7 @@ def test_handle_update_starts_worker_and_queues_messages(tmp_path: Path) -> None
 
 
 def test_handle_update_routes_graceful_restart_command(tmp_path: Path) -> None:
-    """/graceful-restart without an argument uses the runtime persona name."""
+    """/graceful_restart without an argument uses the runtime persona name."""
     runtime = _FakeConfigRuntime()
     runtime.config = SimpleNamespace(persona=SimpleNamespace(name="test-pilot"))
     poller = TelegramPoller(
@@ -2829,7 +2829,7 @@ def test_handle_update_routes_graceful_restart_command(tmp_path: Path) -> None:
             "message_id": 1,
             "chat": {"id": 12345, "type": "private"},
             "from": {"id": 1, "is_bot": False},
-            "text": "/graceful-restart",
+            "text": "/graceful_restart",
         }
     )
     poller._handle_update(update)
@@ -2837,7 +2837,7 @@ def test_handle_update_routes_graceful_restart_command(tmp_path: Path) -> None:
 
 
 def test_handle_update_routes_graceful_restart_with_explicit_service(tmp_path: Path) -> None:
-    """/graceful-restart with an explicit service name uses that name."""
+    """/graceful_restart with an explicit service name uses that name."""
     runtime = _FakeConfigRuntime()
     runtime.config = SimpleNamespace(persona=SimpleNamespace(name="test-pilot"))
     poller = TelegramPoller(
@@ -2866,11 +2866,70 @@ def test_handle_update_routes_graceful_restart_with_explicit_service(tmp_path: P
             "message_id": 1,
             "chat": {"id": 12345, "type": "private"},
             "from": {"id": 1, "is_bot": False},
-            "text": "/graceful-restart my-service.service",
+            "text": "/graceful_restart my-service.service",
         }
     )
     poller._handle_update(update)
     assert sent == [(12345, "Restarting my-service.service", 1)]
+
+
+def test_sync_bot_menu_posts_setmycommands(tmp_path: Path) -> None:
+    """Startup pushes the command menu via setMyCommands."""
+    from diploid_agent.transport.telegram.commands import _BOT_COMMAND_RE
+
+    poller = TelegramPoller(
+        token="dummy",
+        runtime=_FakeConfigRuntime(),
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    calls: list[tuple[str, dict]] = []
+    poller._api = lambda method, **kw: calls.append((method, kw)) or {"ok": True}
+
+    poller._sync_bot_menu()
+
+    assert len(calls) == 1
+    method, params = calls[0]
+    assert method == "setMyCommands"
+    assert params["throttle"] is False
+    commands = json.loads(params["commands"])
+    names = {c["command"] for c in commands}
+    assert {"graceful_restart", "help", "new", "stop"} <= names
+    for c in commands:
+        assert _BOT_COMMAND_RE.fullmatch(c["command"])
+        assert c["description"]
+
+
+def test_sync_bot_menu_disabled_by_flag(tmp_path: Path) -> None:
+    """telegram.bot_menu=false skips the sync entirely."""
+    runtime = _FakeConfigRuntime()
+    runtime.telegram.bot_menu = False
+    poller = TelegramPoller(
+        token="dummy",
+        runtime=runtime,
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    calls: list[tuple[str, dict]] = []
+    poller._api = lambda method, **kw: calls.append((method, kw)) or {"ok": True}
+
+    poller._sync_bot_menu()
+
+    assert calls == []
+
+
+def test_sync_bot_menu_failure_is_nonfatal(tmp_path: Path) -> None:
+    """A Telegram failure logs a warning and never blocks the poller."""
+
+    def boom(method: str, **kw: Any) -> dict:
+        raise RuntimeError("telegram down")
+
+    poller = TelegramPoller(
+        token="dummy",
+        runtime=_FakeConfigRuntime(),
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    poller._api = boom
+
+    poller._sync_bot_menu()  # must not raise
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, NamedTuple
 
 import httpx
@@ -107,6 +108,41 @@ _SUB_COMMANDS: dict[str, tuple[str, dict[str, tuple[str, int, tuple[Any, ...], b
         },
     ),
 }
+
+# Bot-command menu pushed to Telegram via ``setMyCommands`` at poller start —
+# one entry per handled command. Telegram menu names allow only lowercase
+# letters, digits and underscores (≤32 chars); the filter below drops anything
+# else so a future command with an illegal name fails safe instead of
+# rejecting the whole sync.
+_BOT_COMMAND_RE = re.compile(r"[a-z0-9_]{1,32}")
+
+_BOT_MENU: tuple[tuple[str, str], ...] = (
+    ("status", "model, session, cwd, context usage"),
+    ("metrics", "token usage and latency"),
+    ("memory", "per-chat memory"),
+    ("sessions", "list numbered sessions"),
+    ("subagents", "background subagent status"),
+    ("models", "list ACP models"),
+    ("model", "switch model [--in-place] <name>"),
+    ("new", "fresh session, keep chat memory"),
+    ("stop", "cancel the current turn"),
+    ("continue", "resume after a partial reply or timeout"),
+    ("restart", "restart the ACP transport"),
+    ("graceful_restart", "graceful service restart [name]"),
+    ("resume", "resume session <n>"),
+    ("branch", "branch session <n>"),
+    ("summarize", "file-backed summarization"),
+    ("recall", "search memory <query>"),
+    ("promote", "promote a fact to persona memory"),
+    ("subagent", "start a background subagent <prompt>"),
+    ("mcp", "manage MCP servers"),
+    ("skill", "manage skills"),
+    ("plugin", "manage state plugins"),
+    ("state", "dispatch a plugin state event"),
+    ("stream_thoughts", "toggle thought stream on|off"),
+    ("config", "update live runtime config"),
+    ("help", "show the command list"),
+)
 
 
 class TelegramCommandMixin:
@@ -667,6 +703,25 @@ class TelegramCommandMixin:
     def _harness_help(self, chat_id: int) -> str:
         return _TELEGRAM_HELP
 
+    def _sync_bot_menu(self) -> None:
+        """Push the bot-command menu to Telegram (``setMyCommands``).
+
+        Called once at poller start; ``setMyCommands`` overwrites the whole
+        menu so each boot self-heals drift. Best-effort — a Telegram failure
+        logs a warning and never blocks the poller.
+        """
+        if not self._live_telegram_config.bot_menu:
+            return
+        commands = [
+            {"command": name, "description": desc}
+            for name, desc in _BOT_MENU
+            if _BOT_COMMAND_RE.fullmatch(name)
+        ]
+        try:
+            self._api("setMyCommands", commands=json.dumps(commands), throttle=False)
+        except Exception:
+            logger.warning("setMyCommands sync failed", exc_info=True)
+
     def _handle_command(self, chat_input: ChatInput, command: str, arg: str) -> bool:
         """Dispatch a ``/`` command. Returns True when the input was a command."""
         chat_id = chat_input.chat_id
@@ -751,7 +806,7 @@ class TelegramCommandMixin:
                 # The worker will finish its final partial; the restart confirmation is sent below.
             result = self._harness_restart(chat_id)
             self._send_result(chat_id, result, reply_to_message_id=chat_input.message_id)
-        elif command == "/graceful-restart":
+        elif command == "/graceful_restart":
             if arg:
                 service = arg
             elif self.runtime is not None:

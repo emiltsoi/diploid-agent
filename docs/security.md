@@ -98,7 +98,7 @@ tool calls including shell execution. This would let the agent run
   `harness.restart_allowed_units` (empty = the persona's own `<name>.service`).
   Rejections and accepted restarts are incident-recorded, and accepted restarts
   enqueue an operator notice to `harness.mesh.fallback_chat_id`. Operator doors —
-  `POST /graceful-restart` and Telegram `/graceful-restart` — bypass the gate.
+  `POST /graceful-restart` and Telegram `/graceful_restart` — bypass the gate.
   `restart_allowed_units` deliberately does not load from
   `sessions-*/runtime-overrides.yaml` — the policy boundary is not mutable
   through the channel it governs (only the fixed override sections `task`,

@@ -83,7 +83,7 @@ the same account, the credentials file is found automatically.
 The agent (or a user) can request a service restart through the harness instead
 of killing the unit directly:
 
-- Telegram: `/graceful-restart [service]`
+- Telegram: `/graceful_restart [service]`
 - HTTP: `POST /graceful-restart` with `{"chat_id": "...", "service": "..."}`
 - ACP subprocess (in `permission_mode: dangerous`): the subprocess can run
   `systemctl --user restart <service>` and the harness intercepts it.
