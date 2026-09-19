@@ -39,6 +39,9 @@ class WorkerPool:
         if max_workers < 1:
             raise ValueError(f"max_workers must be >= 1, got {max_workers}")
         with self._lock:
+            if not self._running:
+                logger.warning("WorkerPool.resize() after shutdown; ignoring")
+                return
             if max_workers == self._max_workers:
                 return
             self._prune_done()
@@ -48,7 +51,6 @@ class WorkerPool:
                 thread_name_prefix="task-worker-",
             )
             self._max_workers = max_workers
-            self._running = True
 
     def _prune_done(self) -> None:
         """Drop completed futures to avoid unbounded memory growth."""

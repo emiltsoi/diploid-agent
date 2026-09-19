@@ -295,6 +295,17 @@ def test_worker_pool_resizes_at_runtime() -> None:
     pool.shutdown()
 
 
+def test_worker_pool_resize_after_shutdown_is_ignored() -> None:
+    """resize() must not resurrect a pool that was shut down."""
+    pool = WorkerPool(max_workers=2)
+    pool.shutdown()
+
+    pool.resize(8)
+
+    assert not pool.is_running()
+    assert pool.max_workers == 2
+
+
 def test_task_engine_enforces_enabled_types(tmp_path: Path) -> None:
     engine, mgr, bus = _fixture_engine(tmp_path)
     plan = mgr.create_plan("typed", tasks=[Task(name="echo", command="echo hi")])
