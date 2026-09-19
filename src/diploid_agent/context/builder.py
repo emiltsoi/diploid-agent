@@ -7,6 +7,7 @@ memory-flag rules as the original harness methods.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -35,6 +36,8 @@ from diploid_agent.plugins.contexts import (
     RehydrationReason,
 )
 from diploid_agent.skills import SkillManager
+
+logger = logging.getLogger(__name__)
 
 
 class ContextBuilder:
@@ -108,23 +111,13 @@ class ContextBuilder:
 
     # Trim steps for first-turn compact prompts that exceed wake_context_token_budget.
     # Each step clears the listed slots and re-renders. Earlier steps drop lower-value
-    # context before higher-value context.
+    # context before higher-value context. Only non-protected slots are listed —
+    # PROTECTED_SLOTS survive every step; if they alone exceed the budget the
+    # last-resort sweep in _trim_slots_to_budget drops all non-required slots.
     WAKE_TRIM_STEPS: ClassVar[list[frozenset[str]]] = [
         frozenset({"metrics"}),
-        frozenset({"memory", "chat_memory", "persistent_memory", "mesh"}),
-        frozenset(
-            {
-                "promoted",
-                "recall",
-                "self_narrative",
-                "working_memory",
-                "body",
-                "self_state",
-                "authorship",
-                "bridge",
-                "checkpoint",
-            }
-        ),
+        frozenset({"memory", "chat_memory", "persistent_memory"}),
+        frozenset({"recall", "working_memory", "checkpoint"}),
     ]
 
     def __init__(
@@ -505,6 +498,17 @@ class ContextBuilder:
             if self._estimate_prompt_tokens(prompt, record) <= budget:
                 return slots, prompt
 
+        # Last resort: protected/soul slots alone exceed the budget. Drop every
+        # non-required slot rather than ship an over-budget wake — PROMPT_REQUIRED
+        # slots (identity, system_notice, user, continuation) always survive.
+        dropped = [name for name in slots if name not in self.PROMPT_REQUIRED_SLOTS]
+        for name in dropped:
+            slots[name] = []
+        logger.warning(
+            "Wake prompt still over budget after tiered trim; dropped non-required slots: %s",
+            ",".join(sorted(dropped)),
+        )
+        prompt = self._render_slots(slots)
         return slots, prompt
 
     def _skill_context(

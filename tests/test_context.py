@@ -1497,6 +1497,58 @@ def test_prompt_blocks_deny_slot(tmp_path: Path) -> None:
     assert not pctx.slots.get("metrics")
 
 
+def test_trim_slots_drops_only_listed_steps(tmp_path: Path) -> None:
+    """Tiered trim clears each step's slots but never touches protected slots."""
+    builder = _make_builder(tmp_path)
+    slots = {
+        "identity": ["id"],
+        "system_notice": ["notice"],
+        "user": ["hello"],
+        "metrics": ["m"],
+        "memory": ["mem " * 2000],
+        "recall": ["recall " * 2000],
+        "working_memory": ["wm"],
+        "self_narrative": ["soul"],
+        "body": ["body"],
+    }
+    budget = 50  # fits once memory+recall are gone, soul slots untouched
+
+    trimmed, _prompt = builder._trim_slots_to_budget(slots, None, budget)
+
+    assert trimmed["metrics"] == []
+    assert trimmed["memory"] == []
+    assert trimmed["recall"] == []
+    # protected soul slots survive every tier
+    assert trimmed["self_narrative"] == ["soul"]
+    assert trimmed["body"] == ["body"]
+
+
+def test_trim_slots_last_resort_sweeps_soul_slots(tmp_path: Path) -> None:
+    """When protected slots alone exceed the budget, non-required slots are swept."""
+    builder = _make_builder(tmp_path)
+    slots = {
+        "identity": ["id"],
+        "system_notice": ["notice"],
+        "user": ["hello"],
+        "self_narrative": ["soul " * 5000],
+        "body": ["body " * 5000],
+        "metrics": ["m"],
+        "memory": ["mem"],
+    }
+
+    trimmed, prompt = builder._trim_slots_to_budget(slots, None, 10)
+
+    assert trimmed["self_narrative"] == []
+    assert trimmed["body"] == []
+    assert trimmed["metrics"] == []
+    assert trimmed["memory"] == []
+    # PROMPT_REQUIRED slots always survive, even at last resort
+    assert trimmed["identity"] == ["id"]
+    assert trimmed["system_notice"] == ["notice"]
+    assert trimmed["user"] == ["hello"]
+    assert "soul" not in prompt
+
+
 def test_prompt_blocks_caps_slot(tmp_path: Path) -> None:
     """A prompt_blocks cap trims an over-long slot."""
     profile_root = tmp_path / "profile"
