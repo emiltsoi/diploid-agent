@@ -189,7 +189,13 @@ class PluginManager:
         return f"Plugin {name} {'enabled' if enabled else 'disabled'}"
 
     def rollback(self, steps: int = 1) -> str:
-        """Restore the plugin list to an earlier snapshot."""
+        """Restore the plugin list to an earlier snapshot.
+
+        Only the global plugin list is restored — per-chat
+        ``plugin_overrides`` on SessionRecord are not part of the
+        snapshots and stay untouched; overrides that still mask the
+        restored state are named in the returned message.
+        """
         if steps < 1:
             raise ValueError("steps must be >= 1")
         if len(self._config_history) < steps + 1:
@@ -217,7 +223,28 @@ class PluginManager:
         # Replace the history tail with the restored config so the next snapshot is clean.
         self._config_history = self._config_history[: -(steps + 1)]
         self._snapshot_config(self._plugins)
-        return f"Rolled back {steps} plugin configuration(s)"
+        masked = self._masking_overrides()
+        suffix = f"; per-chat overrides still active: {masked}" if masked else ""
+        return f"Rolled back {steps} plugin configuration(s){suffix}"
+
+    def _masking_overrides(self) -> str:
+        """Per-chat overrides whose value differs from the restored global state."""
+        if self._runtime is None:
+            return ""
+        global_enabled = {p.name: p.enabled for p in self._plugins}
+        notes: list[str] = []
+        for chat_id in sorted(self._instances):
+            record = self._runtime._active_record(chat_id)
+            if record is None or not record.plugin_overrides:
+                continue
+            masked = sorted(
+                name
+                for name, enabled in record.plugin_overrides.items()
+                if name in global_enabled and enabled != global_enabled[name]
+            )
+            if masked:
+                notes.append(f"{chat_id} ({', '.join(masked)})")
+        return ", ".join(notes)
 
     def stop_all(self) -> None:
         """Stop every plugin instance and release all caches."""

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -20,6 +21,7 @@ from diploid_agent.config import (
     TimerConfig,
 )
 from diploid_agent.engine import TurnResult
+from diploid_agent.models import SessionRecord
 from diploid_agent.runtime.agent_runtime import AgentRuntime
 
 
@@ -126,6 +128,61 @@ def test_rollback(tmp_path: Path) -> None:
     names = {p.name for p in runtime.config.harness.plugins}
     assert "planner" not in names
     assert "continuity" in names
+
+
+def test_rollback_names_masking_chat_overrides(tmp_path: Path) -> None:
+    """A chat-level override that masks the restored state is named in the reply."""
+    runtime = _make_runtime(tmp_path)
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="s1",
+        model="swe-1-7",
+        persona="test",
+        cwd=str(tmp_path),
+        created_at=time.time(),
+        updated_at=time.time(),
+    )
+    record.plugin_overrides = {"continuity": False}
+    runtime._active_record = lambda chat_id: record if chat_id == "chat-1" else None  # type: ignore[attr-defined,method-assign]
+    runtime._plugins._instances["chat-1"]["continuity"] = MagicMock()
+
+    runtime.plugin_toggle("continuity", enabled=False)
+    result = runtime.plugin_rollback(1)
+
+    cfg = next(p for p in runtime.config.harness.plugins if p.name == "continuity")
+    assert cfg.enabled is True
+    assert "chat-1" in result.reply
+    assert "continuity" in result.reply
+    assert record.plugin_overrides == {"continuity": False}
+
+
+def test_rollback_silent_when_overrides_match(tmp_path: Path) -> None:
+    """An override matching the restored state does not trigger the notice."""
+    runtime = _make_runtime(tmp_path)
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="s1",
+        model="swe-1-7",
+        persona="test",
+        cwd=str(tmp_path),
+        created_at=time.time(),
+        updated_at=time.time(),
+    )
+    record.plugin_overrides = {"continuity": False}
+    runtime._active_record = lambda chat_id: record if chat_id == "chat-1" else None  # type: ignore[attr-defined,method-assign]
+    runtime._plugins._instances["chat-1"]["continuity"] = MagicMock()
+
+    # Roll back to the snapshot where continuity is globally disabled —
+    # the chat override agrees with the restored state, so no notice.
+    runtime.plugin_toggle("continuity", enabled=False)
+    runtime.plugin_toggle("continuity", enabled=True)
+    result = runtime.plugin_rollback(1)
+
+    cfg = next(p for p in runtime.config.harness.plugins if p.name == "continuity")
+    assert cfg.enabled is False
+    assert "overrides still active" not in result.reply
 
 
 def test_persisted_to_runtime_overrides(tmp_path: Path) -> None:
