@@ -38,7 +38,7 @@ from diploid_agent.plugins.contexts import (
 )
 
 if TYPE_CHECKING:
-    from diploid_agent.config import McpServerConfig
+    from diploid_agent.config import McpServerConfig, PluginConfig
     from diploid_agent.plugins.manager import PluginManager
 
 logger = logging.getLogger(__name__)
@@ -49,9 +49,15 @@ class PluginHooks:
 
     def __init__(self, manager: PluginManager) -> None:
         self._manager = manager
+        self._enabled_cache: dict[str, tuple[int, list[PluginConfig]]] = {}
 
     def _plugins_for(self, chat_id: str) -> list[StatePlugin]:
-        enabled = [p for p in self._manager._plugins if self._manager._is_enabled_for(chat_id, p)]
+        generation, enabled = self._enabled_cache.get(chat_id, (-1, []))
+        if generation != self._manager._generation:
+            enabled = [
+                p for p in self._manager._plugins if self._manager._is_enabled_for(chat_id, p)
+            ]
+            self._enabled_cache[chat_id] = (self._manager._generation, enabled)
         return [self._manager._get_or_create(chat_id, cfg) for cfg in enabled]
 
     def _pending_dispatches(self, chat_id: str) -> list[dict[str, Any]]:

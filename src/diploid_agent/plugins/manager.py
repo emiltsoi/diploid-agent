@@ -43,6 +43,10 @@ class PluginManager:
         self._incident_store = incident_store
         self._instances: dict[str, dict[str, StatePlugin]] = defaultdict(dict)
         self._config_history: list[list[PluginConfig]] = []
+        # Bumped whenever a chat's effective enabled-plugin set can change
+        # (reconfigure, rollback, disable, per-chat override); PluginHooks
+        # caches resolved config lists against it.
+        self._generation = 0
         self._hooks = PluginHooks(self)
         self.reconfigure(plugins)
 
@@ -93,6 +97,7 @@ class PluginManager:
 
         self._plugins = sorted(new_plugins, key=lambda p: p.prompt_order)
         self._instances.clear()
+        self._generation += 1
         self._snapshot_config(self._plugins)
 
     def _snapshot_config(self, plugins: list[PluginConfig]) -> None:
@@ -193,6 +198,7 @@ class PluginManager:
                             chat_id=chat_id,
                         )
         self._plugins = [PluginConfig(**p.model_dump()) for p in target]
+        self._generation += 1
         # Replace the history tail with the restored config so the next snapshot is clean.
         self._config_history = self._config_history[: -(steps + 1)]
         self._snapshot_config(self._plugins)
@@ -323,6 +329,7 @@ class PluginManager:
         for cfg in self._plugins:
             if cfg.name in names:
                 cfg.enabled = False
+        self._generation += 1
         self._snapshot_config(self._plugins)
 
     def plugin_health(self, chat_id: str) -> list[dict[str, Any]]:
@@ -330,7 +337,12 @@ class PluginManager:
         for cfg in self._plugins:
             if not cfg.enabled:
                 continue
-            plugin = self._get_or_create(chat_id, cfg)
+            plugin = self._instances.get(chat_id, {}).get(cfg.name)
+            if plugin is None:
+                results.append(
+                    {"name": cfg.name, "healthy": True, "details": {"status": "not_started"}}
+                )
+                continue
             if isinstance(plugin, FailedPlugin):
                 results.append({"name": cfg.name, "healthy": False, "error": plugin.error})
             else:
@@ -392,6 +404,7 @@ class PluginManager:
             record.plugin_overrides = {}
         record.plugin_overrides[name] = enabled
         self._runtime.append_record(record)
+        self._generation += 1
         instance = self._instances[chat_id].pop(name, None)
         if instance is not None and not isinstance(instance, FailedPlugin):
             try:
