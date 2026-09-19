@@ -7,9 +7,14 @@ Telegram poller's `CommandHandler` when the poller does not have a direct
 runtime reference. Endpoints that return `ChatResponse` are implemented by
 calling the matching `RuntimeAPI` method and serializing the `ChatResult`.
 
+**Authentication.** When `HARNESS_API_KEY` is configured, every endpoint
+requires the `X-API-Key` header — reads and mutations alike — except
+`GET /health` (kept open for uptime probes) and the three inbound mesh/webhook
+receivers, which authenticate via the signed mesh envelope instead.
+
 ## `GET /health`
 
-Health check.
+Health check. Unauthenticated; returns status fields only.
 
 ```bash
 curl http://127.0.0.1:4003/health
@@ -18,8 +23,27 @@ curl http://127.0.0.1:4003/health
 Response:
 
 ```json
-{"status": "ok"}
+{
+  "status": "ok",
+  "uptime_seconds": 123.4,
+  "components": {
+    "acp": {"status": "ok", "healthy": true},
+    "hindsight": {"status": "ok", "healthy": true},
+    "telegram": {"status": "ok", "healthy": true},
+    "plugins": {"status": "ok", "healthy": true, "details": []}
+  },
+  "pending_restart": null
+}
 ```
+
+`status` is `degraded` when any component reports `healthy: false`.
+`components.acp.status` is `idle` (still healthy) when the lazily-started ACP
+transport simply has not been asked to work yet — a fresh instance is not an
+error; a started-then-unhealthy transport reports `error`. `pending_restart`
+is `null`, or the details of an in-progress graceful restart: `service`,
+`reason`, `chat_id`, `draining_since`, plus live `active_turns` and
+`session_ops_pending`. A drain without recorded restart detail (e.g. a
+shutdown drain) reports `{"draining": true}`.
 
 ## `POST /chat`
 
@@ -221,7 +245,8 @@ was enqueued by background turns, wake events, mesh messages, or subagent
 completions, regardless of which chat it belongs to.
 
 ```bash
-curl "http://127.0.0.1:4003/outbox?wait=5.0"
+curl "http://127.0.0.1:4003/outbox?wait=5.0" \
+  -H "X-API-Key: $HARNESS_API_KEY"
 ```
 
 - `wait` (float, 0–60 seconds, default `0.0`) — how long to block before
@@ -251,7 +276,8 @@ Long-poll the outbound message outbox for a specific chat. Still supported for
 per-chat `DeliveryWorker`s and backwards compatibility.
 
 ```bash
-curl "http://127.0.0.1:4003/outbox/test-1?wait=5.0"
+curl "http://127.0.0.1:4003/outbox/test-1?wait=5.0" \
+  -H "X-API-Key: $HARNESS_API_KEY"
 ```
 
 - `wait` (float, 0–60 seconds, default `0.0`) — how long to block before
@@ -536,9 +562,8 @@ All three require `X-API-Key` when `HARNESS_API_KEY` is configured.
 ## Plugin lifecycle
 
 Add, remove, update, toggle, and roll back plugins at runtime. All endpoints
-require the `X-API-Key` header when `HARNESS_API_KEY` is configured — except
-`GET /plugins/{chat_id}` (read-only plugin listing), which is unauthenticated —
-and return a `ChatResponse` shape.
+require the `X-API-Key` header when `HARNESS_API_KEY` is configured and return
+a `ChatResponse` shape.
 
 The `module` field, when provided, must be a valid Python file module name
 matching `^[A-Za-z_][A-Za-z0-9_.]*$`, must not contain `..`, and must expose a
@@ -873,35 +898,37 @@ Response:
 
 Less commonly used routes, all present on the same ingress:
 
-- `GET /config` — redacted live runtime configuration. Unauthenticated.
+- `GET /config` — redacted live runtime configuration. Requires `X-API-Key`.
 - `PATCH /config` — partial update of `telegram` and/or `plugins` config. Requires `X-API-Key`.
-- `POST /timer` — enqueue a one-shot timer wake. Requires `X-API-Key`. Events with `reason` starting `self_wake` are agent-initiated self-wakes: they require the authorship plugin's `self_wake_enabled` toggle (403 otherwise) and are budget-limited by `timer.self_wake_max_pending` / `self_wake_min_interval_seconds` / `self_wake_max_delay_seconds` (429/422 on violation).
+- `POST /timer` — enqueue a one-shot timer wake. Requires `X-API-Key`. Events with `reason` starting `self_wake` are agent-initiated self-wakes: they require the authorship plugin's `self_wake_enabled` toggle (403 otherwise) and are budget-limited by `timer.self_wake_max_pending` / `self_wake_min_interval_seconds` / `self_wake_max_delay_seconds` (429/422 on violation). This is the operator door.
+- `POST /timer/self` — the agent-facing wake door. Requires `X-API-Key`. The `self_wake_enabled` toggle and the self-wake budgets always apply regardless of the requested reason, and the reason is normalized under the `self_wake` budget prefix so the event counts toward the same budgets it was checked against.
 - `GET /timer/pending?chat_id=&reason=` — list armed wake events for a chat (metadata only; payloads are not returned). Requires `X-API-Key`.
 - `POST /timer/cancel` — retract one armed wake by `{"chat_id", "event_id"}`. Requires `X-API-Key`.
 - `GET /cron` — merged cron job list plus per-job state (`next_due_at`, `last_status`, `consecutive_failures`, `running`, `auto_disabled`, `turns_today`) and reload warnings. Trigger jobs additionally carry `trigger` (the spec) and `trigger_state` (`seen_mtime`, `fired_at`, `held`), with `schedule`/`next_due_at` null. See [Cron](cron.md).
 - `POST /cron/{job_id}/run` — fire a cron job immediately. Requires `X-API-Key`. Ignores `enabled`/auto-`disabled` (a successful manual run re-enables), `409` while a run is in flight, and does not consume the schedule.
-- `GET /runtime/status`, `POST /runtime/start`, `POST /runtime/stop` — runtime lifecycle status and control. The `POST`s require `X-API-Key`; `GET` is unauthenticated.
-- `GET /prometheus` — Prometheus-format metrics. Unauthenticated.
+- `GET /runtime/status`, `POST /runtime/start`, `POST /runtime/stop` — runtime lifecycle status and control. All require `X-API-Key`.
+- `GET /prometheus` — Prometheus-format metrics. Requires `X-API-Key`.
 - `POST /plugin/enable`, `POST /plugin/reload`, `POST /plugins/create` — plugin enable/reload and chat-scoped plugin creation. Require `X-API-Key`.
-- `GET /plugins/{chat_id}` — list plugins enabled for a chat. Unauthenticated.
-- `GET /plan/list`, `GET /plan/{plan_id}` — plan listing. Unauthenticated. `POST /plan/task/start`, `POST /plan/task/done` — task lifecycle; require `X-API-Key`.
+- `GET /plugins/{chat_id}` — list plugins enabled for a chat. Requires `X-API-Key`.
+- `GET /plan/list`, `GET /plan/{plan_id}` — plan listing. `POST /plan/task/start`, `POST /plan/task/done` — task lifecycle. All require `X-API-Key`.
 - `POST /mesh/chat-map`, `POST /mesh/{chat_id}/notify` — mesh chat mapping and notification. Require `X-API-Key`.
 - `POST /mesh/receive`, `POST /plugins/openclaw-mesh/webhook`, `POST /ingress/{protocol}` — inbound mesh/webhook receivers. Unauthenticated (mesh payloads carry their own Ed25519 signatures).
 
 ## `POST /webhook`
 
-Telegram webhook. Expects a Telegram `Update` JSON payload and returns
+Telegram webhook. Requires `X-API-Key` when `HARNESS_API_KEY` is configured.
+Expects a Telegram `Update` JSON payload and returns
 `{"ok": True, "reply": "..."}`. If the update contains a `reply_to_message`,
 its text is extracted and injected into the prompt as a quote.
 
 ## Runtime configuration
 
-These endpoints let you inspect and mutate the live `task`, `waker`, `timer`, and `notifications` configuration without restarting the harness. `GET` and `POST` are available for each section. `POST` requires the `X-API-Key` header when `HARNESS_API_KEY` is configured. Partial updates are supported: only the fields present in the request body are changed. Invalid values return `422`. Successful updates are persisted to `runtime-overrides.yaml` in the project root; a persistence failure returns `503`.
+These endpoints let you inspect and mutate the live `task`, `waker`, `timer`, and `notifications` configuration without restarting the harness. `GET` and `POST` are available for each section and require the `X-API-Key` header when `HARNESS_API_KEY` is configured. Partial updates are supported: only the fields present in the request body are changed. Invalid values return `422`. Successful updates are persisted to `runtime-overrides.yaml` in the project root; a persistence failure returns `503`.
 
 The `telegram` and `plugins` sections are updated through the generic
 `PATCH /config` endpoint instead (`{"telegram": {...}}` / `{"plugins": [...]}`),
 which applies the same partial-update semantics and also requires `X-API-Key`.
-`GET /config` returns the redacted live configuration and is unauthenticated.
+`GET /config` returns the redacted live configuration and requires `X-API-Key`.
 
 The `acp_model` in `/task/config` is the default for ACP tasks. You can override it per ACP task with the `acp_model` field in `POST /plan/create` or in the planner's task JSON (`!plan`, `Plan:`, or `/plan` triggers); per-task values take precedence.
 

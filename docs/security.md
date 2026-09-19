@@ -43,16 +43,21 @@ never writes to them — `/promote` appends to the per-chat
 
 The FastAPI ingress is intended to run on a trusted or private network
 (`127.0.0.1` by default). If you expose it externally, set `HARNESS_API_KEY` in
-`config/secrets.env` (or the environment). When configured, mutating endpoints
-require the `X-API-Key` header: every `POST`/`PATCH`, including the live
-runtime config endpoints (`PATCH /config`, `/task/config`, `/waker/config`,
-`/timer/config`, `/notifications/config`).
+`config/secrets.env` (or the environment). When configured, **every** endpoint
+requires the `X-API-Key` header — reads and mutations alike, including the
+live runtime config endpoints and Telegram `POST /webhook` — compared with
+`hmac.compare_digest` (constant-time).
 
-Read-only `GET`s are unauthenticated — including `GET /config`, which returns
-the live configuration with secrets redacted (it reveals config structure, not
-secret values) — and so are the inbound receiver `POST`s: Telegram `/webhook`,
-`/mesh/receive`, `/plugins/openclaw-mesh/webhook`, and `/ingress/{protocol}`
-(mesh payloads carry their own Ed25519 signatures).
+Only `GET /health` stays open (uptime probes; it returns status fields only),
+and the inbound receiver `POST`s `/mesh/receive`,
+`/plugins/openclaw-mesh/webhook`, and `/ingress/{protocol}`, whose mesh
+payloads carry their own Ed25519 signatures.
+
+`GET /config` returns the live configuration with secrets redacted
+*structurally*: any field whose name ends in `token`, `api_key`, `_key`,
+`secret`, or `password` is masked (`***`) at any depth of the dump — including
+credentials inside plugin config dicts, which a hand-listed path mask used to
+ship verbatim.
 
 ## Sessions and runtime state
 

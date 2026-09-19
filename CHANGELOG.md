@@ -2,14 +2,104 @@
 
 ## Unreleased
 
+## 0.6.8 — 2026-09-19
+
+A full review-and-hardening pass over the runtime: every finding was
+shipped, ruled, or shelved. Highlights below; the full review document is
+kept out-of-tree.
+
+### Security
+
+- **HTTP ingress is now fully gated**: when `HARNESS_API_KEY` is configured,
+  every endpoint requires `X-API-Key` — including all read-only `GET`s
+  (`/config`, `/outbox`, `/runtime/status`, `/plan/*`, `/plugins/{chat_id}`,
+  …) and Telegram `POST /webhook`, which were previously open. Comparison is
+  constant-time (`hmac.compare_digest`). `GET /health` stays open for uptime
+  probes; the signed mesh receivers keep envelope auth.
+- **Structural secret redaction in `GET /config`**: any field whose name ends
+  in `token`, `api_key`, `_key`, `secret`, or `password` is masked at any
+  depth — plugin config credentials previously shipped verbatim.
+
 ### Added
 
+- `POST /timer/self` — the agent-facing wake door: the `self_wake_enabled`
+  toggle and self-wake budgets always apply regardless of the requested
+  reason, which is normalized under the `self_wake` budget prefix.
+  `POST /timer` remains the operator door.
+- `GET /health` now returns `pending_restart` — when a graceful restart is
+  draining or deferred, it reports `service`, `reason`, `chat_id`,
+  `draining_since`, and live `active_turns`/`session_ops_pending` (a bare
+  drain reports `{"draining": true}`), instead of being visible only in logs.
+- `TaskStatus.INCOMPLETE` — a distinct terminal status for tasks that
+  finished partial, cancelled, or timed out, instead of lying `DONE`.
+  Dependencies treat `DONE | INCOMPLETE` as satisfied.
 - `harness.cron.trigger_allowed_roots` — an operator allowlist of extra
   filesystem roots a `file` trigger may watch, for persona AND global jobs.
   Opens shared spaces outside the persona/session confinement (e.g. a
   household common-room directory on a shared mount) without weakening
   the per-job path confinement — `.resolve()` checks still apply and
   escaping jobs are still dropped with a warning.
+- Cron self-write tools (`count-appends`, `guarded-digest`) and richer
+  body-trigger fields for persona-authored cron jobs.
+
+### Changed
+
+- `/health` reports the ACP component as `status: idle` (healthy) when the
+  lazily-started transport simply has not run yet — a fresh instance no
+  longer reports `acp: error`/degraded until its first turn. Started-then-
+  unhealthy still reports `error`.
+- `plugin_health` is read-only: unstarted plugins report `not_started`
+  instead of being instantiated by a health probe.
+- Plugin rollback now names the per-chat overrides that mask restored global
+  state instead of reporting a clean rollback that did not take effect.
+- Telegram: TTS synthesis runs outside the per-chat send lock and is bounded
+  (idle-evicted Piper voices); the reply placeholder is sent before
+  attachment ingest so large uploads no longer delay the visible ack;
+  ask keyboards bind to the final chunk; empty outbox polls back off
+  interruptibly instead of a 10s sleep; thread-local Telegram clients are
+  closed and the poller no longer calls `logging.basicConfig` at import.
+- Per-turn repeated work reduced: Hindsight flush moved off the spool lock,
+  Hindsight health is TTL-cached, transcript recall parses a bounded tail,
+  skill scanning is memoized per prompt build (`scan_scope`).
+- Cron turn budgets bill at delivery, not at enqueue.
+- `AgentRuntime`'s component surface is now honestly named: the session-store
+  contract and cross-component reaches that were de-facto public are public
+  API (`ChatSessionStore.states`, `active_record`, `append_record`, …;
+  `RuntimeAPI.float_mesh_to_telegram`).
+
+### Removed
+
+- Dead config knobs `hard_cap` and `webhook_port` — they were never read.
+
+### Fixed
+
+- Graceful restarts verify the `systemd-run` spawn and notify the requester
+  when a scheduled restart fails or never fires (the drain reopens instead of
+  the service silently refusing new turns forever).
+- Pending-question `*.ask.json` files are no longer eaten by the
+  placeholder-orphan sweep.
+- `WorkerPool.resize()` can no longer resurrect a shut-down pool.
+- The deepest `WAKE_TRIM` tier is real, with a last-resort sweep that still
+  preserves required prompt slots.
+- `DispatchStore` growth is bounded (terminal eviction).
+- `append_system_note` items are actually spooled to Hindsight.
+- Corrupt session-store lines are skipped again after the
+  `SessionRecord.from_dict` refactor (missing fields raise `TypeError`, now
+  caught alongside `KeyError`).
+- Assorted correctness micros: `record_mesh_message` is lock-protected,
+  `status()` reads the record under one lock, continuation triggers
+  normalize punctuation, the stream wait cap derives from the heartbeat
+  interval, `synthesize_bounded` returns its synthesized path.
+
+### Development
+
+- The test suite runs under pytest-xdist by default (`-n auto` in addopts,
+  ~4.5 min vs ~15 min serial). `ControlListener` honors `DIPLOID_CONTROL_DIR`
+  for the control-socket base so parallel tests bind isolated namespaces —
+  production keeps the stable per-service path. `-n 0` forces serial.
+- Boilerplate collapsed into tables: parameterized Telegram commands, the
+  `/{section}/config` endpoint pairs, the 47 plugin hook delegates, and the
+  outbox-result coercion path.
 
 ## 0.6.7 — 2026-09-15
 

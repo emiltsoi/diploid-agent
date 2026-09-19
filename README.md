@@ -149,6 +149,11 @@ Other engines may use `WINDSURF_API_KEY`, `ACP_API_KEY`, or a per-engine
 credential source. For a headless/dedicated account, set the relevant key in
 `config/secrets.env` and reference that file from the service unit.
 
+**HTTP API key.** Set `HARNESS_API_KEY` in `config/secrets.env` to gate the
+ingress: every endpoint then requires the `X-API-Key` header — reads and
+mutations alike — except `GET /health` and the signed mesh receivers. If it is
+unset (a local-only install), the examples below work as written.
+
 Send a message:
 
 ```bash
