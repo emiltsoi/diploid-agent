@@ -727,3 +727,53 @@ def test_timer_self_wake_requires_authorship_toggle(tmp_path: Path) -> None:
     )
     assert resp.status_code == 403
     assert "authorship" in resp.json()["detail"]
+
+
+def test_timer_self_door_applies_budget_to_any_reason(tmp_path: Path) -> None:
+    """The agent door enforces budgets regardless of the reason string —
+    a non-self_wake label cannot slip past the bounds."""
+    client, _ = _budgeted_client(tmp_path, self_wake_min_interval_seconds=60.0)
+    body = {
+        "chat_id": "chat-1",
+        "reason": "reminder",
+        "scheduled_at": time.time() + 3600,
+    }
+    assert client.post("/timer/self", json=body).status_code == 200
+    resp = client.post("/timer/self", json=body)
+    assert resp.status_code == 429
+    assert "rate limit" in resp.json()["detail"]
+
+
+def test_timer_self_door_normalizes_reason(tmp_path: Path) -> None:
+    """Agent-door wakes get a budget prefix so they count toward the same
+    budgets they were checked against."""
+    client, runtime = _budgeted_client(tmp_path, self_wake_min_interval_seconds=0.0)
+    resp = client.post(
+        "/timer/self",
+        json={
+            "chat_id": "chat-1",
+            "reason": "reminder",
+            "scheduled_at": time.time() + 3600,
+        },
+    )
+    assert resp.status_code == 200
+    pending = runtime.wake_queue.pending(chat_id="chat-1")
+    assert pending[0].reason == "self_wake:reminder"
+
+
+def test_timer_self_door_requires_toggle(tmp_path: Path) -> None:
+    """The agent door enforces the authorship toggle unconditionally."""
+    config = _make_config(tmp_path)
+    config.harness.plugins[0].config["self_wake_enabled"] = False
+    runtime = AgentRuntime(config)
+    runtime.engine = FakeEngine()
+    client = TestClient(create_app(config, runtime))
+    resp = client.post(
+        "/timer/self",
+        json={
+            "chat_id": "chat-1",
+            "reason": "anything",
+            "scheduled_at": time.time() + 3600,
+        },
+    )
+    assert resp.status_code == 403

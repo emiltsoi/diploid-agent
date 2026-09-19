@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from enum import Enum
@@ -17,6 +18,25 @@ class DispatchStatus(Enum):
     FAILED = "failed"
     TIMEOUT = "timeout"
     CANCELLED = "cancelled"
+
+
+_TERMINAL_STATUSES = (
+    DispatchStatus.COMPLETED,
+    DispatchStatus.FAILED,
+    DispatchStatus.TIMEOUT,
+    DispatchStatus.CANCELLED,
+)
+
+# The store rewrites the whole JSONL on every mutation, so it must not grow
+# without bound: terminal dispatches are kept for continuation lookups and
+# audit, but only within an age window and a count cap.
+_TERMINAL_RETENTION_SECONDS = 7 * 86400
+_TERMINAL_MAX_KEPT = 200
+
+
+def _age_key(dispatch: Dispatch) -> float:
+    """Best timestamp for retention decisions; 0.0 = undatable."""
+    return dispatch.finished_at or dispatch.started_at or 0.0
 
 
 @dataclass
@@ -90,10 +110,36 @@ class DispatchStore:
                 except (json.JSONDecodeError, KeyError, ValueError):
                     continue
                 self._dispatches[dispatch.id] = dispatch
+            # Persist the eviction sweep so a stale file shrinks at boot.
+            self._save()
+
+    def _evict_terminal(self) -> None:
+        """Drop terminal dispatches past the retention window or count cap.
+
+        Pending dispatches are never evicted — they are load-bearing for
+        continuations. An evicted dispatch can no longer be continued:
+        ``get``/``set_result`` return ``None`` as for any unknown id.
+        """
+        now = time.time()
+        terminal = [
+            d for d in self._dispatches.values() if d.status in _TERMINAL_STATUSES
+        ]
+        for d in terminal:
+            stamp = _age_key(d)
+            if stamp and now - stamp > _TERMINAL_RETENTION_SECONDS:
+                del self._dispatches[d.id]
+        remaining = [
+            d for d in self._dispatches.values() if d.status in _TERMINAL_STATUSES
+        ]
+        if len(remaining) > _TERMINAL_MAX_KEPT:
+            remaining.sort(key=_age_key)
+            for d in remaining[: len(remaining) - _TERMINAL_MAX_KEPT]:
+                del self._dispatches[d.id]
 
     def _save(self) -> None:
         if self._path is None:
             return
+        self._evict_terminal()
         self._path.parent.mkdir(parents=True, exist_ok=True)
         lines = [
             json.dumps(dispatch.to_dict(), default=str) + "\n"

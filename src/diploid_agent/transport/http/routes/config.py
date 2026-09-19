@@ -216,47 +216,46 @@ def register_config(
             catch=False,
         )
 
-    @app.post("/timer", dependencies=[Depends(_require_api_key)])
-    def timer_create(req: TimerRequest) -> dict[str, str]:
-        now = time.time()
-        if req.reason.startswith(SELF_WAKE_REASON):
-            if not _self_wake_permitted(config):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="self_wake is not enabled for this persona (authorship toggle).",
-                )
-            timer_cfg = config.harness.timer
-            if req.scheduled_at > now + timer_cfg.self_wake_max_delay_seconds:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=(
-                        "self_wake scheduled too far out "
-                        f"(max {timer_cfg.self_wake_max_delay_seconds:.0f}s)"
-                    ),
-                )
-            self_wakes = [
-                e
-                for e in runtime.wake_queue.pending(chat_id=req.chat_id)
-                if e.reason.startswith(WAKE_BUDGET_REASON_PREFIXES)
-            ]
-            if len(self_wakes) >= timer_cfg.self_wake_max_pending:
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=(
-                        f"self_wake budget reached: {len(self_wakes)} pending "
-                        f"(max {timer_cfg.self_wake_max_pending})"
-                    ),
-                )
-            latest = max((e.created_at for e in self_wakes), default=0.0)
-            if latest and now - latest < timer_cfg.self_wake_min_interval_seconds:
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=(
-                        "self_wake rate limit: a self-wake was armed "
-                        f"{now - latest:.0f}s ago "
-                        f"(min {timer_cfg.self_wake_min_interval_seconds:.0f}s)"
-                    ),
-                )
+    def _enforce_self_wake_policy(req: TimerRequest, now: float) -> None:
+        if not _self_wake_permitted(config):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="self_wake is not enabled for this persona (authorship toggle).",
+            )
+        timer_cfg = config.harness.timer
+        if req.scheduled_at > now + timer_cfg.self_wake_max_delay_seconds:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "self_wake scheduled too far out "
+                    f"(max {timer_cfg.self_wake_max_delay_seconds:.0f}s)"
+                ),
+            )
+        self_wakes = [
+            e
+            for e in runtime.wake_queue.pending(chat_id=req.chat_id)
+            if e.reason.startswith(WAKE_BUDGET_REASON_PREFIXES)
+        ]
+        if len(self_wakes) >= timer_cfg.self_wake_max_pending:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=(
+                    f"self_wake budget reached: {len(self_wakes)} pending "
+                    f"(max {timer_cfg.self_wake_max_pending})"
+                ),
+            )
+        latest = max((e.created_at for e in self_wakes), default=0.0)
+        if latest and now - latest < timer_cfg.self_wake_min_interval_seconds:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=(
+                    "self_wake rate limit: a self-wake was armed "
+                    f"{now - latest:.0f}s ago "
+                    f"(min {timer_cfg.self_wake_min_interval_seconds:.0f}s)"
+                ),
+            )
+
+    def _enqueue_timer(req: TimerRequest, now: float) -> dict[str, str]:
         event = WakeEvent(
             id="",
             chat_id=req.chat_id,
@@ -270,6 +269,29 @@ def register_config(
         )
         enqueued = runtime.wake_queue.enqueue(event)
         return {"event_id": enqueued.id}
+
+    @app.post("/timer", dependencies=[Depends(_require_api_key)])
+    def timer_create(req: TimerRequest) -> dict[str, str]:
+        now = time.time()
+        if req.reason.startswith(SELF_WAKE_REASON):
+            _enforce_self_wake_policy(req, now)
+        return _enqueue_timer(req, now)
+
+    @app.post("/timer/self", dependencies=[Depends(_require_api_key)])
+    def timer_create_self(req: TimerRequest) -> dict[str, str]:
+        """Agent-facing wake door: the self-wake toggle and budgets always
+        apply here regardless of the requested reason, and the reason is
+        normalized under a budget prefix so the event counts toward the
+        same budgets it was checked against. ``/timer`` remains the
+        operator door.
+        """
+        now = time.time()
+        if not req.reason.startswith(WAKE_BUDGET_REASON_PREFIXES):
+            req = req.model_copy(
+                update={"reason": f"{SELF_WAKE_REASON}:{req.reason}"}
+            )
+        _enforce_self_wake_policy(req, now)
+        return _enqueue_timer(req, now)
 
     @app.get("/timer/pending", dependencies=[Depends(_require_api_key)])
     def timer_pending(chat_id: str, reason: str | None = None) -> dict[str, Any]:
