@@ -6,7 +6,7 @@ import logging
 import threading
 import time
 from collections import deque
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from diploid_agent.models import ChatResult
 from diploid_agent.notifier import NoopNotifier, Notifier, TelegramNotifier, WebhookNotifier
@@ -46,7 +46,7 @@ class RuntimeOutbox:
         self._lock = lock
         # Late-bound: the notifier is created after this component.
         self._notifier_fn = notifier_fn
-        self._outbox: deque[tuple[str, ChatResult]] = deque()
+        self._outbox: deque[tuple[str, Any]] = deque()
         self._outbox_condition = threading.Condition()
 
     @property
@@ -74,6 +74,22 @@ class RuntimeOutbox:
         """Put a final ChatResult in the outbox for the transport to deliver."""
         with self._outbox_condition:
             self._outbox.append((chat_id, chat_result))
+            self._outbox_condition.notify_all()
+
+    def emit_turn_started(self, chat_id: str) -> None:
+        """Queue a ``turn_started`` marker so transports can stream the turn.
+
+        Markers only make sense when a transport is consuming the queue, so
+        this is a no-op unless outbox delivery is enabled. The marker dict is
+        self-describing — the same shape ``OutboxResponse`` serializes — so
+        both the in-process runtime path and the HTTP route can read it.
+        """
+        if not self._outbox_delivery_enabled:
+            return
+        with self._outbox_condition:
+            self._outbox.append(
+                (chat_id, {"kind": "turn_started", "chat_id": chat_id, "result": None})
+            )
             self._outbox_condition.notify_all()
 
     def _safe_notifier_send(
@@ -137,12 +153,13 @@ class RuntimeOutbox:
         chat_id: str | None = None,
         wait: float = 0.0,
         return_chat_id: bool = False,
-    ) -> ChatResult | tuple[str, ChatResult] | None:
-        """Return the next ChatResult for a chat, blocking up to ``wait`` seconds.
+    ) -> Any | tuple[str, Any] | None:
+        """Return the next outbox item for a chat, blocking up to ``wait``.
 
-        When ``return_chat_id`` is true and ``chat_id`` is None, the full
-        ``(chat_id, ChatResult)`` pair is returned so a global outbox consumer
-        knows which chat to deliver to.
+        Items are usually ``ChatResult`` but may be marker dicts (e.g.
+        ``kind: "turn_started"``). When ``return_chat_id`` is true and
+        ``chat_id`` is None, the full ``(chat_id, item)`` pair is returned so
+        a global outbox consumer knows which chat to deliver to.
         """
         deadline = time.monotonic() + wait if wait > 0 else 0.0
         with self._outbox_condition:

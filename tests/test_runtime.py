@@ -752,6 +752,94 @@ def test_outbox_pop_returns_enqueued_result(tmp_path: Path) -> None:
     runtime.shutdown()
 
 
+def test_emit_turn_started_enqueues_marker(tmp_path: Path) -> None:
+    """emit_turn_started pushes a self-describing marker dict onto the outbox."""
+    runtime = AgentRuntime(_make_config_with_outbox(tmp_path))
+    try:
+        runtime._outbox.emit_turn_started("12345")
+        popped = runtime.outbox_pop("12345", wait=0.5)
+        assert popped == {"kind": "turn_started", "chat_id": "12345", "result": None}
+    finally:
+        runtime.shutdown()
+
+
+def test_emit_turn_started_noop_without_outbox(tmp_path: Path) -> None:
+    """Markers are skipped when no transport consumes the outbox."""
+    runtime = AgentRuntime(_make_config(tmp_path))
+    try:
+        runtime._outbox.emit_turn_started("12345")
+        assert runtime.outbox_pop("12345", wait=0.0) is None
+    finally:
+        runtime.shutdown()
+
+
+def test_wake_turn_enqueues_marker_before_result(tmp_path: Path) -> None:
+    """A non-silent wake turn's marker precedes its result in the outbox."""
+    runtime = AgentRuntime(_make_config_with_outbox(tmp_path))
+    runtime.start()
+    fake = FakeAgentEngine()
+    fake.replies = ["user reply", "wake reply"]
+    runtime.engine = fake
+    runtime.task_engine.engine = fake
+
+    runtime.process("chat-1", "hello")
+    runtime.outbox_pop("chat-1", wait=1.0)  # drain the user-turn result
+
+    runtime.wake_queue.enqueue(
+        WakeEvent(
+            id="wake-marker",
+            chat_id="chat-1",
+            reason="mesh",
+            priority=1,
+            scheduled_at=time.time(),
+            created_at=time.time(),
+            silent=False,
+            ready=False,
+        )
+    )
+    result = runtime.wake("chat-1", event_id="wake-marker")
+    assert result.reply == "wake reply"
+
+    marker = runtime.outbox_pop("chat-1", wait=1.0)
+    assert marker == {"kind": "turn_started", "chat_id": "chat-1", "result": None}
+    final = runtime.outbox_pop("chat-1", wait=1.0)
+    assert final is not None
+    assert final.reply == "wake reply"
+
+    runtime.shutdown()
+
+
+def test_silent_wake_enqueues_no_marker(tmp_path: Path) -> None:
+    """Silent wakes stay typing-only: no marker, no outbox result."""
+    runtime = AgentRuntime(_make_config_with_outbox(tmp_path))
+    runtime.start()
+    fake = FakeAgentEngine()
+    fake.replies = ["user reply", "quiet reply"]
+    runtime.engine = fake
+    runtime.task_engine.engine = fake
+
+    runtime.process("chat-1", "hello")
+    runtime.outbox_pop("chat-1", wait=1.0)
+
+    runtime.wake_queue.enqueue(
+        WakeEvent(
+            id="wake-silent",
+            chat_id="chat-1",
+            reason="mesh",
+            priority=1,
+            scheduled_at=time.time(),
+            created_at=time.time(),
+            silent=True,
+            ready=False,
+        )
+    )
+    runtime.wake("chat-1", event_id="wake-silent")
+
+    assert runtime.outbox_pop("chat-1", wait=0.5) is None
+
+    runtime.shutdown()
+
+
 def test_subagent_timeout_with_outbox_enqueues_notification(tmp_path: Path) -> None:
     runtime = AgentRuntime(_make_config_with_outbox(tmp_path))
 

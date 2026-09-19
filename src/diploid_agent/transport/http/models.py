@@ -86,6 +86,7 @@ class ChatResponse(BaseModel):
 
 class OutboxResponse(BaseModel):
     chat_id: str | None = None
+    kind: str = "result"
     result: ChatResponse | None = None
 
 

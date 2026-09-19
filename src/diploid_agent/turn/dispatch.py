@@ -179,6 +179,8 @@ class TurnDispatch(TurnPipeline):
             # Inside the try so _cleanup_turn always drains the count.
             # A user-typed /continue can double-type with the poller — harmless.
             self.runtime._typing.on_turn_started(chat_id)
+            if notify:
+                self.runtime._outbox.emit_turn_started(chat_id)
             outcome = self._call_engine(
                 chat_id=chat_id,
                 user_message=user_message,

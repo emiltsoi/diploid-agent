@@ -54,6 +54,17 @@ def register_sessions(
             catch=False,
         )
 
+    def _outbox_response(chat_id: str | None, item: Any) -> OutboxResponse:
+        # Marker dicts (e.g. turn_started) carry no ChatResult; serialize them
+        # with their own kind and a null result so consumers can branch.
+        if isinstance(item, dict) and item.get("kind") == "turn_started":
+            return OutboxResponse(
+                chat_id=chat_id or item.get("chat_id"),
+                kind="turn_started",
+                result=None,
+            )
+        return OutboxResponse(chat_id=chat_id, result=_to_response(item))
+
     @app.get("/outbox", response_model=OutboxResponse, dependencies=[Depends(_require_api_key)])
     def outbox_global(wait: float = Query(0.0, ge=0, le=60)) -> OutboxResponse:
         """Long-poll the next outbox item for any chat."""
@@ -69,9 +80,9 @@ def register_sessions(
         if raw is None:
             return OutboxResponse(chat_id=None, result=None)
         if isinstance(raw, tuple):
-            return OutboxResponse(chat_id=raw[0], result=_to_response(raw[1]))
+            return _outbox_response(raw[0], raw[1])
         # Fallback for older runtimes that don't support return_chat_id.
-        return OutboxResponse(chat_id=None, result=_to_response(raw))
+        return _outbox_response(None, raw)
 
     @app.get(
         "/outbox/{chat_id}", response_model=OutboxResponse, dependencies=[Depends(_require_api_key)]
@@ -87,7 +98,7 @@ def register_sessions(
         )
         if raw is None:
             return OutboxResponse(chat_id=chat_id, result=None)
-        return OutboxResponse(chat_id=chat_id, result=_to_response(raw))
+        return _outbox_response(chat_id, raw)
 
     @app.post("/resume", response_model=ChatResponse, dependencies=[Depends(_require_api_key)])
     def resume(req: ResumeRequest) -> ChatResponse:

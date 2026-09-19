@@ -298,6 +298,43 @@ def test_outbox_endpoint_enqueues_during_long_poll(outbox_client: TestClient) ->
     assert data["result"]["reply"] == "delayed reply"
 
 
+def test_outbox_endpoint_serializes_turn_marker(outbox_client: TestClient) -> None:
+    """A turn_started marker serializes with kind and a null result."""
+    runtime = outbox_client.app.state.runtime
+    runtime._outbox.emit_turn_started("chat-1")
+
+    resp = outbox_client.get("/outbox/chat-1", params={"wait": 0.5})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["chat_id"] == "chat-1"
+    assert data["kind"] == "turn_started"
+    assert data["result"] is None
+
+
+def test_outbox_global_serializes_turn_marker(outbox_client: TestClient) -> None:
+    """The global outbox carries the marker's chat_id through."""
+    runtime = outbox_client.app.state.runtime
+    runtime._outbox.emit_turn_started("chat-1")
+
+    resp = outbox_client.get("/outbox", params={"wait": 0.5})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["chat_id"] == "chat-1"
+    assert data["kind"] == "turn_started"
+    assert data["result"] is None
+
+
+def test_outbox_result_defaults_kind_to_result(outbox_client: TestClient) -> None:
+    """Normal outbox items keep the default kind so pollers can branch."""
+    runtime = outbox_client.app.state.runtime
+    runtime._enqueue_outbox("chat-1", ChatResult(reply="plain", turn_number=1))
+
+    resp = outbox_client.get("/outbox/chat-1", params={"wait": 0.5})
+    data = resp.json()
+    assert data["kind"] == "result"
+    assert data["result"]["reply"] == "plain"
+
+
 def test_agent_runtime_update_task_config_validates_in_place(client: TestClient) -> None:
     runtime = client.app.state.runtime
     cfg = runtime.get_task_config()
