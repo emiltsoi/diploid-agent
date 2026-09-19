@@ -44,6 +44,24 @@ logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T", bound=BaseModel)
 
+# Credential field-name suffixes masked by ``get_config`` — a new secret field
+# named ``*_token`` / ``*_api_key`` / ``*_key`` / ``*_secret`` / ``*_password``
+# is redacted structurally instead of requiring a list update.
+_SECRET_FIELD_SUFFIXES: tuple[str, ...] = ("token", "api_key", "_key", "secret", "password")
+
+
+def _redact_secret_fields(node: Any) -> None:
+    """Mask dict values whose key names look like credential fields."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(key, str) and key.lower().endswith(_SECRET_FIELD_SUFFIXES):
+                node[key] = "***"
+            else:
+                _redact_secret_fields(value)
+    elif isinstance(node, list):
+        for item in node:
+            _redact_secret_fields(item)
+
 
 class RuntimeConfigManager:
     """Live runtime configuration loading, updating, and persistence.
@@ -438,13 +456,7 @@ class RuntimeConfigManager:
         """Return the current live runtime configuration (excluding secrets)."""
         with self._lock:
             data = self.config.model_dump(mode="json", exclude={"secrets"})
-            # Redact nested credentials that can be loaded from environment variables.
-            telegram = data.get("harness", {}).get("telegram")
-            if isinstance(telegram, dict):
-                telegram["token"] = "***"
-            hindsight = data.get("harness", {}).get("memory", {}).get("hindsight")
-            if isinstance(hindsight, dict):
-                hindsight["api_key"] = "***"
+            _redact_secret_fields(data)
             return data
 
     def update_config(self, patch: dict[str, Any]) -> dict[str, Any]:

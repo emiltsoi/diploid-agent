@@ -37,6 +37,7 @@ def _test_config(tmp_path: Path) -> Config:
                     prompt_slot="self_state",
                     state_file="chat_curriculum.json",
                     max_prompt_chars=1024,
+                    config={"api_key": "plugin-secret"},
                 ),
             ],  # type: ignore[arg-type]
             telegram=TelegramConfig(enabled=False, token="dummy-token"),
@@ -69,6 +70,8 @@ def test_config_get_excludes_secrets(client: TestClient) -> None:
     assert data["harness"]["telegram"]["token"] == "***"
     assert data["harness"]["memory"]["hindsight"]["api_key"] == "***"
     assert data["harness"]["plugins"][0]["name"] == "curriculum"
+    # Secret-looking fields are redacted structurally at any depth.
+    assert data["harness"]["plugins"][0]["config"]["api_key"] == "***"
 
 
 def test_config_patch_telegram(client: TestClient) -> None:
