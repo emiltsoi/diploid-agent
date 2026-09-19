@@ -157,6 +157,7 @@ class TurnDispatch(TurnPipeline):
             use_model = pctx.model or use_model
             active = ActiveTurn(chat_id, record.session_id, user_message, time.time())
             self.runtime._active_turns[chat_id] = active
+            self.runtime._typing.on_turn_started(chat_id)
             is_new = False
             old_record = record
             session_number = record.session_number

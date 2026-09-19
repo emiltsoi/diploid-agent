@@ -539,6 +539,7 @@ class TurnPipeline(TurnComponent):
         with self._lock:
             active = self.runtime._active_turns.get(chat_id)
             self.runtime._active_turns.pop(chat_id, None)
+            self.runtime._typing.on_turn_finished(chat_id)
             self.runtime._plugins.on_sleeping(chat_id, record, reason="turn_end")
         if active is not None:
             with active._condition:

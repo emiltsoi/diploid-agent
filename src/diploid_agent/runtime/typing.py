@@ -20,6 +20,7 @@ class RuntimeTyping:
         self._notifier_fn = notifier_fn
         self._counts: dict[str, int] = {}
         self._threads: dict[str, tuple[threading.Thread, threading.Event]] = {}
+        self._turn_chats: set[str] = set()
         self._lock = threading.Lock()
 
     @property
@@ -39,18 +40,7 @@ class RuntimeTyping:
         if task.chat_id is None:
             return
         with self._lock:
-            count = self._counts.get(task.chat_id, 0)
-            self._counts[task.chat_id] = count + 1
-            if count == 0:
-                stop_event = threading.Event()
-                thread = threading.Thread(
-                    target=self._heartbeat,
-                    args=(task.chat_id, stop_event),
-                    daemon=True,
-                    name=f"typing-{task.chat_id}",
-                )
-                self._threads[task.chat_id] = (thread, stop_event)
-                thread.start()
+            self._increment(task.chat_id)
 
     def on_task_done(
         self,
@@ -61,16 +51,51 @@ class RuntimeTyping:
         if task.chat_id is None:
             return
         with self._lock:
-            count = self._counts.get(task.chat_id, 0)
-            if count <= 0:
+            self._decrement(task.chat_id)
+
+    def on_turn_started(self, chat_id: str) -> None:
+        """Type while a wake-driven turn runs (mesh/wake/cron/continuation).
+
+        Only call for turns with no poller-side typing context — user-message
+        turns already type via the poller. ``_turn_chats`` pairs starts with
+        finishes so a turn that never started cannot eat a task's count.
+        """
+        with self._lock:
+            self._turn_chats.add(chat_id)
+            self._increment(chat_id)
+
+    def on_turn_finished(self, chat_id: str) -> None:
+        with self._lock:
+            if chat_id not in self._turn_chats:
                 return
-            count -= 1
-            self._counts[task.chat_id] = count
-            if count == 0:
-                entry = self._threads.pop(task.chat_id, None)
-                if entry is not None:
-                    _, stop_event = entry
-                    stop_event.set()
+            self._turn_chats.discard(chat_id)
+            self._decrement(chat_id)
+
+    def _increment(self, chat_id: str) -> None:
+        count = self._counts.get(chat_id, 0)
+        self._counts[chat_id] = count + 1
+        if count == 0:
+            stop_event = threading.Event()
+            thread = threading.Thread(
+                target=self._heartbeat,
+                args=(chat_id, stop_event),
+                daemon=True,
+                name=f"typing-{chat_id}",
+            )
+            self._threads[chat_id] = (thread, stop_event)
+            thread.start()
+
+    def _decrement(self, chat_id: str) -> None:
+        count = self._counts.get(chat_id, 0)
+        if count <= 0:
+            return
+        count -= 1
+        self._counts[chat_id] = count
+        if count == 0:
+            entry = self._threads.pop(chat_id, None)
+            if entry is not None:
+                _, stop_event = entry
+                stop_event.set()
 
     def stop(self) -> None:
         """Stop all typing heartbeats."""
@@ -78,6 +103,7 @@ class RuntimeTyping:
             threads = list(self._threads.values())
             self._counts.clear()
             self._threads.clear()
+            self._turn_chats.clear()
         for _, stop_event in threads:
             stop_event.set()
         for thread, _ in threads:

@@ -36,6 +36,7 @@ from diploid_agent.models import (
     RuntimeStatus,
     SessionRecord,
 )
+from diploid_agent.notifier import NoopNotifier
 from diploid_agent.plan.manager import PlanManager
 from diploid_agent.plan.models import Plan, Task
 from diploid_agent.plugin_incidents import PluginIncidentStore
@@ -193,7 +194,23 @@ class AgentRuntime(RuntimeAPI):
         if self._task_board is not None:
             self._task_board.start()
             self.plan_manager.on_change = self._task_board.handle
-        self._typing = RuntimeTyping(notifier_fn=lambda: self.notifier)
+        self._outbox = RuntimeOutbox(
+            config=config,
+            metrics=self.metrics,
+            store=self._store,
+            lock=self._lock,
+            notifier_fn=lambda: self.notifier,
+        )
+
+        # Typing presence uses a direct notifier so it still works when
+        # outbox_delivery makes self.notifier a no-op — the same pattern the
+        # task board uses. A dedicated instance avoids poller send-locks.
+        typing_notifier = (
+            self._outbox._create_direct_notifier()
+            if config.harness.notifications.enabled
+            else NoopNotifier()
+        )
+        self._typing = RuntimeTyping(notifier_fn=lambda: typing_notifier)
         self.task_engine = TaskEngine(
             self.plan_manager,
             self.event_bus,
@@ -218,14 +235,6 @@ class AgentRuntime(RuntimeAPI):
             event_bus=self.event_bus,
             sessions_root=self.sessions_root,
             wake_queue=self.wake_queue,
-        )
-
-        self._outbox = RuntimeOutbox(
-            config=config,
-            metrics=self.metrics,
-            store=self._store,
-            lock=self._lock,
-            notifier_fn=lambda: self.notifier,
         )
 
         self.instance_manager = InstanceManager(
