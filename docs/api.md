@@ -257,6 +257,7 @@ Response when a result is available:
 ```json
 {
   "chat_id": "test-1",
+  "kind": "result",
   "result": {
     "reply": "The subagent finished.",
     "notice": null,
@@ -265,10 +266,19 @@ Response when a result is available:
     "session_id": null,
     "session_number": null,
     "turn_number": null,
-    "metrics": null
+    "metrics": null,
+    "transient": false
   }
 }
 ```
+
+`kind` is `"result"` for normal items. A non-silent wake turn first enqueues a
+`{"chat_id": "...", "kind": "turn_started", "result": null}` marker so the
+consumer can register a live stream display before the real result arrives;
+older consumers see `result: null` and skip it harmlessly. A result with
+`"transient": true` is an interim item (outbox heartbeat nudge, mesh float,
+restart/subagent notice) — it is never a streamed turn's final result and
+should be delivered standalone.
 
 ## `GET /outbox/{chat_id}`
 
@@ -910,7 +920,7 @@ Less commonly used routes, all present on the same ingress:
 - `GET /prometheus` — Prometheus-format metrics. Requires `X-API-Key`.
 - `POST /plugin/enable`, `POST /plugin/reload`, `POST /plugins/create` — plugin enable/reload and chat-scoped plugin creation. Require `X-API-Key`.
 - `GET /plugins/{chat_id}` — list plugins enabled for a chat. Requires `X-API-Key`.
-- `GET /plan/list`, `GET /plan/{plan_id}` — plan listing. `POST /plan/task/start`, `POST /plan/task/done` — task lifecycle. All require `X-API-Key`.
+- `GET /plan/list`, `GET /plan/{plan_id}` — plan listing (`PlanResponse` carries `origin`: `"system"` for harness-internal plans, `"agent"` for agent-authored ones). `POST /plan/task/start`, `POST /plan/task/done`, `POST /plan/task/fail` — task lifecycle. All require `X-API-Key`.
 - `POST /mesh/chat-map`, `POST /mesh/{chat_id}/notify` — mesh chat mapping and notification. Require `X-API-Key`.
 - `POST /mesh/receive`, `POST /plugins/openclaw-mesh/webhook`, `POST /ingress/{protocol}` — inbound mesh/webhook receivers. Unauthenticated (mesh payloads carry their own Ed25519 signatures).
 

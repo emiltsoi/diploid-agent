@@ -63,6 +63,21 @@ placeholder is updated with a liveness suffix such as `(still working, 1m
 `⏳ Still thinking... (1m 30s)` result to the outbox after 30 seconds, and every
 90 seconds after that, so the user knows the agent is alive.
 
+Wake-driven turns also get the same live rendering as user turns. When a
+non-silent wake turn starts, the runtime pushes a `turn_started` marker onto
+the outbox ahead of the result; the `DeliveryWorker` consumes it inline and
+registers a per-chat `WakeDisplayWorker`, which long-polls `GET
+/turn/{chat_id}` and streams the partial reply into a `...` placeholder —
+posted eagerly at T+0 so think/tool phases pulse visibly — and finalizes it
+once the turn's real `ChatResult` routes through. Interim outbox items
+(heartbeat nudges, mesh floats, restart/subagent notices) are marked
+`transient` and delivered as standalone messages instead of finishing the
+stream; the display has a hard 45-minute cap for turns that die without a
+result. Wake turns also get typing presence for their whole duration. Gates:
+`harness.telegram.wake_stream` (default `true`) for the streamed display —
+silent wakes stay typing-only — and `harness.notifications.outbox_delivery`
+for the marker itself.
+
 The same outbox path is used for the optional mesh Telegram float. When
 `harness.notifications.mesh_telegram_float` is `true`, the harness inserts a
 system message such as `System: [mesh] aurelia → vesper: pong` into the outbox

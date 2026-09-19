@@ -12,6 +12,13 @@ A separate `diploid-waker` process polls the queue and calls `POST /wake`.
 process the same chat at once. A wake with `silent=True` runs the turn but
 does not send an outbound message.
 
+Non-silent wake turns render live in Telegram: the runtime emits a
+`turn_started` outbox marker before the turn runs, the poller's
+`WakeDisplayWorker` streams the partial reply into a `...` placeholder, and
+the final result finalizes it once. Silent wakes get typing presence but no
+streamed display. See [Telegram](telegram.md#outbox-delivery) for the full
+pipeline and the `wake_stream` / `outbox_delivery` gates.
+
 The wake queue is for one-shot events. Recurring, config-declared jobs —
 housekeeping, phantom LLM runs, digests — belong to the
 [cron scheduler](cron.md): two substrates, one durable on-disk queue each.

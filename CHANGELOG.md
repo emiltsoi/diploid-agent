@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+### Added
+
+- **Wake-driven turns stream live in Telegram**: the runtime emits a
+  `turn_started` marker through the outbox when a non-silent wake turn begins,
+  the poller's `DeliveryWorker` consumes it inline and registers a per-chat
+  `WakeDisplayWorker`, which posts `...` eagerly at T+0 and streams the
+  partial reply into it (same `StreamDisplay` machinery as user turns),
+  finalizing once when the real `ChatResult` arrives. Hard 45-minute cap;
+  gated by `harness.telegram.wake_stream` (default `true`) and
+  `notifications.outbox_delivery` for the marker.
+- **Typing presence for wake turns**: `RuntimeTyping` fires for the whole
+  duration of any wake-driven turn (including silent wakes, which get typing
+  but no streamed display), so cron/self-wake turns show activity instead of
+  looking dead.
+- **Telegram "/" command menu**: `_sync_bot_menu()` pushes all registered
+  commands with descriptions via `setMyCommands` at poller start, overwriting
+  the whole menu each boot so it self-heals as commands evolve. Command names
+  are filtered through Telegram's legal alphabet before posting — a future
+  illegal name degrades to "absent from menu" instead of a rejected sync — and
+  a Telegram failure warns without blocking the poller. Gated by
+  `harness.telegram.bot_menu` (default `true`).
+- **Agent-authored plans**: `Plan.origin` (`"system"` | `"agent"`)
+  distinguishes self-authored plans, threaded through `create_plan` and
+  surfaced on `PlanResponse`; `POST /plan/task/fail` exposes the previously
+  unreachable `fail_task` path, mirroring `plan_task_done` with an
+  already-failed guard. Prepares the diploid-harness MCP plan tools; the
+  create side defaults task type to `noop` since `start_task` executes.
+
+### Changed
+
+- **Renamed `/graceful-restart` → `/graceful_restart`** (Telegram command).
+  Telegram menu names allow only lowercase letters, digits, and underscores,
+  so the hyphenated form could not be advertised. The HTTP route
+  `POST /graceful-restart` is unchanged; no alias is retained.
+- Outbox responses now carry `kind` (`"result"` default; `"turn_started"`
+  markers arrive with `result: null` and are skipped harmlessly by older
+  consumers) and `ChatResult.transient` marks interim items (outbox heartbeat
+  nudges, mesh floats, restart/subagent notices).
+
+### Fixed
+
+- Transient outbox items no longer finalize a wake-turn stream: a heartbeat
+  nudge arriving while a wake turn was still thinking was routed to
+  `WakeDisplayWorker.finish()`, killing the placeholder before the real reply
+  and causing a later double-post. Transients are now delivered standalone.
+- Wake-turn typing now starts inside the `try` that owns cleanup, so a turn
+  dying before the typing loop cannot leave the typing task orphaned.
+- The placeholder-cleanup sweep no longer picks up a chat's `.board.json`
+  tracking record as if it were a stale placeholder.
+
 ## 0.6.9 — 2026-09-19
 
 ### Added
