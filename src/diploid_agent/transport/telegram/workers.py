@@ -309,6 +309,9 @@ class WakeDisplayWorker(threading.Thread):
     # turn_status stuck on running with no result ever landing.
     _MAX_SECONDS = 45 * 60
     # Grace window for the routed result once status leaves "running".
+    # Residual edge: a result landing after this window finds no display and
+    # direct-sends — the user sees the reply twice (streamed + fresh). That
+    # fails open deliberately; a tombstone risks eating replies entirely.
     _RESULT_GRACE = 30.0
 
     def __init__(self, poller: TelegramPoller, chat_id: int):
@@ -371,6 +374,12 @@ class DeliveryWorker(threading.Thread):
     global outbox consumer that pulls the next item for *any* chat and starts
     per-chat delivery on demand. The global worker is the default starting with
     this harness; per-chat workers remain for tests and callers that need them.
+
+    Marker routing relies on single-consumer FIFO: a ``turn_started`` marker
+    always pops before its result on the same worker. Only the global worker
+    is ever instantiated — if per-chat workers ever run alongside it, a result
+    could route before its marker registers the display (fails open: the reply
+    direct-sends after a placeholder flicker).
     """
 
     _POLL_WAIT = 5.0

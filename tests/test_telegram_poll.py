@@ -2458,26 +2458,27 @@ def test_delivery_worker_sends_outbox_result(tmp_path: Path) -> None:
 def _make_wake_poller(
     tmp_path: Path,
     runtime: _FakeDeliveryRuntime,
-) -> tuple[TelegramPoller, list[tuple[int, str]], list[tuple[int, str]]]:
-    """Poller with send/edit captures for wake-display tests."""
+) -> tuple[TelegramPoller, SimpleNamespace]:
+    """Poller with send/edit/delete captures for wake-display tests."""
     poller = TelegramPoller(
         token="dummy",
         runtime=runtime,  # type: ignore[arg-type]
         state_dir=tmp_path / ".poller-placeholders",
     )
-    sent: list[tuple[int, str]] = []
-    edits: list[tuple[int, str]] = []
+    io = SimpleNamespace(sent=[], edits=[], deleted=[], placeholders=[])
     sent_ids = iter(range(9000, 9999))
 
-    poller._send_message = lambda chat_id, text, **kw: next(sent_ids)  # type: ignore[method-assign]
+    poller._send_message = lambda chat_id, text, **kw: (  # type: ignore[method-assign]
+        io.placeholders.append((chat_id, text)) or next(sent_ids)
+    )
     poller._send_text = lambda chat_id, text, **kw: (  # type: ignore[method-assign]
-        sent.append((chat_id, text)) or [next(sent_ids)]
+        io.sent.append((chat_id, text)) or [next(sent_ids)]
     )
     poller._edit_message_text = lambda chat_id, message_id, text: (  # type: ignore[method-assign]
-        edits.append((chat_id, text))
+        io.edits.append((chat_id, text))
     )
-    poller._delete_message = lambda chat_id, message_id: None  # type: ignore[method-assign]
-    return poller, sent, edits
+    poller._delete_message = lambda chat_id, message_id: io.deleted.append(message_id)  # type: ignore[method-assign]
+    return poller, io
 
 
 def test_wake_display_streams_marker_result(tmp_path: Path) -> None:
@@ -2497,7 +2498,7 @@ def test_wake_display_streams_marker_result(tmp_path: Path) -> None:
     runtime.turn_status = lambda chat_id, wait=0.0: next(  # type: ignore[attr-defined]
         statuses, {"status": "idle", "message_text": "", "thought_text": ""}
     )
-    poller, sent, _edits = _make_wake_poller(tmp_path, runtime)
+    poller, io = _make_wake_poller(tmp_path, runtime)
     poller._last_user_message_ids[12345] = 50
 
     worker = DeliveryWorker(poller, 12345)
@@ -2506,7 +2507,7 @@ def test_wake_display_streams_marker_result(tmp_path: Path) -> None:
     worker.stop()
     worker.join(timeout=2.0)
 
-    assert any("wake reply" in text for _, text in sent)
+    assert any("wake reply" in text for _, text in io.sent)
     assert poller._wake_displays == {}
     assert not (tmp_path / ".poller-placeholders" / "12345.json").exists()
 
@@ -2519,7 +2520,7 @@ def test_wake_display_marker_swallowed_for_non_telegram_chat(tmp_path: Path) -> 
             ChatResult(reply="normal reply", turn_number=1),
         ]
     )
-    poller, sent, _edits = _make_wake_poller(tmp_path, runtime)
+    poller, io = _make_wake_poller(tmp_path, runtime)
 
     worker = DeliveryWorker(poller, 12345)
     worker.start()
@@ -2528,7 +2529,7 @@ def test_wake_display_marker_swallowed_for_non_telegram_chat(tmp_path: Path) -> 
     worker.join(timeout=2.0)
 
     assert poller._wake_displays == {}
-    assert sent == [(12345, "normal reply")]
+    assert io.sent == [(12345, "normal reply")]
 
 
 def test_wake_display_disabled_by_flag(tmp_path: Path) -> None:
@@ -2544,7 +2545,7 @@ def test_wake_display_disabled_by_flag(tmp_path: Path) -> None:
         "message_text": "",
         "thought_text": "",
     }
-    poller, sent, _edits = _make_wake_poller(tmp_path, runtime)
+    poller, io = _make_wake_poller(tmp_path, runtime)
     poller._static_telegram_config = TelegramConfig(wake_stream=False)
 
     worker = DeliveryWorker(poller, 12345)
@@ -2554,7 +2555,7 @@ def test_wake_display_disabled_by_flag(tmp_path: Path) -> None:
     worker.join(timeout=2.0)
 
     assert poller._wake_displays == {}
-    assert sent == [(12345, "wake reply")]
+    assert io.sent == [(12345, "wake reply")]
 
 
 def test_wake_display_finalize_without_routed_result(
@@ -2576,7 +2577,7 @@ def test_wake_display_finalize_without_routed_result(
     runtime.turn_status = lambda chat_id, wait=0.0: next(  # type: ignore[attr-defined]
         statuses, {"status": "idle", "message_text": "", "thought_text": ""}
     )
-    poller, sent, _edits = _make_wake_poller(tmp_path, runtime)
+    poller, io = _make_wake_poller(tmp_path, runtime)
 
     worker = WakeDisplayWorker(poller, 12345)
     poller._wake_displays[12345] = worker
@@ -2584,7 +2585,44 @@ def test_wake_display_finalize_without_routed_result(
     worker.join(timeout=10.0)
 
     assert not worker.is_alive()
-    assert any("partial text" in text for _, text in sent)
+    assert any("partial text" in text for _, text in io.sent)
+    assert poller._wake_displays == {}
+
+
+def test_wake_display_stale_marker_leaves_no_message(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A marker for an already-terminal turn must not leave a stray message.
+
+    The outcome today is a benign flicker — the display creates a "..."
+    placeholder, gets an empty reply, and deletes it. This pins that
+    outcome so it can't quietly regress into a visible post.
+    """
+    from diploid_agent.transport.telegram.workers import WakeDisplayWorker
+
+    monkeypatch.setattr(WakeDisplayWorker, "_RESULT_GRACE", 0.3)
+    runtime = _FakeDeliveryRuntime(
+        outbox=[{"kind": "turn_started", "chat_id": "12345", "result": None}]
+    )
+    runtime.turn_status = lambda chat_id, wait=0.0: {  # type: ignore[attr-defined]
+        "status": "idle",
+        "message_text": "",
+        "thought_text": "",
+    }
+    poller, io = _make_wake_poller(tmp_path, runtime)
+
+    worker = DeliveryWorker(poller, 12345)
+    worker.start()
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if io.deleted and not poller._wake_displays:
+            break
+        time.sleep(0.1)
+    worker.stop()
+    worker.join(timeout=2.0)
+
+    assert io.sent == []
+    assert io.deleted  # the "..." placeholder was deleted, not left behind
     assert poller._wake_displays == {}
 
 
