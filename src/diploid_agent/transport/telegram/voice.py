@@ -12,6 +12,7 @@ import logging
 import shlex
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -91,7 +92,11 @@ def transcribe(path: Path, config: TelegramConfig) -> str | None:
 
 _TTS_TIMEOUT = 90.0
 
-_voice_cache: dict[str, Any] = {}
+# Loaded PiperVoice instances (~60MB+ RSS each) are evicted after this idle
+# window so a quiet bot does not pin the model resident forever.
+_VOICE_IDLE_TTL = 300.0
+
+_voice_cache: dict[str, tuple[Any, float]] = {}
 
 
 def _synthesize_command(text: str, command: str, work_dir: Path) -> Path | None:
@@ -138,11 +143,18 @@ def _synthesize_piper(text: str, model_path: str, work_dir: Path) -> Path | None
     except ImportError:
         logger.warning("tts_provider=piper but piper-tts is not installed in the poller env")
         return None
+    now = time.monotonic()
     with _model_cache_lock:
-        voice = _voice_cache.get(model_path)
-        if voice is None:
-            voice = PiperVoice.load(model_path)
-            _voice_cache[model_path] = voice
+        for key, (_, last_used) in list(_voice_cache.items()):
+            if now - last_used > _VOICE_IDLE_TTL:
+                _voice_cache.pop(key, None)
+        entry = _voice_cache.get(model_path)
+        if entry is None:
+            entry = (PiperVoice.load(model_path), now)
+        else:
+            entry = (entry[0], now)
+        _voice_cache[model_path] = entry
+        voice = entry[0]
 
     import wave
 
@@ -150,8 +162,14 @@ def _synthesize_piper(text: str, model_path: str, work_dir: Path) -> Path | None
     try:
         # piper-tts >= 1.3: synthesize(text) yields AudioChunk objects;
         # older releases take a wave file handle as the second argument.
+        # Only the call is shimmed — a TypeError raised mid-synthesis is a real
+        # failure, not a signature mismatch, and must not double-run the old API.
         try:
             chunks = voice.synthesize(text)
+        except TypeError:
+            with wave.open(str(wav_path), "wb") as wav:
+                voice.synthesize(text, wav)
+        else:
             params_set = False
             with wave.open(str(wav_path), "wb") as wav:
                 for chunk in chunks:
@@ -161,9 +179,6 @@ def _synthesize_piper(text: str, model_path: str, work_dir: Path) -> Path | None
                         wav.setframerate(chunk.sample_rate)
                         params_set = True
                     wav.writeframes(chunk.audio_int16_bytes)
-        except TypeError:
-            with wave.open(str(wav_path), "wb") as wav:
-                voice.synthesize(text, wav)
     except Exception:
         logger.exception("piper synthesis failed")
         return None

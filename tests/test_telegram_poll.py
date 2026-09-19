@@ -3329,3 +3329,117 @@ def test_synthesize_bounded_passthrough_and_raise(
         pass
     else:
         raise AssertionError("synthesize exception should propagate")
+
+class _FakeAudioChunk:
+    sample_channels = 1
+    sample_width = 2
+    sample_rate = 22050
+    audio_int16_bytes = b"\x00\x01" * 64
+
+def _fake_ffmpeg(monkeypatch: Any, voice_mod: Any) -> None:
+    def run(cmd: list[str], **kw: Any) -> SimpleNamespace:
+        Path(cmd[-1]).write_bytes(b"OggS" + b"\x00" * 32)
+        return SimpleNamespace(returncode=0, stderr=b"")
+
+    monkeypatch.setattr(voice_mod, "subprocess", SimpleNamespace(run=run))
+
+def test_piper_voice_cache_idle_eviction(tmp_path: Path, monkeypatch: Any) -> None:
+    """Loaded piper voices are evicted after the idle TTL."""
+    import sys
+
+    from diploid_agent.transport.telegram import voice as voice_mod
+
+    loads: list[str] = []
+
+    class FakePiperVoice:
+        @classmethod
+        def load(cls, path: str) -> Self:
+            loads.append(path)
+            return cls()
+
+        def synthesize(self, text: str) -> Any:
+            return iter([_FakeAudioChunk()])
+
+    monkeypatch.setitem(sys.modules, "piper", SimpleNamespace(PiperVoice=FakePiperVoice))
+    _fake_ffmpeg(monkeypatch, voice_mod)
+
+    stale_voice = object()
+    voice_mod._voice_cache["/stale.onnx"] = (
+        stale_voice,
+        time.monotonic() - voice_mod._VOICE_IDLE_TTL - 1.0,
+    )
+    try:
+        out = voice_mod._synthesize_piper("hi", "/new.onnx", tmp_path)
+        assert out is not None
+        assert "/stale.onnx" not in voice_mod._voice_cache
+        assert loads == ["/new.onnx"]
+    finally:
+        voice_mod._voice_cache.clear()
+
+def test_piper_typeerror_mid_iteration_is_real_failure(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A TypeError while consuming synthesis output must not retry the legacy API."""
+    import sys
+
+    from diploid_agent.transport.telegram import voice as voice_mod
+
+    calls: list[int] = []
+
+    class FakePiperVoice:
+        @classmethod
+        def load(cls, path: str) -> Self:
+            return cls()
+
+        def synthesize(self, *args: Any) -> Any:
+            calls.append(len(args))
+            if len(args) != 1:
+                raise AssertionError("legacy path must not be used")
+
+            def gen() -> Any:
+                yield _FakeAudioChunk()
+                raise TypeError("mid-stream failure")
+
+            return gen()
+
+    monkeypatch.setitem(sys.modules, "piper", SimpleNamespace(PiperVoice=FakePiperVoice))
+    _fake_ffmpeg(monkeypatch, voice_mod)
+
+    try:
+        assert voice_mod._synthesize_piper("hi", "/m.onnx", tmp_path) is None
+        assert calls == [1]
+    finally:
+        voice_mod._voice_cache.clear()
+
+def test_piper_legacy_signature_fallback(tmp_path: Path, monkeypatch: Any) -> None:
+    """Old piper releases (synthesize(text, wav)) still work via the TypeError shim."""
+    import sys
+
+    from diploid_agent.transport.telegram import voice as voice_mod
+
+    calls: list[int] = []
+
+    class FakePiperVoice:
+        @classmethod
+        def load(cls, path: str) -> Self:
+            return cls()
+
+        def synthesize(self, *args: Any) -> Any:
+            calls.append(len(args))
+            if len(args) == 1:
+                raise TypeError("synthesize() missing wav arg")
+            args[1].setnchannels(1)
+            args[1].setsampwidth(2)
+            args[1].setframerate(22050)
+            args[1].writeframes(b"\x00\x01" * 64)
+            return None
+
+    monkeypatch.setitem(sys.modules, "piper", SimpleNamespace(PiperVoice=FakePiperVoice))
+    _fake_ffmpeg(monkeypatch, voice_mod)
+
+    try:
+        out = voice_mod._synthesize_piper("hi", "/m.onnx", tmp_path)
+        assert out is not None
+        assert calls == [1, 2]
+    finally:
+        voice_mod._voice_cache.clear()
