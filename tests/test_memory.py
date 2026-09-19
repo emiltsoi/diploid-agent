@@ -169,6 +169,61 @@ def test_hindsight_spool_flush_checks_success_and_keeps_invalid_lines(
     assert len(posted[0]) == 2
 
 
+def test_hindsight_append_system_note_spools_and_posts(
+    tmp_path: Path, monkeypatch
+) -> None:
+    backend = HindsightMemoryBackend(
+        base_url="http://127.0.0.1:1",
+        bank="test",
+        chat_id="chat-1",
+        sessions_root=tmp_path,
+        spool_path=tmp_path / "spool.jsonl",
+    )
+    monkeypatch.setattr(backend, "health", lambda: True)
+    posted: list[list[dict]] = []
+
+    class OKResp:
+        status_code = 200
+
+        def json(self) -> dict:
+            return {"success": True}
+
+    def fake_post(url: str, *, json: dict, **kwargs: Any) -> OKResp:
+        posted.append(json["items"])
+        return OKResp()
+
+    monkeypatch.setattr(backend._client, "post", fake_post)
+    backend.append_system_note("[mesh-dsn] delivered to vesper")
+
+    transcript = tmp_path / "chat-1" / "chat_transcript.jsonl"
+    entries = [json.loads(line) for line in transcript.read_text().splitlines()]
+    assert entries == [{"role": "system", "content": "[mesh-dsn] delivered to vesper"}]
+
+    assert len(posted) == 1
+    assert posted[0][0]["content"] == "[mesh-dsn] delivered to vesper"
+    assert posted[0][0]["context"] == "system"
+    assert "system_note" in posted[0][0]["tags"]
+
+
+def test_hindsight_append_system_note_spools_when_unhealthy(tmp_path: Path) -> None:
+    backend = HindsightMemoryBackend(
+        base_url="http://127.0.0.1:65535",
+        bank="test",
+        chat_id="chat-1",
+        sessions_root=tmp_path,
+        spool_path=tmp_path / "spool.jsonl",
+    )
+    backend.append_system_note("note while down")
+
+    spool = tmp_path / "spool.jsonl"
+    assert spool.exists()
+    lines = spool.read_text().splitlines()
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["content"] == "note while down"
+    assert payload["context"] == "system"
+
+
 def test_hindsight_spool_flush_does_not_flush_on_failure(tmp_path: Path, monkeypatch) -> None:
     spool_path = tmp_path / "spool.jsonl"
     spool_path.write_text(json.dumps({"content": "good1", "document_id": "d1"}) + "\n")

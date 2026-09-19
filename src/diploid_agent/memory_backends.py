@@ -596,6 +596,15 @@ class HindsightMemoryBackend(MemoryBackend):
         """Append a note locally and queue it for hindsight if available."""
         if self._fallback is not None:
             self._fallback.append_system_note(text)
+        item = MemoryItem(content=text, context="system", tags=["system_note"])
+        valid, _rejected = self._partition_items([item])
+        if valid:
+            self._spool(valid)
+            try:
+                self._flush_spool()
+            except Exception as exc:  # noqa: BLE001
+                # Spool is durable; the next retain/flush retries delivery.
+                logger.debug("Hindsight system-note flush failed (will retry): %s", exc)
 
     def close(self) -> None:
         self._client.close()
