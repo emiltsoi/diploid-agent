@@ -3171,3 +3171,40 @@ def test_file_block_caption_preserved_on_failure(tmp_path: Path) -> None:
     )
     poller._send_text(5, "```file\ngone.txt\nkeep these words\n```")
     assert sent == ["[file] gone.txt\nkeep these words"]
+
+# ---------------------------------------------------------------------------
+# P3 review fixes — turn-worker ordering, delivery backoff, voice, stream caps
+# ---------------------------------------------------------------------------
+
+def test_placeholder_sent_before_attachment_ingest(tmp_path: Path) -> None:
+    """The "..." placeholder is visible before any download/STT work begins."""
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    chat_input = ChatInput(
+        chat_id=12345,
+        message_id=1,
+        text="hi",
+        attachments=[TelegramAttachment(kind="document", file_id="f1")],
+    )
+    worker = TurnWorker(poller, chat_input)
+    order: list[str] = []
+
+    poller._send_message = lambda chat_id, text, **kw: order.append("placeholder") or 100
+
+    def fake_ingest(ci: ChatInput) -> ChatInput:
+        order.append("ingest")
+        return ci
+
+    poller._ingest_attachments = fake_ingest
+    poller._api = lambda method, **kw: {"ok": True, "result": {}}
+    poller._save_placeholder_state = lambda *a, **kw: None
+    poller._remove_placeholder_state = lambda *a, **kw: None
+    worker._harness_chat = lambda ci: {"reply": "ok"}
+    worker._stream_turn = lambda future, message_id, thought_id: {"reply": "ok"}
+
+    worker._run_turn(chat_input)
+
+    assert order[:2] == ["placeholder", "ingest"]
