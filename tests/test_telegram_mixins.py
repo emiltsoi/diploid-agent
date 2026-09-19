@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from diploid_agent.models import ChatResult
 from diploid_agent.transport.telegram.commands import TelegramCommandMixin
 from diploid_agent.transport.telegram.models import ChatInput
@@ -41,6 +44,52 @@ def test_make_preview_long_text() -> None:
     preview, length = TelegramStateMixin._make_preview(text, max_chars=10)
     assert len(preview) <= 10
     assert length == 300
+
+
+class _StateHost(TelegramStateMixin):
+    """Minimal host for state-mixin methods under test."""
+
+    def __init__(self, state_dir: Path) -> None:
+        self.state_dir = state_dir
+        self.api_calls: list[tuple[str, dict]] = []
+        self.deleted: list[tuple[int, int]] = []
+
+    def _api(self, method: str, **kwargs):
+        self.api_calls.append((method, kwargs))
+        return {}
+
+    def _delete_message(self, chat_id: int, message_id: int) -> None:
+        self.deleted.append((chat_id, message_id))
+
+
+def test_cleanup_orphaned_placeholders_skips_ask_files(tmp_path: Path) -> None:
+    """Pending-question files are swept silently, not edited as reply placeholders."""
+    host = _StateHost(tmp_path)
+    (tmp_path / "111.json").write_text(
+        json.dumps({"chat_id": 111, "message_id": 10, "thought_id": 11})
+    )
+    (tmp_path / "111.ask.json").write_text(
+        json.dumps(
+            {
+                "chat_id": 111,
+                "message_id": 20,
+                "question": "Pick one",
+                "options": ["a", "b"],
+                "cancellable": False,
+            }
+        )
+    )
+
+    host._cleanup_orphaned_placeholders()
+
+    edits = [kw for method, kw in host.api_calls if method == "editMessageText"]
+    assert len(edits) == 1
+    assert edits[0]["message_id"] == 10
+    # The question message (id 20) is never edited or deleted — only the
+    # placeholder's thought message is removed.
+    assert host.deleted == [(111, 11)]
+    assert not (tmp_path / "111.json").exists()
+    assert not (tmp_path / "111.ask.json").exists()
 
 
 def test_harness_help_returns_string() -> None:

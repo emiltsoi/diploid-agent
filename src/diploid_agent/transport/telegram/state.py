@@ -268,6 +268,8 @@ class TelegramStateMixin:
         if not self.state_dir.exists():
             return
         for path in self.state_dir.glob("*.json"):
+            if path.name.endswith(".ask.json"):
+                continue
             try:
                 state = json.loads(path.read_text())
                 chat_id = state.get("chat_id")
