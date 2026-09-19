@@ -241,3 +241,4 @@ def synthesize_bounded(
         return None
     if outcome[1] is not None:
         raise outcome[1]
+    return outcome[0]
