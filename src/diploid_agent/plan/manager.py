@@ -160,6 +160,7 @@ class PlanManager:
         description: str = "",
         chat_id: str | None = None,
         tasks: list[Task] | None = None,
+        origin: str = "system",
     ) -> Plan:
         tasks = tasks or []
         for task in tasks:
@@ -171,6 +172,7 @@ class PlanManager:
             name=name,
             description=description,
             chat_id=chat_id,
+            origin=origin,
             tasks=tasks,
             created_at=now,
             updated_at=now,

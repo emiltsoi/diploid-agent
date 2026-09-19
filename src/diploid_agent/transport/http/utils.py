@@ -42,6 +42,7 @@ def _plan_to_response(plan: Plan) -> PlanResponse:
         name=plan.name,
         status=plan.status.value,
         chat_id=plan.chat_id,
+        origin=plan.origin,
         tasks=[_task_to_response(t) for t in plan.tasks],
         created_at=plan.created_at,
         updated_at=plan.updated_at,

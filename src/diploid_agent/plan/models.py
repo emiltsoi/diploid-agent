@@ -94,6 +94,9 @@ class Plan(BaseModel):
     description: str = ""
     status: PlanStatus = PlanStatus.DRAFT
     chat_id: str | None = None
+    # Who authored the plan: "system" for harness-internal creators
+    # (dispatch/cron/actions), "agent" for plans an agent authors itself.
+    origin: str = "system"
     tasks: list[Task] = Field(default_factory=list)
     created_at: float = Field(default_factory=time.time)
     updated_at: float = Field(default_factory=time.time)

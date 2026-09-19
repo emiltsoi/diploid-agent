@@ -165,6 +165,7 @@ class RuntimeAPI(abc.ABC):
         description: str = "",
         chat_id: str | None = None,
         tasks: list[Any] | None = None,
+        origin: str = "system",
     ) -> Any:
         """Create a new plan with the given tasks."""
 
@@ -181,6 +182,15 @@ class RuntimeAPI(abc.ABC):
         log: str = "",
     ) -> Any:
         """Manually mark a plan task as done."""
+
+    @abc.abstractmethod
+    def plan_task_fail(
+        self,
+        plan_id: str,
+        task_id: str,
+        log: str = "",
+    ) -> Any:
+        """Manually mark a plan task as failed."""
 
     @abc.abstractmethod
     def subagent_start(

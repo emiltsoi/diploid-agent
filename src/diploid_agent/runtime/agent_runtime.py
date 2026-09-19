@@ -1116,10 +1116,11 @@ class AgentRuntime(RuntimeAPI):
         description: str = "",
         chat_id: str | None = None,
         tasks: list[Task] | None = None,
+        origin: str = "system",
     ) -> Plan:
         """Create a new plan."""
         return self._actions.plan_create(
-            name, description=description, chat_id=chat_id, tasks=tasks
+            name, description=description, chat_id=chat_id, tasks=tasks, origin=origin
         )
 
     def plan_task_start(self, plan_id: str, task_id: str | None = None) -> Task:
@@ -1135,6 +1136,15 @@ class AgentRuntime(RuntimeAPI):
     ) -> Task:
         """Manually mark a task as done and emit the completion event."""
         return self._actions.plan_task_done(plan_id, task_id, result=result, log=log)
+
+    def plan_task_fail(
+        self,
+        plan_id: str,
+        task_id: str,
+        log: str = "",
+    ) -> Task:
+        """Manually mark a task as failed and emit the failure event."""
+        return self._actions.plan_task_fail(plan_id, task_id, log=log)
 
     @locked
     def subagent_start(

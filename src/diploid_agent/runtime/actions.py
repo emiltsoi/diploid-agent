@@ -476,10 +476,11 @@ class RuntimeActions:
         description: str = "",
         chat_id: str | None = None,
         tasks: list[Task] | None = None,
+        origin: str = "system",
     ) -> Plan:
         """Create a new plan."""
         return self.plan_manager.create_plan(
-            name, description=description, chat_id=chat_id, tasks=tasks or []
+            name, description=description, chat_id=chat_id, tasks=tasks or [], origin=origin
         )
 
     def plan_task_start(self, plan_id: str, task_id: str | None = None) -> Task:
@@ -511,6 +512,32 @@ class RuntimeActions:
                         "plan_id": plan_id,
                         "task_id": task_id,
                         "result": result,
+                        "log": log,
+                    },
+                )
+            )
+        return task
+
+    @_actions_locked
+    def plan_task_fail(
+        self,
+        plan_id: str,
+        task_id: str,
+        log: str = "",
+    ) -> Task:
+        """Manually mark a task as failed and emit the failure event."""
+        existing = self.plan_manager.get_task(plan_id, task_id)
+        already_failed = existing is not None and existing.status == TaskStatus.FAILED
+        task = self.plan_manager.fail_task(plan_id, task_id, log=log)
+        if task is None:
+            raise ValueError(f"Task {task_id} not found in plan {plan_id}")
+        if not already_failed:
+            self.event_bus.post(
+                Event(
+                    type="task.failed",
+                    payload={
+                        "plan_id": plan_id,
+                        "task_id": task_id,
                         "log": log,
                     },
                 )

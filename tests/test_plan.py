@@ -226,3 +226,16 @@ def test_on_change_callback_exception_does_not_fail_mutation(tmp_path: Path) -> 
     loaded = mgr.get_plan(plan.id)
     assert loaded is not None
     assert loaded.name == "resilient"
+
+
+def test_plan_origin_defaults_to_system_and_roundtrips(tmp_path: Path) -> None:
+    mgr = PlanManager(tmp_path)
+    plan = mgr.create_plan("system-made", tasks=[Task(name="a")])
+    assert plan.origin == "system"
+
+    agent_plan = mgr.create_plan("self-made", origin="agent")
+    assert agent_plan.origin == "agent"
+
+    reloaded = PlanManager(tmp_path)
+    assert reloaded.get_plan(plan.id).origin == "system"
+    assert reloaded.get_plan(agent_plan.id).origin == "agent"

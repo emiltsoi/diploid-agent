@@ -190,3 +190,47 @@ def test_post_plan_task_done_missing_task(tmp_path: Path) -> None:
             json={"plan_id": plan_id, "task_id": "nope", "result": "x"},
         )
         assert resp.status_code == 400
+
+
+def test_post_plan_create_origin(tmp_path: Path) -> None:
+    runtime = AgentRuntime(_make_config(tmp_path))
+    runtime.engine = FakeEngine()
+    app = create_app(_make_config(tmp_path), runtime)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/plan/create",
+            json={"name": "self-made", "chat_id": "chat-1", "origin": "agent"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["origin"] == "agent"
+
+        resp2 = client.post("/plan/create", json={"name": "sys", "chat_id": "chat-1"})
+        assert resp2.json()["origin"] == "system"
+
+
+def test_post_plan_task_fail(tmp_path: Path) -> None:
+    runtime = AgentRuntime(_make_config(tmp_path))
+    runtime.engine = FakeEngine()
+    app = create_app(_make_config(tmp_path), runtime)
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/plan/create",
+            json={"name": "f", "chat_id": "chat-1", "tasks": [{"name": "t"}]},
+        ).json()
+        plan_id = created["id"]
+        task_id = created["tasks"][0]["id"]
+
+        resp = client.post(
+            "/plan/task/fail",
+            json={"plan_id": plan_id, "task_id": task_id, "log": "abandoned"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "failed"
+
+        resp2 = client.post(
+            "/plan/task/fail",
+            json={"plan_id": plan_id, "task_id": "missing-task"},
+        )
+        assert resp2.status_code == 400

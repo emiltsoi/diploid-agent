@@ -35,6 +35,7 @@ def register_plans(
                 description=req.description,
                 chat_id=req.chat_id,
                 tasks=tasks,
+                origin=req.origin,
                 catch=False,
             )
         except ValueError as exc:
@@ -73,6 +74,26 @@ def register_plans(
                 plan_id=req.plan_id,
                 task_id=req.task_id,
                 result=req.result,
+                log=req.log,
+                requires_chat_id=False,
+                catch=False,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        return _task_to_response(raw)
+
+    @app.post(
+        "/plan/task/fail", response_model=TaskResponse, dependencies=[Depends(_require_api_key)]
+    )
+    def plan_task_fail(req: PlanTaskFailRequest) -> TaskResponse:
+        try:
+            raw = command_handler.call(
+                method="plan_task_fail",
+                plan_id=req.plan_id,
+                task_id=req.task_id,
                 log=req.log,
                 requires_chat_id=False,
                 catch=False,

@@ -43,6 +43,7 @@ __all__ = [
     "PlanCreateTask",
     "PlanResponse",
     "PlanTaskDoneRequest",
+    "PlanTaskFailRequest",
     "PlanTaskStartRequest",
     "PluginAddRequest",
     "PluginCommandRequest",
@@ -303,6 +304,7 @@ class PlanCreateRequest(BaseModel):
     name: str
     description: str = ""
     chat_id: str | None = None
+    origin: str = "system"
     tasks: list[PlanCreateTask] = Field(default_factory=list)
 
 
@@ -315,6 +317,12 @@ class PlanTaskDoneRequest(BaseModel):
     plan_id: str
     task_id: str
     result: str = ""
+    log: str = ""
+
+
+class PlanTaskFailRequest(BaseModel):
+    plan_id: str
+    task_id: str
     log: str = ""
 
 
@@ -333,6 +341,7 @@ class PlanResponse(BaseModel):
     name: str
     status: str
     chat_id: str | None = None
+    origin: str = "system"
     tasks: list[TaskResponse]
     created_at: float
     updated_at: float
