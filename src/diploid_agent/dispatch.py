@@ -194,6 +194,10 @@ class DispatchStore:
             dispatch = self._dispatches.get(dispatch_id)
             if dispatch is None:
                 return None
+            # The result payload is only written while the dispatch can still
+            # produce one: COMPLETED/FAILED keep the result they were closed
+            # with, while status and flags always update — a timed-out or
+            # cancelled dispatch can still be finalized with a real result.
             if dispatch.status in (
                 DispatchStatus.PENDING,
                 DispatchStatus.TIMEOUT,

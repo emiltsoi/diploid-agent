@@ -159,3 +159,89 @@ def test_task_completed_handler_marks_plan_done(tmp_path: Path) -> None:
         assert updated.result == "done-via-event"
     finally:
         runtime.shutdown()
+
+
+def test_timer_fired_bills_cron_turn_delivery(tmp_path: Path) -> None:
+    """A cron: wake that produced a real turn bills the job's daily budget."""
+    runtime = AgentRuntime(_make_config(tmp_path))
+    runtime.engine = FakeEngine()
+    billed: list[str] = []
+
+    class FakeCron:
+        def record_turn_delivery(self, job_id: str) -> None:
+            billed.append(job_id)
+
+    runtime._lifecycle._cron_service = FakeCron()
+
+    event = runtime.wake_queue.enqueue(
+        WakeEvent(
+            id="",
+            chat_id="chat-1",
+            reason="cron:tidy",
+            priority=1,
+            scheduled_at=time.time() - 1,
+            payload={"user_message": "[cron] done", "cron_job_id": "tidy"},
+            silent=False,
+            created_at=time.time(),
+            ready=True,
+        )
+    )
+
+    from diploid_agent.runtime.event_bus import Event
+
+    runtime._lifecycle._handle_timer_fired(
+        Event(
+            type="timer.fired",
+            payload={
+                "event_id": event.id,
+                "chat_id": "chat-1",
+                "reason": "cron:tidy",
+                "silent": False,
+            },
+        )
+    )
+
+    assert billed == ["tidy"]
+    assert runtime.wake_queue.get(event.id) is None
+
+
+def test_timer_fired_non_cron_wake_does_not_bill(tmp_path: Path) -> None:
+    runtime = AgentRuntime(_make_config(tmp_path))
+    runtime.engine = FakeEngine()
+    billed: list[str] = []
+
+    class FakeCron:
+        def record_turn_delivery(self, job_id: str) -> None:
+            billed.append(job_id)
+
+    runtime._lifecycle._cron_service = FakeCron()
+
+    event = runtime.wake_queue.enqueue(
+        WakeEvent(
+            id="",
+            chat_id="chat-1",
+            reason="self_wake",
+            priority=1,
+            scheduled_at=time.time() - 1,
+            payload={"user_message": "tick"},
+            silent=True,
+            created_at=time.time(),
+            ready=True,
+        )
+    )
+
+    from diploid_agent.runtime.event_bus import Event
+
+    runtime._lifecycle._handle_timer_fired(
+        Event(
+            type="timer.fired",
+            payload={
+                "event_id": event.id,
+                "chat_id": "chat-1",
+                "reason": "self_wake",
+                "silent": True,
+            },
+        )
+    )
+
+    assert billed == []

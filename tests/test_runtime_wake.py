@@ -87,3 +87,10 @@ def test_wake_silent_does_not_notify(tmp_path: Path, monkeypatch) -> None:
     result = runtime.wake("chat-1", event_id=e.id)
     assert result.reply
     assert not sent
+
+
+def test_record_mesh_message_runs_under_actions_lock() -> None:
+    """The only RuntimeActions mutator must not skip the runtime lock."""
+    from diploid_agent.runtime.actions import RuntimeActions
+
+    assert hasattr(RuntimeActions.record_mesh_message, "__wrapped__")

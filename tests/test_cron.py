@@ -621,6 +621,10 @@ def test_turn_delivery_enqueues_wake(tmp_path: Path) -> None:
     assert "[cron: tidy finished — ok]" in ev.payload["user_message"]
     data = _last_file(tmp_path)
     assert data["delivery_result"] == "turn"
+    # Billing lands at delivery, not enqueue — an armed wake counts toward
+    # the daily-cap gate but has not spent the day's budget yet.
+    assert svc._state.get("tidy").turn_count == 0
+    svc.record_turn_delivery("tidy")
     assert svc._state.get("tidy").turn_count == 1
 
 
@@ -730,6 +734,56 @@ def test_turn_delivery_daily_cap(tmp_path: Path) -> None:
     events = [e for e in svc._wake_queue.pending(chat_id="chat-1") if e.reason == "cron:tidy"]
     assert len(events) == 1
     assert _last_file(tmp_path)["delivery_result"] == "turn_suppressed: daily cap reached"
+
+
+def test_turn_delivery_bills_at_delivery_not_enqueue(tmp_path: Path) -> None:
+    """Deferred/dropped wakes must not spend the daily turn budget."""
+    config = _make_config(
+        tmp_path,
+        persona_crons={"jobs": [_script_job(delivery="turn")]},
+        turn_delivery_max_per_day=1,
+    )
+    svc = _make_service(config, tmp_path)
+    _run_to_done(svc)
+    # The wake is armed and counts toward the gate, but no turn ran yet.
+    assert svc._state.get("tidy").turn_count == 0
+    svc._wake_queue.cancel(chat_id="chat-1", reason="cron:tidy")
+    # The dropped wake spent nothing, so the next delivery may proceed.
+    _run_to_done(svc)
+    events = [e for e in svc._wake_queue.pending(chat_id="chat-1") if e.reason == "cron:tidy"]
+    assert len(events) == 1
+    assert _last_file(tmp_path)["delivery_result"] == "turn"
+    svc.record_turn_delivery("tidy")
+    assert svc._state.get("tidy").turn_count == 1
+    svc.record_turn_delivery("tidy")
+    assert svc._state.get("tidy").turn_count == 2
+    svc.record_turn_delivery("ghost-job")  # unknown job: no-op, no crash
+    assert svc._state.get("ghost-job") is None
+
+
+def test_turn_delivery_armed_wake_counts_toward_daily_cap(tmp_path: Path) -> None:
+    """An armed cron wake holds a cap slot so a burst cannot overshoot it."""
+    config = _make_config(
+        tmp_path,
+        persona_crons={
+            "jobs": [
+                _script_job(id="tidy", delivery="turn"),
+                _script_job(id="sweep", delivery="turn"),
+            ]
+        },
+        turn_delivery_max_per_day=1,
+    )
+    svc = _make_service(config, tmp_path)
+    _run_to_done(svc, "tidy")
+    _run_to_done(svc, "sweep")
+    events = [e for e in svc._wake_queue.pending(chat_id="chat-1") if e.reason == "cron:tidy"]
+    assert len(events) == 1
+    assert not [
+        e for e in svc._wake_queue.pending(chat_id="chat-1") if e.reason == "cron:sweep"
+    ]
+    assert _last_file(tmp_path, "sweep")["delivery_result"] == (
+        "turn_suppressed: daily cap reached"
+    )
 
 
 def test_run_now_fires_and_keeps_schedule(tmp_path: Path) -> None:

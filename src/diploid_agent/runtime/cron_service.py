@@ -963,7 +963,10 @@ class CronService:
         Shares the self-wake budgets so a turn-delivering job cannot widen the
         interrupt loop an agent could already open herself: pending-cap and
         daily-cap refusals degrade to file delivery (digest still shows it);
-        a recent arm only defers the wake by the remaining interval.
+        a recent arm only defers the wake by the remaining interval. The daily
+        turn bill lands only when the wake actually produces a turn (see
+        ``record_turn_delivery``) — armed-but-undelivered wakes count toward
+        the gate here but do not spend the day's budget.
         """
         if self._wake_queue is None:
             return "turn_suppressed: no wake queue"
@@ -971,14 +974,17 @@ class CronService:
         timer_cfg = self._config.harness.timer
         now = time.time()
         today = datetime.now().astimezone().strftime("%Y-%m-%d")
-        turns_today = sum(s.turn_count for s in self._state.all().values() if s.turn_date == today)
-        if turns_today >= cron_cfg.turn_delivery_max_per_day:
-            return "turn_suppressed: daily cap reached"
         pending = [
             e
             for e in self._wake_queue.pending(chat_id=resolved.chat_id)
             if e.reason.startswith(WAKE_BUDGET_REASON_PREFIXES)
         ]
+        turns_today = sum(s.turn_count for s in self._state.all().values() if s.turn_date == today)
+        armed_cron = sum(
+            1 for e in pending if e.reason.startswith(CRON_WAKE_REASON_PREFIX)
+        )
+        if turns_today + armed_cron >= cron_cfg.turn_delivery_max_per_day:
+            return "turn_suppressed: daily cap reached"
         if len(pending) >= timer_cfg.self_wake_max_pending:
             return "turn_suppressed: wake budget reached"
         scheduled_at = now
@@ -1007,20 +1013,33 @@ class CronService:
                     "user_message": message,
                     "agent_reason": f"{CRON_WAKE_REASON_PREFIX}{resolved.spec.id}",
                     "notify": True,
+                    "cron_job_id": resolved.spec.id,
                 },
                 silent=False,
                 created_at=now,
                 ready=True,
             )
         )
+        if scheduled_at > now:
+            return f"turn_deferred: {scheduled_at - now:.0f}s"
+        return "turn"
+
+    def record_turn_delivery(self, job_id: str) -> None:
+        """Bill one delivered cron turn against the job's daily budget.
+
+        Called by the wake pipeline when a ``cron:`` wake actually produced a
+        turn; billing at delivery keeps deferred or dropped wakes from
+        spending the day's ``turn_delivery_max_per_day`` budget.
+        """
+        state = self._state.get(job_id)
+        if state is None:
+            return
+        today = datetime.now().astimezone().strftime("%Y-%m-%d")
         if state.turn_date != today:
             state.turn_date = today
             state.turn_count = 0
         state.turn_count += 1
         self._state.update(state)
-        if scheduled_at > now:
-            return f"turn_deferred: {scheduled_at - now:.0f}s"
-        return "turn"
 
     def _write_service_last(self) -> None:
         """Surface reload warnings where the digest slot can read them."""

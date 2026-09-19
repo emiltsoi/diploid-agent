@@ -252,6 +252,10 @@ class RuntimeLifecycle:
                     self._outbox._deliver_chat_result(payload["chat_id"], result)
                 self._wake_queue.complete(event_id)
                 return
+            if self._cron_service is not None and wake_event is not None:
+                cron_job_id = (wake_event.payload or {}).get("cron_job_id")
+                if cron_job_id:
+                    self._cron_service.record_turn_delivery(cron_job_id)
             self._wake_queue.complete(event_id)
         except Exception:
             logger.exception("Wake failed for %s", event_id)

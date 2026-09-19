@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -100,6 +101,8 @@ class FileMemoryBackend(MemoryBackend):
         self.sessions_root = Path(sessions_root).expanduser()
         self.chat_id = chat_id
         self.max_chat_memory_chars = max_chat_memory_chars
+        self._transcript_lock = threading.Lock()
+        self._transcript_cache: tuple[int, float, list[dict[str, Any]]] | None = None
         self._maybe_migrate_legacy_files()
 
     def _maybe_migrate_legacy_files(self) -> None:
@@ -143,17 +146,39 @@ class FileMemoryBackend(MemoryBackend):
         return self
 
     def load_transcript(self) -> list[dict[str, Any]]:
+        """Return parsed transcript entries.
+
+        The transcript is append-only, so repeat calls only parse the tail that
+        grew since the last call instead of re-parsing the whole file. A file
+        that shrank or was rewritten in place (size/identity no longer matches
+        the cached tail offset) falls back to a full re-read.
+        """
         path = self._transcript_path
-        if not path.exists():
+        try:
+            st = path.stat()
+        except OSError:
             return []
-        entries: list[dict[str, Any]] = []
-        for line in path.read_text().splitlines():
-            if line.strip():
-                try:
-                    entries.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-        return entries
+        with self._transcript_lock:
+            cache = self._transcript_cache
+            if cache is not None and cache[0] == st.st_size and cache[1] == st.st_mtime:
+                return list(cache[2])
+            if cache is not None and st.st_size > cache[0]:
+                entries = list(cache[2])
+                offset = cache[0]
+            else:
+                entries = []
+                offset = 0
+            with open(path, "rb") as f:
+                f.seek(offset)
+                raw = f.read()
+            for line in raw.decode("utf-8", errors="replace").splitlines():
+                if line.strip():
+                    try:
+                        entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+            self._transcript_cache = (offset + len(raw), st.st_mtime, entries)
+            return list(entries)
 
     def append_transcript(self, user_message: str, assistant_reply: str) -> None:
         self._session_dir.mkdir(parents=True, exist_ok=True)
@@ -321,7 +346,13 @@ class HindsightMemoryBackend(MemoryBackend):
         self._spool_path = spool_path or session_dir / "hindsight-pending-retain.jsonl"
         self._dead_letter_path = self._spool_path.with_name("hindsight-dead-letter.jsonl")
         self._spool_lock = threading.Lock()
+        # Serializes whole flush passes so only one pass runs at a time while
+        # _spool_lock stays held only for the short file read/rewrite.
+        self._flush_lock = threading.Lock()
         self._dead_letter_lock = threading.Lock()
+        self._health_lock = threading.Lock()
+        self._health_checked_at = 0.0
+        self._health_ok = False
         self._fallback = (
             FileMemoryBackend(sessions_root, chat_id, max_chat_memory_chars)
             if fallback_to_file
@@ -337,16 +368,29 @@ class HindsightMemoryBackend(MemoryBackend):
     def _bank_url(self, *parts: str) -> str:
         return f"{self.base_url}/v1/default/{'/'.join(parts)}".rstrip("/")
 
+    _HEALTH_CACHE_SECONDS = 15.0
+
     def health(self) -> bool:
-        try:
-            resp = httpx.get(
-                f"{self.base_url}/health",
-                timeout=5.0,
-            )
-            return resp.status_code == 200
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("Hindsight health check failed: %s", exc)
-            return False
+        """Return reachability, cached briefly so recall does not pay 2 HTTP/req.
+
+        Uses the pooled client (which carries auth headers); a stale answer is
+        at most ``_HEALTH_CACHE_SECONDS`` old in either direction.
+        """
+        with self._health_lock:
+            if (
+                self._health_checked_at
+                and time.monotonic() - self._health_checked_at
+                < self._HEALTH_CACHE_SECONDS
+            ):
+                return self._health_ok
+            self._health_checked_at = time.monotonic()
+            try:
+                resp = self._client.get("/health", timeout=5.0)
+                self._health_ok = resp.status_code == 200
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Hindsight health check failed: %s", exc)
+                self._health_ok = False
+            return self._health_ok
 
     def file_store(self) -> FileMemoryBackend | None:
         return self._fallback
@@ -356,13 +400,19 @@ class HindsightMemoryBackend(MemoryBackend):
             return
         if not self.health():
             return
-
-        with self._spool_lock, open(self._spool_path, "r+") as f:
-            lines = f.readlines()
+        if not self._flush_lock.acquire(blocking=False):
+            # Another flush pass is in flight. The spool is durable and the
+            # next retain/append retries, so callers must not queue behind a
+            # slow Hindsight.
+            return
+        try:
+            with self._spool_lock, open(self._spool_path, "r+") as f:
+                lines = f.readlines()
             if not lines:
                 return
 
-            # Process in batches of 20.
+            # Process in batches of 20. The network round-trips run outside
+            # _spool_lock so a slow server cannot stall _spool() appends.
             flushed: set[int] = set()
             for i in range(0, len(lines), 20):
                 batch_lines = lines[i : i + 20]
@@ -405,10 +455,19 @@ class HindsightMemoryBackend(MemoryBackend):
                     break
 
             if flushed:
-                remaining = [line for i, line in enumerate(lines) if i not in flushed]
-                f.seek(0)
-                f.writelines(remaining)
-                f.truncate()
+                # _flush_lock serializes passes and _spool() only appends, so
+                # the snapshot indices still address the same lines; anything
+                # appended mid-flush sits past them and is preserved.
+                with self._spool_lock, open(self._spool_path, "r+") as f:
+                    current = f.readlines()
+                    remaining = [
+                        line for i, line in enumerate(current) if i not in flushed
+                    ]
+                    f.seek(0)
+                    f.writelines(remaining)
+                    f.truncate()
+        finally:
+            self._flush_lock.release()
 
     def _spool(self, items: list[MemoryItem]) -> None:
         with self._spool_lock, open(self._spool_path, "a") as f:

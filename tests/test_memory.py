@@ -1153,3 +1153,178 @@ def test_memory_manager_non_file_backend_contract(tmp_path: Path) -> None:
     assert any("deploy window" in item.content for item in backend.items)
     assert "deploy window" in manager.recall_context("deploy").text
     assert not (tmp_path / "chat-1" / "chat_MEMORY.md").exists()
+
+
+def test_file_backend_load_transcript_reads_only_new_tail(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Repeat loads parse only the appended tail, not the whole transcript."""
+    backend = FileMemoryBackend(tmp_path, "chat-1")
+    backend.append_transcript("u1", "a1")
+    assert len(backend.load_transcript()) == 2
+
+    parsed: list[str] = []
+    real_loads = json.loads
+    monkeypatch.setattr(json, "loads", lambda s: parsed.append(s) or real_loads(s))
+    backend.append_transcript("u2", "a2")
+    entries = backend.load_transcript()
+    assert len(entries) == 4
+    assert parsed == [
+        json.dumps({"role": "user", "content": "u2"}),
+        json.dumps({"role": "assistant", "content": "a2"}),
+    ]
+
+
+def test_file_backend_load_transcript_full_reload_on_shrink(tmp_path: Path) -> None:
+    """A transcript that shrank or was rewritten falls back to a full read."""
+    backend = FileMemoryBackend(tmp_path, "chat-1")
+    backend.append_transcript("u1", "a1")
+    backend.load_transcript()
+    backend._transcript_path.write_text(
+        json.dumps({"role": "system", "content": "replaced"}) + "\n"
+    )
+    entries = backend.load_transcript()
+    assert entries == [{"role": "system", "content": "replaced"}]
+
+
+def test_hindsight_health_check_is_cached(tmp_path: Path, monkeypatch) -> None:
+    """health() probes at most once per cache window via the pooled client."""
+    backend = HindsightMemoryBackend(
+        base_url="http://127.0.0.1:1",
+        bank="test",
+        chat_id="chat-1",
+        sessions_root=tmp_path,
+        spool_path=tmp_path / "spool.jsonl",
+    )
+    calls: list[Any] = []
+
+    class OKResp:
+        status_code = 200
+
+    monkeypatch.setattr(
+        backend._client, "get", lambda *a, **k: calls.append(a) or OKResp()
+    )
+    assert backend.health() is True
+    assert backend.health() is True
+    assert len(calls) == 1
+    backend._health_checked_at = 0.0
+    assert backend.health() is True
+    assert len(calls) == 2
+
+
+def test_hindsight_health_failure_is_cached_too(tmp_path: Path, monkeypatch) -> None:
+    backend = HindsightMemoryBackend(
+        base_url="http://127.0.0.1:1",
+        bank="test",
+        chat_id="chat-1",
+        sessions_root=tmp_path,
+        spool_path=tmp_path / "spool.jsonl",
+    )
+    calls: list[Any] = []
+
+    def boom(*a: Any, **k: Any) -> Any:
+        calls.append(a)
+        raise ConnectionError("down")
+
+    monkeypatch.setattr(backend._client, "get", boom)
+    assert backend.health() is False
+    assert backend.health() is False
+    assert len(calls) == 1
+
+
+def test_hindsight_flush_does_not_hold_spool_lock_for_network(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """_spool() appends must not stall behind a slow Hindsight round-trip."""
+    spool_path = tmp_path / "spool.jsonl"
+    spool_path.write_text(json.dumps({"content": "g1", "document_id": "d1"}) + "\n")
+    backend = HindsightMemoryBackend(
+        base_url="http://127.0.0.1:1",
+        bank="test",
+        chat_id="chat-1",
+        sessions_root=tmp_path,
+        spool_path=spool_path,
+    )
+    monkeypatch.setattr(backend, "health", lambda: True)
+
+    acquired: list[bool] = []
+
+    class OKResp:
+        status_code = 200
+
+        def json(self) -> dict:
+            return {"success": True}
+
+    def fake_post(url: str, *, json: dict, **kwargs: Any) -> OKResp:
+        acquired.append(backend._spool_lock.acquire(blocking=False))
+        if acquired[-1]:
+            backend._spool_lock.release()
+        return OKResp()
+
+    monkeypatch.setattr(backend._client, "post", fake_post)
+    backend._flush_spool()
+
+    assert acquired == [True]
+    assert spool_path.read_text().splitlines() == []
+
+
+def test_hindsight_flush_preserves_appends_mid_flush(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Items spooled while a flush is in flight survive the rewrite."""
+    spool_path = tmp_path / "spool.jsonl"
+    spool_path.write_text(json.dumps({"content": "g1", "document_id": "d1"}) + "\n")
+    backend = HindsightMemoryBackend(
+        base_url="http://127.0.0.1:1",
+        bank="test",
+        chat_id="chat-1",
+        sessions_root=tmp_path,
+        spool_path=spool_path,
+    )
+    monkeypatch.setattr(backend, "health", lambda: True)
+
+    class OKResp:
+        status_code = 200
+
+        def json(self) -> dict:
+            return {"success": True}
+
+    def fake_post(url: str, *, json: dict, **kwargs: Any) -> OKResp:
+        # Under the old locking this append would deadlock behind the flush.
+        backend._spool([MemoryItem(content="late", document_id="d2")])
+        return OKResp()
+
+    monkeypatch.setattr(backend._client, "post", fake_post)
+    backend._flush_spool()
+
+    remaining = [json.loads(line) for line in spool_path.read_text().splitlines()]
+    assert [p["document_id"] for p in remaining] == ["d2"]
+
+
+def test_hindsight_flush_skips_when_flush_in_progress(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A second flush pass does not queue behind a running one."""
+    spool_path = tmp_path / "spool.jsonl"
+    spool_path.write_text(json.dumps({"content": "g1", "document_id": "d1"}) + "\n")
+    backend = HindsightMemoryBackend(
+        base_url="http://127.0.0.1:1",
+        bank="test",
+        chat_id="chat-1",
+        sessions_root=tmp_path,
+        spool_path=spool_path,
+    )
+    monkeypatch.setattr(backend, "health", lambda: True)
+    posted: list[Any] = []
+    monkeypatch.setattr(
+        backend._client, "post", lambda *a, **k: posted.append(a)
+    )
+
+    backend._flush_lock.acquire()
+    try:
+        backend._flush_spool()
+    finally:
+        backend._flush_lock.release()
+
+    assert posted == []
+    assert len(spool_path.read_text().splitlines()) == 1

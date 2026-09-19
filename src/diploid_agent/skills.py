@@ -5,6 +5,9 @@ from __future__ import annotations
 import logging
 import re
 import shutil
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -65,6 +68,7 @@ class SkillManager:
         self.persona_profile_root = (
             Path(persona_profile_root).expanduser() if persona_profile_root else None
         )
+        self._scan_tls = threading.local()
 
     def _chat_skill_root(self, chat_id: str) -> Path | None:
         if self.chat_cwd_root is None:
@@ -151,8 +155,29 @@ class SkillManager:
 
         return re.sub(r"\{(\w+)\}", _repl, content)
 
+    @contextmanager
+    def scan_scope(self) -> Iterator[None]:
+        """Memoize ``list_skills`` results for the duration of one prompt build.
+
+        A build calls ``skill_index_text``/``match_skills``/``active_skills_text``
+        back to back; inside the scope repeated calls for the same ``chat_id``
+        share a single directory scan and YAML parse. The memo is thread-local
+        so concurrent builds never share one.
+        """
+        prev = getattr(self._scan_tls, "memo", None)
+        self._scan_tls.memo = {}
+        try:
+            yield
+        finally:
+            self._scan_tls.memo = prev
+
     def list_skills(self, chat_id: str | None = None) -> list[Skill]:
         """Return all available skills, chat-scoped first."""
+        memo: dict[str | None, list[Skill]] | None = getattr(
+            self._scan_tls, "memo", None
+        )
+        if memo is not None and chat_id in memo:
+            return list(memo[chat_id])
         seen: set[str] = set()
         skills: list[Skill] = []
         for root in self._skill_dirs(chat_id):
@@ -168,6 +193,8 @@ class SkillManager:
                 if skill and skill.name not in seen:
                     seen.add(skill.name)
                     skills.append(skill)
+        if memo is not None:
+            memo[chat_id] = skills
         return skills
 
     def skill(self, name: str, chat_id: str | None = None) -> Skill | None:
@@ -332,9 +359,10 @@ class SkillManager:
         if not active:
             return None
 
+        by_name = {s.name: s for s in self.list_skills(chat_id)}
         parts: list[str] = []
         for name in sorted(active):
-            skill = self.skill(name, chat_id)
+            skill = by_name.get(name)
             if not skill:
                 continue
             header = [f"## Skill: {skill.name}"]

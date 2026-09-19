@@ -220,6 +220,12 @@ class RuntimeActions:
             record = self._chat_store._active_record(chat_id)
             if not record:
                 return {"chat_id": chat_id, "active": False}
+            # Usage and its stop_reason come from the same record read so a
+            # record swap between locks cannot pair one session's usage with
+            # another's last_stop_reason.
+            context_usage = self._runtime_metrics._context_usage(record)
+            if context_usage and record.last_stop_reason:
+                context_usage["last_turn"]["stop_reason"] = record.last_stop_reason
 
         memory_stats: dict[str, Any] = {}
         try:
@@ -227,7 +233,6 @@ class RuntimeActions:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to load memory stats for %s: %s", chat_id, exc)
 
-        context_usage = self._runtime_metrics._context_usage(record)
         background_tasks = self._subagent.subagent_status(chat_id)
 
         active_turn = self.turn_controller.turn_status(chat_id, wait=0.0)
@@ -236,9 +241,6 @@ class RuntimeActions:
             record = self._chat_store._active_record(chat_id)
             if not record:
                 return {"chat_id": chat_id, "active": False}
-
-            if context_usage and record.last_stop_reason:
-                context_usage["last_turn"]["stop_reason"] = record.last_stop_reason
 
             return {
                 "chat_id": chat_id,
@@ -372,6 +374,7 @@ class RuntimeActions:
         """Return the list of models the ACP server accepts."""
         return self.engine.list_models()
 
+    @_actions_locked
     def record_mesh_message(
         self,
         chat_id: str,

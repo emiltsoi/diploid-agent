@@ -401,3 +401,82 @@ def test_sync_to_chat_prefers_source_over_stale_chat_copy(tmp_path: Path) -> Non
     manager.sync_to_chat("chat-1", cwd, enabled={"continuity"})
     synced = (cwd / ".devin" / "skills" / "continuity" / "SKILL.md").read_text()
     assert "Fresh source." in synced
+
+
+def test_active_skills_text_scans_once(tmp_path: Path, monkeypatch) -> None:
+    """active_skills_text uses one list_skills scan, not one per skill."""
+    shared = tmp_path / "shared"
+    shared.mkdir(parents=True)
+    _write_skill(
+        shared / "skills",
+        "review",
+        "---\nname: review\n---\n\nReview staged changes.\n",
+    )
+    _write_skill(
+        shared / "skills",
+        "body",
+        "---\nname: body\n---\n\nBody state.\n",
+    )
+    manager = SkillManager(
+        personas_root=tmp_path,
+        shared_root=shared,
+        chat_cwd_root=None,
+    )
+
+    scans: list[str | None] = []
+    real_list = manager.list_skills
+    monkeypatch.setattr(
+        manager,
+        "list_skills",
+        lambda chat_id=None: scans.append(chat_id) or real_list(chat_id),
+    )
+    text = manager.active_skills_text({"review", "body"}, None)
+    assert text is not None
+    assert "Review staged changes." in text
+    assert "Body state." in text
+    assert len(scans) == 1
+
+
+def test_scan_scope_memoizes_list_skills(tmp_path: Path, monkeypatch) -> None:
+    """Inside scan_scope, repeated list_skills calls share one disk scan."""
+    shared = tmp_path / "shared"
+    shared.mkdir(parents=True)
+    _write_skill(
+        shared / "skills",
+        "review",
+        "---\nname: review\n---\n\nReview staged changes.\n",
+    )
+    _write_skill(
+        shared / "skills",
+        "body",
+        "---\nname: body\n---\n\nBody state.\n",
+    )
+    manager = SkillManager(
+        personas_root=tmp_path / "personas",
+        shared_root=shared,
+        chat_cwd_root=None,
+    )
+
+    loads: list[Path] = []
+    real_load = manager._load_skill
+
+    def counting(path, source, chat_id=None):
+        loads.append(path)
+        return real_load(path, source, chat_id)
+
+    monkeypatch.setattr(manager, "_load_skill", counting)
+
+    manager.list_skills()
+    assert len(loads) == 2
+
+    loads.clear()
+    with manager.scan_scope():
+        manager.list_skills()
+        manager.list_skills()
+        manager.skill("review")
+        manager.match_skills("review staged")
+    assert len(loads) == 2  # one scan served every call in the scope
+
+    loads.clear()
+    manager.list_skills()
+    assert len(loads) == 2  # the memo is dropped outside the scope
