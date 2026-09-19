@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, NamedTuple
 
 import httpx
 
@@ -43,7 +43,73 @@ _SIMPLE_COMMANDS: dict[str, str] = {
     "/memory": "_harness_memory",
     "/sessions": "_harness_sessions",
     "/subagents": "_harness_subagent_status",
+    "/models": "_harness_models",
     "/help": "_harness_help",
+}
+
+_CONFIG_USAGE = (
+    "Usage: /config <section> <key>=<value> [key=value...]\n"
+    "Sections: task, waker, timer, notifications, telegram"
+)
+
+
+class _ArgCommand(NamedTuple):
+    usage: str
+    handler: str
+    arg_kind: str = "text"  # "text": non-empty arg; "int": digits; "none": no arg
+    reply_kind: str = "text"  # "text": str reply; "result": ChatResult
+
+
+_ARG_COMMANDS: dict[str, _ArgCommand] = {
+    "/recall": _ArgCommand("Usage: /recall <query>", "_harness_recall"),
+    "/promote": _ArgCommand(
+        "Usage: /promote <fact>", "_harness_promote", reply_kind="result"
+    ),
+    "/subagent": _ArgCommand(
+        "Usage: /subagent <prompt>", "_harness_subagent", reply_kind="result"
+    ),
+    "/resume": _ArgCommand(
+        "Usage: /resume <number>", "_harness_resume", arg_kind="int", reply_kind="result"
+    ),
+    "/branch": _ArgCommand(
+        "Usage: /branch <number>", "_harness_branch", arg_kind="int", reply_kind="result"
+    ),
+    "/summarize": _ArgCommand("", "_harness_summarize", arg_kind="none", reply_kind="result"),
+    "/new": _ArgCommand("", "_harness_new", arg_kind="none", reply_kind="result"),
+    "/config": _ArgCommand(_CONFIG_USAGE, "_harness_config"),
+}
+
+# command -> (usage, sub -> (handler, required-args, trailing-const-args, whole-rest))
+_SUB_COMMANDS: dict[str, tuple[str, dict[str, tuple[str, int, tuple[Any, ...], bool]]]] = {
+    "/mcp": (
+        "Usage: /mcp list | /mcp enable <name> | /mcp disable <name>",
+        {
+            "": ("_harness_mcp_list", 0, (), False),
+            "list": ("_harness_mcp_list", 0, (), False),
+            "enable": ("_harness_mcp_enable", 1, (), True),
+            "disable": ("_harness_mcp_disable", 1, (), True),
+        },
+    ),
+    "/skill": (
+        "Usage: /skill list | /skill enable <name> | /skill disable <name> | /skill create <name> <markdown>",
+        {
+            "": ("_harness_skill_list", 0, (), False),
+            "list": ("_harness_skill_list", 0, (), False),
+            "enable": ("_harness_skill_enable", 1, (), False),
+            "disable": ("_harness_skill_disable", 1, (), False),
+            "create": ("_harness_skill_create", 2, (), False),
+        },
+    ),
+    "/plugin": (
+        "Usage: /plugin list | /plugin enable <name> | /plugin disable <name> | /plugin reload <name>",
+        {
+            "": ("_harness_plugin_list", 0, (), False),
+            "list": ("_harness_plugin_list", 0, (), False),
+            "enable": ("_harness_plugin_enable", 1, (True,), False),
+            "disable": ("_harness_plugin_enable", 1, (False,), False),
+            "reload": ("_harness_plugin_reload", 1, (), False),
+        },
+    ),
 }
 
 
@@ -428,7 +494,7 @@ class TelegramCommandMixin:
             http_body={"message": fact},
         )
 
-    def _harness_models(self) -> str:
+    def _harness_models(self, chat_id: int) -> str:
         raw = self.command_handler.call(
             method="list_models",
             http_path="/models",
@@ -612,21 +678,45 @@ class TelegramCommandMixin:
             reply = getattr(self, _SIMPLE_COMMANDS[command])(chat_id)
             self._send_text(chat_id, reply, reply_to_message_id=chat_input.message_id)
             return True
-        if command == "/mcp":
-            if not arg or arg == "list":
-                reply = self._harness_mcp_list(chat_id)
+        spec = _ARG_COMMANDS.get(command)
+        if spec is not None:
+            if spec.arg_kind == "int":
+                valid, value = arg.isdigit(), int(arg) if arg.isdigit() else 0
+            elif spec.arg_kind == "none":
+                valid, value = True, None
             else:
-                parts = arg.split(None, 1)
-                sub = parts[0]
-                name = parts[1] if len(parts) > 1 else ""
-                if sub == "enable" and name:
-                    reply = self._harness_mcp_enable(chat_id, name)
-                elif sub == "disable" and name:
-                    reply = self._harness_mcp_disable(chat_id, name)
+                valid, value = bool(arg), arg
+            if not valid:
+                self._send_text(chat_id, spec.usage, reply_to_message_id=chat_input.message_id)
+            else:
+                result = (
+                    getattr(self, spec.handler)(chat_id)
+                    if spec.arg_kind == "none"
+                    else getattr(self, spec.handler)(chat_id, value)
+                )
+                if spec.reply_kind == "result":
+                    self._send_result(chat_id, result, reply_to_message_id=chat_input.message_id)
                 else:
-                    reply = "Usage: /mcp list | /mcp enable <name> | /mcp disable <name>"
+                    self._send_text(chat_id, result, reply_to_message_id=chat_input.message_id)
+            return True
+        spec = _SUB_COMMANDS.get(command)
+        if spec is not None:
+            usage, subs = spec
+            parts = arg.split(None, 1) if arg else []
+            sub, rest = (parts + ["", ""])[:2]
+            row = subs.get(sub)
+            reply = usage
+            if row is not None:
+                handler, nargs, extra, whole = row
+                if whole:
+                    values = [rest] if rest else []
+                else:
+                    values = rest.split(None, 1)[:nargs]
+                if len(values) == nargs and (nargs > 0 or not rest):
+                    reply = getattr(self, handler)(chat_id, *values, *extra)
             self._send_text(chat_id, reply, reply_to_message_id=chat_input.message_id)
-        elif command == "/state":
+            return True
+        if command == "/state":
             if not arg:
                 reply = "Usage: /state <plugin> <event> [args...]"
             else:
@@ -635,59 +725,6 @@ class TelegramCommandMixin:
                 event = parts[1] if len(parts) > 1 else ""
                 raw_args = parts[2] if len(parts) > 2 else None
                 reply = self._harness_state_event(chat_id, plugin, event, raw_args)
-            self._send_text(chat_id, reply, reply_to_message_id=chat_input.message_id)
-        elif command == "/skill":
-            if not arg or arg == "list":
-                reply = self._harness_skill_list(chat_id)
-            else:
-                parts = arg.split(None, 2)
-                sub = parts[0]
-                name = parts[1] if len(parts) > 1 else ""
-                content = parts[2] if len(parts) > 2 else ""
-                if sub == "enable" and name:
-                    reply = self._harness_skill_enable(chat_id, name)
-                elif sub == "disable" and name:
-                    reply = self._harness_skill_disable(chat_id, name)
-                elif sub == "create" and name and content:
-                    reply = self._harness_skill_create(chat_id, name, content)
-                else:
-                    reply = "Usage: /skill list | /skill enable <name> | /skill disable <name> | /skill create <name> <markdown>"
-            self._send_text(chat_id, reply, reply_to_message_id=chat_input.message_id)
-        elif command == "/plugin":
-            if not arg or arg == "list":
-                reply = self._harness_plugin_list(chat_id)
-            else:
-                parts = arg.split(None, 2)
-                sub = parts[0]
-                name = parts[1] if len(parts) > 1 else ""
-                if sub == "enable" and name:
-                    reply = self._harness_plugin_enable(chat_id, name, True)
-                elif sub == "disable" and name:
-                    reply = self._harness_plugin_enable(chat_id, name, False)
-                elif sub == "reload" and name:
-                    reply = self._harness_plugin_reload(chat_id, name)
-                else:
-                    reply = "Usage: /plugin list | /plugin enable <name> | /plugin disable <name> | /plugin reload <name>"
-            self._send_text(chat_id, reply, reply_to_message_id=chat_input.message_id)
-        elif command == "/summarize":
-            result = self._harness_summarize(chat_id)
-            self._send_result(chat_id, result, reply_to_message_id=chat_input.message_id)
-        elif command == "/recall":
-            if not arg:
-                reply = "Usage: /recall <query>"
-                self._send_text(chat_id, reply, reply_to_message_id=chat_input.message_id)
-            else:
-                reply = self._harness_recall(chat_id, arg)
-                self._send_text(chat_id, reply, reply_to_message_id=chat_input.message_id)
-        elif command == "/promote":
-            if not arg:
-                reply = "Usage: /promote <fact>"
-                self._send_text(chat_id, reply, reply_to_message_id=chat_input.message_id)
-            else:
-                result = self._harness_promote(chat_id, arg)
-                self._send_result(chat_id, result, reply_to_message_id=chat_input.message_id)
-        elif command == "/models":
-            reply = self._harness_models()
             self._send_text(chat_id, reply, reply_to_message_id=chat_input.message_id)
         elif command == "/model":
             model_args = arg.split()
@@ -701,9 +738,6 @@ class TelegramCommandMixin:
                     chat_id, " ".join(model_args), in_place=in_place
                 )
                 self._send_result(chat_id, result, reply_to_message_id=chat_input.message_id)
-        elif command == "/new":
-            result = self._harness_new(chat_id)
-            self._send_result(chat_id, result, reply_to_message_id=chat_input.message_id)
         elif command == "/stop":
             with self._worker_lock:
                 worker = self._active_workers.get(chat_id)
@@ -733,27 +767,6 @@ class TelegramCommandMixin:
                 service = None
             result = self._harness_graceful_restart(chat_id, service)
             self._send_result(chat_id, result, reply_to_message_id=chat_input.message_id)
-        elif command == "/resume":
-            if not arg.isdigit():
-                reply = "Usage: /resume <number>"
-                self._send_text(chat_id, reply, reply_to_message_id=chat_input.message_id)
-            else:
-                result = self._harness_resume(chat_id, int(arg))
-                self._send_result(chat_id, result, reply_to_message_id=chat_input.message_id)
-        elif command == "/branch":
-            if not arg.isdigit():
-                reply = "Usage: /branch <number>"
-                self._send_text(chat_id, reply, reply_to_message_id=chat_input.message_id)
-            else:
-                result = self._harness_branch(chat_id, int(arg))
-                self._send_result(chat_id, result, reply_to_message_id=chat_input.message_id)
-        elif command == "/subagent":
-            if not arg:
-                reply = "Usage: /subagent <prompt>"
-                self._send_text(chat_id, reply, reply_to_message_id=chat_input.message_id)
-            else:
-                result = self._harness_subagent(chat_id, arg)
-                self._send_result(chat_id, result, reply_to_message_id=chat_input.message_id)
         elif command == "/stream_thoughts":
             if arg.lower() not in ("on", "off"):
                 self._send_text(
@@ -770,15 +783,6 @@ class TelegramCommandMixin:
                     f"Thought streaming {state}.",
                     reply_to_message_id=chat_input.message_id,
                 )
-        elif command == "/config":
-            if not arg:
-                reply = (
-                    "Usage: /config <section> <key>=<value> [key=value...]\n"
-                    "Sections: task, waker, timer, notifications, telegram"
-                )
-            else:
-                reply = self._harness_config(chat_id, arg)
-            self._send_text(chat_id, reply, reply_to_message_id=chat_input.message_id)
         elif command == "/continue":
             continue_input = ChatInput(
                 chat_id=chat_id,

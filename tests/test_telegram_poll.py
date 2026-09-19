@@ -402,6 +402,63 @@ def test_handle_update_routes_mcp_list(tmp_path: Path) -> None:
     assert sent == [(12345, "MCP servers: github", 1)]
 
 
+def test_handle_update_sub_command_arity_and_usage(tmp_path: Path) -> None:
+    """Sub-command table: arity checks, usage fallbacks, first-token vs whole-rest."""
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    sent: list[tuple[int, str, int | None]] = []
+
+    def fake_send(
+        chat_id: int,
+        text: str,
+        *,
+        reply_to_message_id: int | None = None,
+        first_message_id: int | None = None,
+    ) -> None:
+        sent.append((chat_id, text, reply_to_message_id))
+
+    poller._send_text = fake_send
+    poller._harness_plugin_enable = lambda chat_id, name, enabled: f"plugin {name} {enabled}"
+    poller._harness_plugin_list = lambda chat_id: "plugins"
+    poller._harness_mcp_enable = lambda chat_id, name: f"mcp {name}"
+    poller._harness_skill_create = lambda chat_id, name, content: f"skill {name}: {content}"
+
+    def send(text: str) -> None:
+        update = _update(
+            message={
+                "message_id": 7,
+                "chat": {"id": 12345, "type": "private"},
+                "from": {"id": 1, "is_bot": False},
+                "text": text,
+            }
+        )
+        poller._handle_update(update)
+
+    send("/plugin enable x trailing words")
+    send("/plugin enable")
+    send("/plugin")
+    send("/mcp enable two words")
+    send("/mcp list extra")
+    send("/skill create name markdown body here")
+    send("/skill create")
+    assert sent == [
+        # plugin takes the first token only; extras are ignored.
+        (12345, "plugin x True", 7),
+        (12345, "Usage: /plugin list | /plugin enable <name> | /plugin disable <name> | /plugin reload <name>", 7),
+        (12345, "plugins", 7),
+        # mcp passes the rest through as one name, like the old split(None, 1).
+        (12345, "mcp two words", 7),
+        # extra tokens on a zero-arg sub-command fall back to usage.
+        (12345, "Usage: /mcp list | /mcp enable <name> | /mcp disable <name>", 7),
+        # create consumes name + remaining content.
+        (12345, "skill name: markdown body here", 7),
+        (12345, "Usage: /skill list | /skill enable <name> | /skill disable <name> | /skill create <name> <markdown>", 7),
+    ]
+
+
 def test_handle_update_routes_mcp_enable(tmp_path: Path) -> None:
     poller = TelegramPoller(
         token="dummy",
