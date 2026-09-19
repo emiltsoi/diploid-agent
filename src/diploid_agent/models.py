@@ -49,32 +49,13 @@ class SessionRecord:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SessionRecord:
-        return cls(
-            chat_id=data["chat_id"],
-            session_number=data.get("session_number", 1),
-            session_id=data["session_id"],
-            model=data["model"],
-            persona=data.get("persona", "default-persona"),
-            cwd=data["cwd"],
-            created_at=data["created_at"],
-            updated_at=data["updated_at"],
-            turn_number=data.get("turn_number", 0),
-            pending_turn_number=data.get("pending_turn_number"),
-            label=data.get("label"),
-            parent=data.get("parent"),
-            last_stop_reason=data.get("last_stop_reason"),
-            persona_memory_exceeded=data.get("persona_memory_exceeded", False),
-            chat_memory_exceeded=data.get("chat_memory_exceeded", False),
-            cumulative_metrics=data.get("cumulative_metrics"),
-            last_turn_metrics=data.get("last_turn_metrics"),
-            first_turn_metrics=data.get("first_turn_metrics"),
-            enabled_mcp_servers=data.get("enabled_mcp_servers"),
-            disabled_mcp_servers=data.get("disabled_mcp_servers"),
-            enabled_skills=data.get("enabled_skills"),
-            disabled_skills=data.get("disabled_skills"),
-            plugin_overrides=data.get("plugin_overrides"),
-            pressure_handoff_done=data.get("pressure_handoff_done", False),
-        )
+        valid_fields = {f.name for f in fields(cls)}
+        kwargs = {k: v for k, v in data.items() if k in valid_fields}
+        # Records written before these fields existed keep their
+        # historical defaults rather than failing construction.
+        kwargs.setdefault("session_number", 1)
+        kwargs.setdefault("persona", "default-persona")
+        return cls(**kwargs)
 
     def next_turn_number(self) -> int:
         """Return the turn number for an in-progress turn.

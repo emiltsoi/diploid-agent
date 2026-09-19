@@ -77,11 +77,11 @@ def test_budget_warning_notice() -> None:
     assert not route.budget_exceeded
 
 
-def test_budget_exceeded_hard_cap() -> None:
+def test_budget_exceeded() -> None:
     cfg = _make_config(
         RoutingConfig(
             enabled=True,
-            budget=ConversationBudget(enabled=True, max_total_tokens=1000, hard_cap=True),
+            budget=ConversationBudget(enabled=True, max_total_tokens=1000),
         )
     )
     router = ModelRouter(cfg)
@@ -92,12 +92,12 @@ def test_budget_exceeded_hard_cap() -> None:
     assert route.model == "swe-1-7"
 
 
-def test_budget_exceeded_soft_cap_uses_fallback() -> None:
+def test_budget_exceeded_uses_fallback() -> None:
     cfg = _make_config(
         RoutingConfig(
             enabled=True,
             fallback_model="fallback-model",
-            budget=ConversationBudget(enabled=True, max_total_tokens=1000, hard_cap=False),
+            budget=ConversationBudget(enabled=True, max_total_tokens=1000),
         )
     )
     router = ModelRouter(cfg)

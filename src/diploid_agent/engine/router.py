@@ -35,9 +35,9 @@ class ModelRouter:
     ) -> ModelRoute:
         """Return the model, any warning notice, and whether the budget is exceeded.
 
-        If the conversation budget is exceeded and ``hard_cap`` is enabled, a
-        ``BudgetExceeded`` exception is raised. If ``hard_cap`` is disabled, a
-        notice is returned but a model is still chosen.
+        Over the conversation budget the fallback (or default) model is
+        returned with ``budget_exceeded=True`` and a notice telling the user
+        to start a new session — routing never raises.
         """
         if not self.enabled:
             return ModelRoute(model=self._default_model)

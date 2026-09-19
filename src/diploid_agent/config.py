@@ -114,7 +114,6 @@ class AuthorshipConfig(BaseModel):
 
 class TelegramConfig(BaseModel):
     enabled: bool = False
-    webhook_port: int = 8080
     token: str | None = None
     stream_thoughts: bool = False
     stream_chunk_interval: float = 2.0
@@ -589,7 +588,6 @@ class ConversationBudget(BaseModel):
     enabled: bool = False
     max_total_tokens: int = 100_000
     warning_threshold: float = Field(default=0.8, ge=0.0, le=1.0)
-    hard_cap: bool = True
 
 
 class RoutingConfig(BaseModel):
