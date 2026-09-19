@@ -92,6 +92,24 @@ def test_cleanup_orphaned_placeholders_skips_ask_files(tmp_path: Path) -> None:
     assert not (tmp_path / "111.ask.json").exists()
 
 
+def test_cleanup_orphaned_placeholders_keeps_board_files(tmp_path: Path) -> None:
+    """Task-board ids must survive restart — they are not reply placeholders."""
+    host = _StateHost(tmp_path)
+    (tmp_path / "111.json").write_text(
+        json.dumps({"chat_id": 111, "message_id": 10, "thought_id": None})
+    )
+    (tmp_path / "111.board.json").write_text(json.dumps({"message_id": 30}))
+
+    host._cleanup_orphaned_placeholders()
+
+    edits = [kw for method, kw in host.api_calls if method == "editMessageText"]
+    assert len(edits) == 1
+    assert edits[0]["message_id"] == 10
+    assert host.deleted == []
+    assert not (tmp_path / "111.json").exists()
+    assert (tmp_path / "111.board.json").exists()
+
+
 def test_harness_help_returns_string() -> None:
     commands = _Commands()
     help_text = commands._harness_help(123)
