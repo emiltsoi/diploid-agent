@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from diploid_agent.models import ActiveTurn
 from diploid_agent.runtime.turn_controller import TurnController
+from diploid_agent.turn.stream import TurnStream
 
 
 def test_turn_status_returns_immediately_when_idle() -> None:
@@ -62,10 +63,95 @@ def test_turn_status_long_poll_returns_unchanged_after_timeout() -> None:
     assert 0.05 <= elapsed <= 0.5
 
 
+def test_turn_status_exposes_last_side_effect() -> None:
+    runtime = _FakeRuntime()
+    controller = TurnController(runtime)
+    active = ActiveTurn(
+        chat_id="chat-1",
+        session_id="session-1",
+        user_message="hello",
+        start_time=time.time(),
+    )
+    active.last_side_effect = "exec (running)"
+    active.last_side_effect_at = time.time()
+    runtime._active_turns["chat-1"] = active
+
+    status = controller.turn_status("chat-1")
+
+    assert status["last_side_effect"] == "exec (running)"
+    assert status["last_side_effect_at"] == active.last_side_effect_at
+
+
+def test_turn_status_long_poll_wakes_on_side_effect() -> None:
+    runtime = _FakeRuntime()
+    controller = TurnController(runtime)
+    active = ActiveTurn(
+        chat_id="chat-1",
+        session_id="session-1",
+        user_message="hello",
+        start_time=time.time(),
+    )
+    runtime._active_turns["chat-1"] = active
+
+    def updater() -> None:
+        time.sleep(0.05)
+        with runtime._lock:
+            active.last_side_effect = "exec (running)"
+            active.last_side_effect_at = time.time()
+        with active._condition:
+            active._condition.notify_all()
+
+    threading.Thread(target=updater, daemon=True).start()
+
+    start = time.perf_counter()
+    status = controller.turn_status("chat-1", wait=5.0)
+    elapsed = time.perf_counter() - start
+
+    assert status["last_side_effect"] == "exec (running)"
+    assert elapsed < 1.0
+
+
+def test_turn_stream_dedups_identical_tool_updates() -> None:
+    runtime = _FakeRuntime()
+    active = ActiveTurn(
+        chat_id="chat-1",
+        session_id="session-1",
+        user_message="hello",
+        start_time=time.time(),
+    )
+    runtime._active_turns["chat-1"] = active
+    stream = TurnStream(runtime, "chat-1")
+
+    update = {
+        "sessionUpdate": "tool_call_update",
+        "content": {"title": "exec", "status": "running"},
+    }
+    stream.on_update(update)
+    first_at = active.last_side_effect_at
+    assert active.last_side_effect == "exec (running)"
+
+    stream.on_update(update)
+    # Identical title+status composes the same line: no stamp, no notify.
+    assert active.last_side_effect_at == first_at
+    # Breadcrumbs still record every event.
+    assert len(active.side_effects) == 2
+
+    stream.on_update(
+        {
+            "sessionUpdate": "tool_call_update",
+            "content": {"title": "exec", "status": "completed"},
+        }
+    )
+    assert active.last_side_effect == "exec (completed)"
+    assert active.last_side_effect_at > first_at
+
+
 class _FakeRuntime:
     def __init__(self) -> None:
         self._active_turns: dict[str, ActiveTurn] = {}
         self._lock = threading.RLock()
+        self._plugins = SimpleNamespace(on_partial=lambda *a, **k: None)
+        self.active_record = lambda chat_id: None  # type: ignore[method-assign]
 
 
 class _FakeEngine:

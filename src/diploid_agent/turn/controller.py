@@ -84,6 +84,8 @@ class TurnController:
             "stopped": active.stopped,
             "start_time": active.start_time,
             "elapsed_seconds": round(time.time() - active.start_time, 1),
+            "last_side_effect": active.last_side_effect,
+            "last_side_effect_at": active.last_side_effect_at,
         }
 
     def turn_status(self, chat_id: str, wait: float = 0.0) -> dict[str, Any]:
@@ -101,12 +103,14 @@ class TurnController:
 
         snapshot_message = active.message_text
         snapshot_thought = active.thought_text
+        snapshot_side_effect_at = active.last_side_effect_at
         with active._condition:
             active._condition.wait_for(
                 lambda: (
                     active.stopped
                     or active.message_text != snapshot_message
                     or active.thought_text != snapshot_thought
+                    or active.last_side_effect_at != snapshot_side_effect_at
                 ),
                 timeout=wait,
             )

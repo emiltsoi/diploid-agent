@@ -68,9 +68,18 @@ class TurnStream:
                     )
                     status = content.get("status") or "running"
                     now = time.time()
-                    a.last_side_effect = f"{title} ({status})"[:160]
-                    a.last_side_effect_at = now
+                    composed = f"{title} ({status})"[:160]
+                    # Notify only when the displayed string actually changes:
+                    # progress chunks with the same title+status compose the
+                    # same line and would only spam long-poll wakes.
+                    changed = composed != a.last_side_effect
+                    if changed:
+                        a.last_side_effect = composed
+                        a.last_side_effect_at = now
                     a.side_effects.append({"title": title, "status": status, "at": now})
+            if a and changed:
+                with a._condition:
+                    a._condition.notify_all()
             self._maybe_emit_partial()
             return
         if session_update not in ("agent_thought", "agent_thought_chunk"):
