@@ -227,6 +227,8 @@ class RuntimeSubagent:
             return "running"
         if task.status == TaskStatus.DONE:
             return "completed"
+        if task.status == TaskStatus.INCOMPLETE:
+            return "incomplete"
         if task.status == TaskStatus.FAILED:
             return "failed"
         if task.status in (TaskStatus.PENDING, TaskStatus.READY, TaskStatus.BLOCKED):

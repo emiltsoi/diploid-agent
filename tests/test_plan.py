@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from diploid_agent.plan.manager import PlanManager
 from diploid_agent.plan.models import PlanStatus, Task, TaskStatus, TaskType
 
@@ -109,3 +111,56 @@ def test_plan_status_completed(tmp_path: Path) -> None:
     loaded = mgr.get_plan(plan.id)
     assert loaded is not None
     assert loaded.status == PlanStatus.COMPLETED
+
+
+@pytest.mark.parametrize("flag", ["partial", "timed_out", "cancelled"])
+def test_complete_task_incomplete_flags(tmp_path: Path, flag: str) -> None:
+    mgr = PlanManager(tmp_path)
+    plan = mgr.create_plan("flags", tasks=[Task(name="t")])
+    mgr.start_task(plan.id, plan.tasks[0].id, now=0.0)
+    mgr.complete_task(plan.id, plan.tasks[0].id, result="r", **{flag: True})
+
+    task = mgr.get_plan(plan.id).tasks[0]
+    assert task.status == TaskStatus.INCOMPLETE
+    assert getattr(task, flag) is True
+    assert task.result == "r"
+
+
+def test_incomplete_task_unblocks_dependents(tmp_path: Path) -> None:
+    mgr = PlanManager(tmp_path)
+    t1 = Task(name="first", command="echo first")
+    t2 = Task(name="second", command="echo second", depends_on=[t1.id])
+    plan = mgr.create_plan("partial-chain", tasks=[t1, t2])
+
+    mgr.start_task(plan.id, t1.id, now=0.0)
+    mgr.complete_task(plan.id, t1.id, result="partial", partial=True)
+
+    plan = mgr.get_plan(plan.id)
+    assert plan is not None
+    assert plan.tasks[0].status == TaskStatus.INCOMPLETE
+    assert plan.tasks[1].status == TaskStatus.READY
+
+
+def test_incomplete_task_completes_plan(tmp_path: Path) -> None:
+    mgr = PlanManager(tmp_path)
+    plan = mgr.create_plan("partial-finish", tasks=[Task(name="only")])
+    mgr.start_task(plan.id, plan.tasks[0].id, now=0.0)
+    mgr.complete_task(plan.id, plan.tasks[0].id, result="timed", timed_out=True)
+
+    loaded = mgr.get_plan(plan.id)
+    assert loaded is not None
+    assert loaded.status == PlanStatus.COMPLETED
+    assert loaded.tasks[0].status == TaskStatus.INCOMPLETE
+    assert loaded.tasks[0].timed_out is True
+
+
+def test_incomplete_status_persists(tmp_path: Path) -> None:
+    mgr = PlanManager(tmp_path)
+    plan = mgr.create_plan("persisted", tasks=[Task(name="t1")])
+    mgr.complete_task(plan.id, plan.tasks[0].id, result="partial", cancelled=True)
+
+    mgr2 = PlanManager(tmp_path)
+    loaded = mgr2.get_plan(plan.id)
+    assert loaded is not None
+    assert loaded.tasks[0].status == TaskStatus.INCOMPLETE
+    assert loaded.tasks[0].cancelled is True

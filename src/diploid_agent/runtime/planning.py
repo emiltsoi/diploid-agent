@@ -36,10 +36,16 @@ class RuntimePlanning:
         if plan.chat_id is None:
             return
         total = len(plan.tasks)
-        done = sum(1 for t in plan.tasks if t.status == TaskStatus.DONE)
+        done = sum(
+            1 for t in plan.tasks if t.status in (TaskStatus.DONE, TaskStatus.INCOMPLETE)
+        )
         failed = sum(1 for t in plan.tasks if t.status == TaskStatus.FAILED)
         completed_count = done + failed
-        detail = task.result if task.status == TaskStatus.DONE and task.result else task.log
+        detail = (
+            task.result
+            if task.status in (TaskStatus.DONE, TaskStatus.INCOMPLETE) and task.result
+            else task.log
+        )
         payload = {
             "plan_id": plan.id,
             "plan_name": plan.name,
@@ -79,7 +85,7 @@ class RuntimePlanning:
         task_lines: list[str] = []
         for t in plan.tasks:
             line = f"- {t.name}: {t.status.value}"
-            if t.status == TaskStatus.DONE and t.result:
+            if t.status in (TaskStatus.DONE, TaskStatus.INCOMPLETE) and t.result:
                 line += f" ({t.result[:100].replace(chr(10), ' ').strip()})"
             elif t.status == TaskStatus.FAILED and t.log:
                 line += f" ({t.log[:100].replace(chr(10), ' ').strip()})"

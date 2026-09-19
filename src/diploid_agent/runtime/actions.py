@@ -493,7 +493,10 @@ class RuntimeActions:
     ) -> Task:
         """Manually mark a task as done and emit the completion event."""
         existing = self.plan_manager.get_task(plan_id, task_id)
-        already_done = existing is not None and existing.status == TaskStatus.DONE
+        already_done = existing is not None and existing.status in (
+            TaskStatus.DONE,
+            TaskStatus.INCOMPLETE,
+        )
         task = self.plan_manager.complete_task(plan_id, task_id, result=result, log=log)
         if task is None:
             raise ValueError(f"Task {task_id} not found in plan {plan_id}")

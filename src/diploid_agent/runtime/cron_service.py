@@ -468,7 +468,7 @@ class CronService:
                 self._state.update(state)
                 continue
             self._task_to_job[task.id] = state.job_id
-            if task.status in (TaskStatus.DONE, TaskStatus.FAILED):
+            if task.status in (TaskStatus.DONE, TaskStatus.INCOMPLETE, TaskStatus.FAILED):
                 self._finalize(state, task)
 
     # ------------------------------------------------------------ materialize

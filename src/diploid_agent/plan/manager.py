@@ -102,7 +102,10 @@ class PlanManager:
                 missing = [d for d in task.depends_on if d not in by_id]
                 dep_statuses = [status_map.get(d) for d in task.depends_on if d in by_id]
                 any_failed = any(s in (TaskStatus.FAILED, TaskStatus.BLOCKED) for s in dep_statuses)
-                all_done = all(s == TaskStatus.DONE for s in dep_statuses) and not missing
+                all_done = (
+                    all(s in (TaskStatus.DONE, TaskStatus.INCOMPLETE) for s in dep_statuses)
+                    and not missing
+                )
 
                 if missing or any_failed:
                     if task.status != TaskStatus.BLOCKED:
@@ -121,7 +124,7 @@ class PlanManager:
         if not plan.tasks:
             plan.status = PlanStatus.DRAFT
             return
-        if all(t.status == TaskStatus.DONE for t in plan.tasks):
+        if all(t.status in (TaskStatus.DONE, TaskStatus.INCOMPLETE) for t in plan.tasks):
             plan.status = PlanStatus.COMPLETED
         elif any(t.status == TaskStatus.FAILED for t in plan.tasks) and not any(
             t.status in (TaskStatus.RUNNING, TaskStatus.READY) for t in plan.tasks
@@ -235,7 +238,11 @@ class PlanManager:
             task = self._get_task_in_plan(plan, task_id)
             if task is None:
                 return None
-            task.status = TaskStatus.DONE
+            task.status = (
+                TaskStatus.INCOMPLETE
+                if (cancelled or partial or timed_out)
+                else TaskStatus.DONE
+            )
             task.result = result
             task.log = log
             task.completed_at = time.time()

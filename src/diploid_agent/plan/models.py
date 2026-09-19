@@ -16,6 +16,9 @@ class TaskStatus(str, Enum):
     READY = "ready"
     RUNNING = "running"
     DONE = "done"
+    # Finished but not clean (partial / timed out / cancelled). Terminal, and
+    # unblocks dependents like DONE — the status itself carries the honesty.
+    INCOMPLETE = "incomplete"
     FAILED = "failed"
     BLOCKED = "blocked"
 
