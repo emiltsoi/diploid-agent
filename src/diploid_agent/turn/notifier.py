@@ -225,6 +225,7 @@ class _OutboxHeartbeat:
                 chat_result = ChatResult(
                     reply=f"⏳ Still thinking... ({elapsed_str})",
                     notice="Send /stop to cancel this turn if you don't want to wait.",
+                    transient=True,
                 )
                 self.runtime._enqueue_outbox(self.chat_id, chat_result)
 

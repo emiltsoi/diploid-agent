@@ -2626,6 +2626,55 @@ def test_wake_display_stale_marker_leaves_no_message(
     assert poller._wake_displays == {}
 
 
+def test_wake_display_transient_result_does_not_finish(tmp_path: Path) -> None:
+    """Transient items (heartbeat nudge, mesh float) deliver standalone —
+    they must not finish() the live display and strand the real reply."""
+    runtime = _FakeDeliveryRuntime(
+        outbox=[
+            {"kind": "turn_started", "chat_id": "12345", "result": None},
+            ChatResult(reply="⏳ Still thinking... (30s)", transient=True),
+            ChatResult(reply="wake reply", turn_number=2, session_number=1),
+        ]
+    )
+    statuses = iter(
+        [
+            {"status": "running", "message_text": "wake rep", "thought_text": ""},
+            {"status": "idle", "message_text": "", "thought_text": ""},
+        ]
+    )
+    runtime.turn_status = lambda chat_id, wait=0.0: next(  # type: ignore[attr-defined]
+        statuses, {"status": "idle", "message_text": "", "thought_text": ""}
+    )
+    poller, io = _make_wake_poller(tmp_path, runtime)
+    poller._last_user_message_ids[12345] = 50
+    sent_detail: list[dict[str, Any]] = []
+    poller._send_text = lambda chat_id, text, **kw: (  # type: ignore[method-assign]
+        sent_detail.append({"chat_id": chat_id, "text": text, **kw}) or [999]
+    )
+
+    worker = DeliveryWorker(poller, 12345)
+    worker.start()
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if any(s["text"] == "wake reply" for s in sent_detail):
+            break
+        time.sleep(0.1)
+    worker.stop()
+    worker.join(timeout=2.0)
+
+    # The display posts its placeholder eagerly so a thinking-phase turn is
+    # visible before any reply text streams.
+    assert io.placeholders[0] == (12345, "...")
+    # The nudge went out standalone (direct outbox path, reply_to the user
+    # message) instead of finalizing the display...
+    nudge = next(s for s in sent_detail if "Still thinking" in s["text"])
+    assert nudge.get("first_message_id") is None
+    # ...and the real reply finalized through the placeholder edit path.
+    final = next(s for s in sent_detail if s["text"] == "wake reply")
+    assert final.get("first_message_id") is not None
+    assert poller._wake_displays == {}
+
+
 def test_turn_worker_queued_input_is_processed(tmp_path: Path) -> None:
     """A second message sent while a turn is running is queued and processed next."""
     slow_runtime = _FakeDeliveryRuntime()

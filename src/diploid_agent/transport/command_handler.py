@@ -36,6 +36,7 @@ def _coerce_chat_result(raw: Any) -> ChatResult:
             metrics=raw.get("metrics"),
             reply_to_message_id=raw.get("reply_to_message_id"),
             continuation=raw.get("continuation", False),
+            transient=raw.get("transient", False),
         )
     return ChatResult(reply=str(raw))
 

@@ -145,7 +145,7 @@ class RuntimeOutbox:
         if msg_id:
             text += f" (id={msg_id})"
 
-        chat_result = ChatResult(reply=text)
+        chat_result = ChatResult(reply=text, transient=True)
         self._deliver_chat_result(chat_id, chat_result)
 
     def outbox_pop(

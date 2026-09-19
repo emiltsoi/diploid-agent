@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from diploid_agent.models import ChatResult
 from diploid_agent.runtime.outbox import _is_telegram_chat_id
 from diploid_agent.transport.command_handler import _coerce_chat_result
+from diploid_agent.transport.telegram.formatting import _REPLY_PLACEHOLDER
 from diploid_agent.transport.telegram.models import ChatInput
 from diploid_agent.transport.telegram.stream_display import StreamDisplay
 
@@ -335,6 +336,14 @@ class WakeDisplayWorker(threading.Thread):
             message_id=None,
             thought_id=None,
         )
+        # Show the placeholder immediately: update() only creates it once
+        # reply text arrives, but a wake turn can think or run tools for
+        # minutes first — the pulsing placeholder is the visible liveness
+        # signal for that phase (same as TurnWorker's upfront "...").
+        display.message_id = display._send_placeholder(_REPLY_PLACEHOLDER)
+        if display.message_id is not None:
+            display.last_text_sent = _REPLY_PLACEHOLDER
+            self.poller._save_placeholder_state(self.chat_id, display.message_id, None)
         deadline = time.monotonic() + self._MAX_SECONDS
         # update() clears display_text once the status leaves "running", so
         # keep the last streamed reply for the no-routed-result fallback.
@@ -459,9 +468,14 @@ class DeliveryWorker(threading.Thread):
     def _deliver(self, chat_id: int, chat_result: ChatResult) -> None:
         """Route the result into a live wake display or send it directly."""
         display = self.poller._wake_display_for(chat_id)
-        if display is not None:
+        if display is not None and not chat_result.transient:
             display.finish(_result_to_dict(chat_result))
         else:
+            # Transient items (outbox heartbeat nudges, mesh floats, restart
+            # and subagent notices) are not the displayed turn's result —
+            # routing one to finish() would kill the stream mid-turn and
+            # strand the real reply into a second direct send. They still
+            # deliver as standalone messages so nothing is swallowed.
             self.poller._deliver_outbox_result(chat_id, chat_result)
 
     def run(self) -> None:

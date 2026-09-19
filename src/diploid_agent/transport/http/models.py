@@ -82,6 +82,7 @@ class ChatResponse(BaseModel):
     session_number: int | None = None
     turn_number: int | None = None
     metrics: dict[str, Any] | None = None
+    transient: bool = False
 
 
 class OutboxResponse(BaseModel):

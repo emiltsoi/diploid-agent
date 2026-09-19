@@ -21,6 +21,7 @@ def _to_response(result: Any) -> ChatResponse:
         session_number=result.session_number,
         turn_number=result.turn_number,
         metrics=result.metrics,
+        transient=getattr(result, "transient", False),
     )
 
 

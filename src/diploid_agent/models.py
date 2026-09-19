@@ -107,6 +107,9 @@ class ChatResult:
     turn_number: int | None = None
     metrics: dict[str, Any] | None = None
     reply_to_message_id: int | None = None
+    # Interim/standalone notification (liveness nudge, mesh float, restart or
+    # subagent notice) — never the final result of a streamed wake turn.
+    transient: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

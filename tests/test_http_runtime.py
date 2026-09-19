@@ -333,6 +333,21 @@ def test_outbox_result_defaults_kind_to_result(outbox_client: TestClient) -> Non
     data = resp.json()
     assert data["kind"] == "result"
     assert data["result"]["reply"] == "plain"
+    assert data["result"]["transient"] is False
+
+
+def test_outbox_result_serializes_transient(outbox_client: TestClient) -> None:
+    """A transient flag survives the wire so pollers never route it to a
+    live wake display's finish()."""
+    runtime = outbox_client.app.state.runtime
+    runtime._enqueue_outbox(
+        "chat-1", ChatResult(reply="⏳ Still thinking... (30s)", transient=True)
+    )
+
+    resp = outbox_client.get("/outbox/chat-1", params={"wait": 0.5})
+    data = resp.json()
+    assert data["kind"] == "result"
+    assert data["result"]["transient"] is True
 
 
 def test_agent_runtime_update_task_config_validates_in_place(client: TestClient) -> None:

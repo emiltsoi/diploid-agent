@@ -518,7 +518,7 @@ class AgentRuntime(RuntimeAPI):
     def _notify_agent_restart(self, chat_id: str, text: str) -> None:
         """Enqueue an operator notice for an agent-initiated restart."""
         try:
-            self._enqueue_outbox(chat_id, ChatResult(reply=text))
+            self._enqueue_outbox(chat_id, ChatResult(reply=text, transient=True))
         except Exception as exc:
             logger.warning("Failed to notify chat %s of agent restart", chat_id, exc_info=exc)
 

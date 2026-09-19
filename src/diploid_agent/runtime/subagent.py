@@ -335,6 +335,7 @@ class RuntimeSubagent:
             reply=text,
             dispatch_id=dispatch_id,
             session_id=dispatch.session_id if dispatch else None,
+            transient=True,
         )
         if self._outbox._outbox_delivery_enabled:
             self._outbox._enqueue_outbox(chat_id, chat_result)
