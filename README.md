@@ -43,6 +43,7 @@ retention to a Hindsight memory server.
   file via `sendPhoto`/`sendAnimation`/`sendVideo`/`sendDocument`, with an
   optional caption and a `[file] ...` text fallback.
 - Supports background dispatches that continue the conversation when they complete (`POST /dispatch`, `/continue`) and harness-native background subagents (`/subagent`, `harness_subagent` MCP tool) that survive the parent turn being stopped.
+- Shows a live task board per chat: when a chat has a plan (including subagent work, which flows through `PlanManager`), a single Telegram message lists the tasks with state glyphs and edits itself in place on every transition — debounced at `telegram.min_edit_message_interval`, id persisted across restarts, self-healing if the message is deleted, and frozen as a receipt when the plan goes terminal. `harness.telegram.task_board` (default on) gates it.
 - Supports live runtime configuration of task, waker, timer, notifications, and Telegram settings via HTTP and Telegram without restarting.
 - Supports state plugins with a rich lifecycle hook surface: plugins can intercept turns, sessions, dispatches, memory transitions, skill/MCP commands, retain/promote, and shutdown.
 - Hardens the ACP transport with typed error classification, restart backoff, a

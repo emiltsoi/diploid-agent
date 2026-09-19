@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+## 0.6.9 — 2026-09-19
+
+### Added
+
+- **Live per-chat task board in Telegram**: when a chat has a plan, a single
+  message renders the task list — `☐` pending, `◐` running, `☑` done,
+  `◑` incomplete, `✗` failed, `⊘` cancelled — and edits itself in place on
+  every transition instead of sending a notification per change. Subagent
+  work flows through `PlanManager`, so dispatches render on the board too.
+  - `PlanManager.on_change` fires once per successful mutator,
+    post-transaction, with callback exceptions logged and swallowed —
+    subscribers re-enter the manager for selection without deadlock.
+  - `RuntimeTaskBoard` debounces bursts on a dedicated thread (~1s
+    coalesce) with a hard per-chat floor of
+    `telegram.min_edit_message_interval` (2s) — the only rate control on
+    the notifier path, which bypasses the poller's throttle.
+  - `TelegramNotifier.update_task_board` sends on first render and edits
+    thereafter; the board id persists in `{chat_id}.board.json` beside the
+    ask placeholders so it survives restarts; a deleted board (Telegram 400
+    "message to edit not found") resends and re-keys. Terminal plans freeze
+    as a receipt and reopen when a new plan appears.
+  - Plain-text render (no parse_mode), >12 tasks folds the done tail,
+    names truncate at 60 chars, `chat_id=None` plans never render.
+  - Gate: `harness.telegram.task_board` (default `true`); the board only
+    exists when a chat actually has a plan, so default-on stays quiet.
+  - `Notifier.update_task_board` ABC default returns `False` — non-Telegram
+    backends (webhook, noop) get the feature-free path for free.
+
 ## 0.6.8 — 2026-09-19
 
 A full review-and-hardening pass over the runtime: every finding was
