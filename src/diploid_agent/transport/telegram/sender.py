@@ -31,7 +31,7 @@ from diploid_agent.transport.interactive import (
     extract_file_blocks,
     extract_say_block,
 )
-from diploid_agent.transport.telegram.voice import synthesize
+from diploid_agent.transport.telegram.voice import synthesize_bounded
 from diploid_agent.transport.telegram_format import (
     _prefix_within_utf16_limit,
     _strip_mdv2,
@@ -357,7 +357,7 @@ class TelegramSenderMixin:
         if config.tts_provider != "none" and len(say_text) <= config.tts_max_chars:
             try:
                 with tempfile.TemporaryDirectory(prefix="tts-") as td:
-                    path = synthesize(say_text, config, Path(td))
+                    path = synthesize_bounded(say_text, config, Path(td))
                     if path is not None:
                         sent = (
                             self._send_audio_file(
@@ -617,12 +617,19 @@ class TelegramSenderMixin:
             return []
         send_lock = self._send_locks.setdefault(chat_id, threading.RLock())
         with send_lock:
-            return self._send_text_locked(
+            sent, say_text = self._send_text_locked(
                 chat_id,
                 text,
                 first_message_id=first_message_id,
                 reply_to_message_id=reply_to_message_id,
             )
+        # Voice synthesis + upload run outside the send lock: a slow or wedged
+        # piper call must not serialize every outbound message for this chat.
+        if say_text is not None:
+            self._maybe_send_voice(
+                chat_id, say_text, reply_to_message_id=reply_to_message_id
+            )
+        return sent
 
     def _send_text_locked(
         self,
@@ -631,8 +638,12 @@ class TelegramSenderMixin:
         *,
         first_message_id: int | None = None,
         reply_to_message_id: int | None = None,
-    ) -> list[int]:
-        """Implementation of _send_text; caller must hold the per-chat send lock."""
+    ) -> tuple[list[int], str | None]:
+        """Implementation of _send_text; caller must hold the per-chat send lock.
+
+        Returns the sent message ids and any extracted ```say text, which the
+        caller synthesizes and sends after the lock is released.
+        """
         ask_block: AskBlock | None = None
         display_text = text
 
@@ -745,10 +756,7 @@ class TelegramSenderMixin:
             # The whole reply was consumed by a say block; clear the placeholder.
             self._delete_message(chat_id, first_message_id)
 
-        if say_text is not None:
-            self._maybe_send_voice(chat_id, say_text, reply_to_message_id=reply_to_message_id)
-
         if file_refs:
             self._maybe_send_files(chat_id, file_refs, reply_to_message_id=reply_to_message_id)
 
-        return sent
+        return sent, say_text

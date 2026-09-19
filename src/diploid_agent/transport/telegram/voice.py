@@ -196,3 +196,33 @@ def synthesize(text: str, config: TelegramConfig, work_dir: Path) -> Path | None
         return _synthesize_piper(text, config.tts_model_path, work_dir)
     logger.warning("Unknown tts_provider %r — expected none/command/piper", provider)
     return None
+
+
+def synthesize_bounded(
+    text: str,
+    config: TelegramConfig,
+    work_dir: Path,
+    timeout: float = _TTS_TIMEOUT,
+) -> Path | None:
+    """synthesize() on a daemon thread with a join deadline.
+
+    A wedged provider (e.g. a piper inference that never returns) surfaces as
+    None after ``timeout`` — the daemon thread dies with the process rather
+    than holding a send path forever.
+    """
+    outcome: list[Any] = [None, None]
+
+    def _run() -> None:
+        try:
+            outcome[0] = synthesize(text, config, work_dir)
+        except Exception as exc:  # noqa: BLE001
+            outcome[1] = exc
+
+    worker = threading.Thread(target=_run, daemon=True, name="tts-synth")
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        logger.warning("TTS synthesis exceeded %ss; falling back to text", timeout)
+        return None
+    if outcome[1] is not None:
+        raise outcome[1]

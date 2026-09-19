@@ -3256,3 +3256,76 @@ def test_ask_keyboard_attached_to_last_chunk(tmp_path: Path) -> None:
     assert markup["inline_keyboard"]
     # The pending question is bound to the message that carries the keyboard.
     assert saved == [101]
+
+
+
+# ---------------------------------------------------------------------------
+# Voice synthesis bounds and piper cache/compat
+# ---------------------------------------------------------------------------
+
+
+
+def test_voice_synthesis_runs_outside_send_lock(tmp_path: Path) -> None:
+    """A slow TTS call must not serialize every outbound message for the chat."""
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+        tts_provider="command",
+        tts_command="cat /dev/null",
+    )
+    poller._api = lambda method, **kw: {"ok": True, "result": {"message_id": 1}}
+    held: list[bool] = []
+
+    def spy(chat_id: int, say_text: str, *, reply_to_message_id: int | None = None) -> None:
+        held.append(poller._send_locks[chat_id]._is_owned())
+
+    poller._maybe_send_voice = spy  # type: ignore[method-assign]
+    poller._send_text(12345, "text reply\n```say\nhi there\n```")
+
+    assert held == [False]
+
+
+
+# ---------------------------------------------------------------------------
+# Voice synthesis bounds and piper cache/compat
+# ---------------------------------------------------------------------------
+
+
+
+def test_synthesize_bounded_times_out(tmp_path: Path, monkeypatch: Any) -> None:
+    """A wedged provider surfaces as None after the join deadline."""
+    from diploid_agent.transport.telegram import voice as voice_mod
+
+    monkeypatch.setattr(voice_mod, "synthesize", lambda *a, **kw: time.sleep(5))
+    config = TelegramConfig(tts_provider="command", tts_command="cat")
+    assert voice_mod.synthesize_bounded("hi", config, tmp_path, timeout=0.1) is None
+
+
+
+# ---------------------------------------------------------------------------
+# Voice synthesis bounds and piper cache/compat
+# ---------------------------------------------------------------------------
+
+
+
+def test_synthesize_bounded_passthrough_and_raise(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    from diploid_agent.transport.telegram import voice as voice_mod
+
+    out = tmp_path / "say.ogg"
+    monkeypatch.setattr(voice_mod, "synthesize", lambda *a, **kw: out)
+    config = TelegramConfig()
+    assert voice_mod.synthesize_bounded("hi", config, tmp_path) is out
+
+    def boom(*a: Any, **kw: Any) -> None:
+        raise RuntimeError("wedged")
+
+    monkeypatch.setattr(voice_mod, "synthesize", boom)
+    try:
+        voice_mod.synthesize_bounded("hi", config, tmp_path, timeout=1.0)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("synthesize exception should propagate")
