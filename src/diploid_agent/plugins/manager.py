@@ -9,40 +9,13 @@ import re
 import sys
 import traceback
 from collections import defaultdict
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from diploid_agent.config import McpServerConfig, PluginConfig
-from diploid_agent.dispatch import Dispatch, DispatchStore
-from diploid_agent.memory import MemoryItem
-from diploid_agent.models import ChatResult, PartialTurn, SessionRecord, WakeEvent
-from diploid_agent.plugins.base import StatePlugin, TurnInfo
+from diploid_agent.config import PluginConfig
+from diploid_agent.dispatch import DispatchStore
+from diploid_agent.plugins.base import StatePlugin
 from diploid_agent.plugins.broken import FailedPlugin
-from diploid_agent.plugins.contexts import (
-    DispatchCompleteContext,
-    DispatchContinueContext,
-    DispatchCreateContext,
-    EngineCallContext,
-    EngineResultContext,
-    IdleContext,
-    McpCommandContext,
-    MemoryTransitionContext,
-    PromoteContext,
-    PromptBuildContext,
-    PromptContext,
-    RecordTurnContext,
-    RetainContext,
-    SessionActiveContext,
-    SessionArchiveContext,
-    SessionClearContext,
-    SessionStartContext,
-    ShutdownContext,
-    SkillCommandContext,
-    TurnErrorContext,
-    TurnStartContext,
-    UserMessageContext,
-)
 from diploid_agent.plugins.hooks import PluginHooks
 from diploid_agent.runtime.plugin_runtime import PluginRuntime
 
@@ -521,283 +494,63 @@ class PluginManager:
     # ---------------------------------------------------------------- hook dispatch
     #
     # Hook fan-out and consult dispatch live in ``PluginHooks``
-    # (plugins/hooks.py); the methods below are thin delegates kept for
-    # call-site compatibility.
+    # (plugins/hooks.py). Every name in ``_HOOK_DELEGATES`` forwards to the
+    # same-named ``PluginHooks`` method via ``__getattr__``, so delegates
+    # expose the real signatures and adding a hook is a table entry.
 
-    def on_waking(
-        self,
-        chat_id: str,
-        record: SessionRecord | None,
-        now: float,
-        *,
-        wake_event: WakeEvent | None = None,
-        other_instance_running: bool = False,
-        rehydration_reason: str | None = None,
-    ) -> None:
-        self._hooks.on_waking(
-            chat_id,
-            record,
-            now,
-            wake_event=wake_event,
-            other_instance_running=other_instance_running,
-            rehydration_reason=rehydration_reason,
-        )
+    _HOOK_DELEGATES: frozenset[str] = frozenset(
+        {
+            "on_waking",
+            "fill_prompt_slots",
+            "mcp_server_configs",
+            "default_skill_names",
+            "default_mcp_names",
+            "durable_files",
+            "event",
+            "memory_items",
+            "on_turn_end",
+            "on_sleeping",
+            "on_shutdown",
+            "before_turn",
+            "before_format_user_message",
+            "before_build_prompt",
+            "after_prompt_built",
+            "before_engine_call",
+            "after_engine_call",
+            "before_record_turn",
+            "after_turn",
+            "on_turn_error",
+            "on_partial",
+            "on_dispatch",
+            "on_event",
+            "on_idle",
+            "before_session_archive",
+            "before_session_clear",
+            "before_session_start",
+            "after_session_active",
+            "before_dispatch",
+            "after_dispatch",
+            "before_dispatch_continue",
+            "after_dispatch_continue",
+            "on_chat_memory_transition",
+            "on_persona_memory_transition",
+            "after_first_prompt_built",
+            "before_skill_enabled",
+            "after_skill_enabled",
+            "before_skill_disabled",
+            "after_skill_disabled",
+            "before_mcp_enabled",
+            "after_mcp_enabled",
+            "before_mcp_disabled",
+            "after_mcp_disabled",
+            "before_retain",
+            "after_retain",
+            "before_promote",
+            "after_promote",
+        }
+    )
 
-    def fill_prompt_slots(
-        self,
-        chat_id: str,
-        slots: dict[str, list[str]],
-        is_first: bool,
-        rehydrated: bool = False,
-        last_blocks: dict[tuple[str, str], str | None] | None = None,
-        last_prompt_time: float | None = None,
-        force_slots: set[str] | None = None,
-        compact: bool = False,
-    ) -> dict[str, list[str]]:
-        return self._hooks.fill_prompt_slots(
-            chat_id,
-            slots,
-            is_first,
-            rehydrated=rehydrated,
-            last_blocks=last_blocks,
-            last_prompt_time=last_prompt_time,
-            force_slots=force_slots,
-            compact=compact,
-        )
-
-    def mcp_server_configs(self) -> list[McpServerConfig]:
-        return self._hooks.mcp_server_configs()
-
-    def default_skill_names(self) -> list[str]:
-        return self._hooks.default_skill_names()
-
-    def default_mcp_names(self) -> list[str]:
-        return self._hooks.default_mcp_names()
-
-    def durable_files(self) -> list[str]:
-        return self._hooks.durable_files()
-
-    def event(
-        self,
-        chat_id: str,
-        plugin_name: str,
-        *,
-        event: str | None = None,
-        raw_args: str | None = None,
-        **params: Any,
-    ) -> str:
-        return self._hooks.event(chat_id, plugin_name, event=event, raw_args=raw_args, **params)
-
-    def memory_items(self, chat_id: str, since: float) -> list[MemoryItem]:
-        return self._hooks.memory_items(chat_id, since)
-
-    def on_turn_end(self, chat_id: str, turn: TurnInfo) -> None:
-        self._hooks.on_turn_end(chat_id, turn)
-
-    def on_sleeping(self, chat_id: str, record: SessionRecord | None, reason: str) -> None:
-        self._hooks.on_sleeping(chat_id, record, reason)
-
-    def on_shutdown(self, chat_id: str, context: ShutdownContext) -> None:
-        self._hooks.on_shutdown(chat_id, context)
-
-    # ---------------------------------------------------------------- turn hooks
-
-    def before_turn(
-        self,
-        chat_id: str,
-        context: TurnStartContext,
-    ) -> TurnStartContext | ChatResult | None:
-        return self._hooks.before_turn(chat_id, context)
-
-    def before_format_user_message(
-        self,
-        chat_id: str,
-        context: UserMessageContext,
-        formatter: Callable[[UserMessageContext], str],
-    ) -> UserMessageContext:
-        return self._hooks.before_format_user_message(chat_id, context, formatter)
-
-    def before_build_prompt(
-        self,
-        chat_id: str,
-        context: PromptBuildContext,
-    ) -> PromptBuildContext:
-        return self._hooks.before_build_prompt(chat_id, context)
-
-    def after_prompt_built(
-        self,
-        chat_id: str,
-        context: PromptContext,
-    ) -> PromptContext:
-        return self._hooks.after_prompt_built(chat_id, context)
-
-    def before_engine_call(
-        self,
-        chat_id: str,
-        context: EngineCallContext,
-    ) -> EngineCallContext | ChatResult | None:
-        return self._hooks.before_engine_call(chat_id, context)
-
-    def after_engine_call(
-        self,
-        chat_id: str,
-        context: EngineResultContext,
-    ) -> EngineResultContext:
-        return self._hooks.after_engine_call(chat_id, context)
-
-    def before_record_turn(
-        self,
-        chat_id: str,
-        context: RecordTurnContext,
-    ) -> RecordTurnContext:
-        return self._hooks.before_record_turn(chat_id, context)
-
-    def after_turn(self, chat_id: str, turn: TurnInfo) -> None:
-        self._hooks.after_turn(chat_id, turn)
-
-    def on_turn_error(self, chat_id: str, context: TurnErrorContext) -> None:
-        self._hooks.on_turn_error(chat_id, context)
-
-    # ---------------------------------------------------------------- partial / dispatch / event / idle
-
-    def on_partial(self, chat_id: str, partial: PartialTurn) -> None:
-        self._hooks.on_partial(chat_id, partial)
-
-    def on_dispatch(self, chat_id: str, dispatch: Dispatch) -> None:
-        self._hooks.on_dispatch(chat_id, dispatch)
-
-    def on_event(
-        self,
-        chat_id: str,
-        event: str,
-        payload: dict[str, Any],
-    ) -> None:
-        self._hooks.on_event(chat_id, event, payload)
-
-    def on_idle(self, chat_id: str, context: IdleContext) -> None:
-        self._hooks.on_idle(chat_id, context)
-
-    # ---------------------------------------------------------------- session hooks
-
-    def before_session_archive(
-        self,
-        chat_id: str,
-        context: SessionArchiveContext,
-    ) -> SessionArchiveContext:
-        return self._hooks.before_session_archive(chat_id, context)
-
-    def before_session_clear(
-        self,
-        chat_id: str,
-        context: SessionClearContext,
-    ) -> SessionClearContext:
-        return self._hooks.before_session_clear(chat_id, context)
-
-    def before_session_start(
-        self,
-        chat_id: str,
-        context: SessionStartContext,
-    ) -> SessionStartContext | ChatResult | None:
-        return self._hooks.before_session_start(chat_id, context)
-
-    def after_session_active(
-        self,
-        chat_id: str,
-        context: SessionActiveContext,
-    ) -> SessionActiveContext:
-        return self._hooks.after_session_active(chat_id, context)
-
-    # ---------------------------------------------------------------- dispatch hooks
-
-    def before_dispatch(
-        self,
-        chat_id: str,
-        context: DispatchCreateContext,
-    ) -> DispatchCreateContext:
-        return self._hooks.before_dispatch(chat_id, context)
-
-    def after_dispatch(
-        self,
-        chat_id: str,
-        context: DispatchCreateContext,
-    ) -> None:
-        self._hooks.after_dispatch(chat_id, context)
-
-    def before_dispatch_continue(
-        self,
-        chat_id: str,
-        context: DispatchContinueContext,
-    ) -> DispatchContinueContext:
-        return self._hooks.before_dispatch_continue(chat_id, context)
-
-    def after_dispatch_continue(
-        self,
-        chat_id: str,
-        context: DispatchCompleteContext,
-    ) -> None:
-        self._hooks.after_dispatch_continue(chat_id, context)
-
-    # ---------------------------------------------------------------- memory hooks
-
-    def on_chat_memory_transition(
-        self,
-        chat_id: str,
-        context: MemoryTransitionContext,
-    ) -> MemoryTransitionContext:
-        return self._hooks.on_chat_memory_transition(chat_id, context)
-
-    def on_persona_memory_transition(
-        self,
-        chat_id: str,
-        context: MemoryTransitionContext,
-    ) -> MemoryTransitionContext:
-        return self._hooks.on_persona_memory_transition(chat_id, context)
-
-    # ---------------------------------------------------------------- wake / first prompt
-
-    def after_first_prompt_built(self, chat_id: str, context: PromptContext) -> PromptContext:
-        return self._hooks.after_first_prompt_built(chat_id, context)
-
-    # ---------------------------------------------------------------- skill / mcp command hooks
-
-    def before_skill_enabled(
-        self, chat_id: str, context: SkillCommandContext
-    ) -> SkillCommandContext:
-        return self._hooks.before_skill_enabled(chat_id, context)
-
-    def after_skill_enabled(self, chat_id: str, context: SkillCommandContext) -> None:
-        self._hooks.after_skill_enabled(chat_id, context)
-
-    def before_skill_disabled(
-        self, chat_id: str, context: SkillCommandContext
-    ) -> SkillCommandContext:
-        return self._hooks.before_skill_disabled(chat_id, context)
-
-    def after_skill_disabled(self, chat_id: str, context: SkillCommandContext) -> None:
-        self._hooks.after_skill_disabled(chat_id, context)
-
-    def before_mcp_enabled(self, chat_id: str, context: McpCommandContext) -> McpCommandContext:
-        return self._hooks.before_mcp_enabled(chat_id, context)
-
-    def after_mcp_enabled(self, chat_id: str, context: McpCommandContext) -> None:
-        self._hooks.after_mcp_enabled(chat_id, context)
-
-    def before_mcp_disabled(self, chat_id: str, context: McpCommandContext) -> McpCommandContext:
-        return self._hooks.before_mcp_disabled(chat_id, context)
-
-    def after_mcp_disabled(self, chat_id: str, context: McpCommandContext) -> None:
-        self._hooks.after_mcp_disabled(chat_id, context)
-
-    # ---------------------------------------------------------------- retain / promote hooks
-
-    def before_retain(self, chat_id: str, context: RetainContext) -> RetainContext:
-        return self._hooks.before_retain(chat_id, context)
-
-    def after_retain(self, chat_id: str, context: RetainContext) -> None:
-        self._hooks.after_retain(chat_id, context)
-
-    def before_promote(self, chat_id: str, context: PromoteContext) -> PromoteContext:
-        return self._hooks.before_promote(chat_id, context)
-
-    def after_promote(self, chat_id: str, context: PromoteContext) -> None:
-        self._hooks.after_promote(chat_id, context)
+    def __getattr__(self, name: str) -> Any:
+        if name in self._HOOK_DELEGATES:
+            return getattr(self._hooks, name)
+        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
