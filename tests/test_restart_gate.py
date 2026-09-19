@@ -224,6 +224,47 @@ def test_systemd_run_failure_clears_drain_and_notifies(
     assert incidents.records[0]["chat_id"] == "chat-9"
 
 
+def test_pending_restart_none_without_drain(tmp_path: Path) -> None:
+    restart = _make_restart(_make_config(tmp_path), _Incidents(), [])
+    assert restart.pending_restart() is None
+
+
+def test_pending_restart_reports_metadata(tmp_path: Path) -> None:
+    """Scheduling a drain records service/reason/chat for /health."""
+    restart = _make_restart(_make_config(tmp_path), _Incidents(), [])
+    assert restart.schedule_draining_restart(
+        "test-pilot.service", chat_id="chat-7", reason="maintenance"
+    )
+    info = restart.pending_restart()
+    assert info is not None
+    assert info["service"] == "test-pilot.service"
+    assert info["reason"] == "maintenance"
+    assert info["chat_id"] == "chat-7"
+    assert info["draining_since"] > 0
+    assert info["active_turns"] == 0
+    assert info["session_ops_pending"] is False
+
+
+def test_pending_restart_cleared_on_failure(tmp_path: Path) -> None:
+    """_restart_failed clears both the drain flag and the metadata."""
+    restart = _make_restart(_make_config(tmp_path), _Incidents(), [])
+    restart._state.restart_draining.set()
+    restart._state.pending_restart = {"service": "test-pilot.service"}
+    restart._restart_failed("test-pilot.service", "chat-1", "boom")
+    assert restart.pending_restart() is None
+    assert restart._state.pending_restart is None
+
+
+def test_pending_restart_bare_drain_is_legible(tmp_path: Path) -> None:
+    """A drain without restart metadata (e.g. shutdown) still reports."""
+    restart = _make_restart(_make_config(tmp_path), _Incidents(), [])
+    restart._state.restart_draining.set()
+    info = restart.pending_restart()
+    assert info is not None
+    assert info["draining"] is True
+    assert "service" not in info
+
+
 def test_systemd_run_success_keeps_drain(tmp_path: Path, monkeypatch) -> None:
     """A clean systemd-run leaves the drain armed for the real restart."""
     incidents = _Incidents()

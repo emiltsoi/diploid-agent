@@ -84,6 +84,16 @@ class AcpTransport:
 
     # ------------------------------------------------------------------ public
 
+    @property
+    def started(self) -> bool:
+        """True once the transport handshake has initialized a session.
+
+        A ``False`` answer means the transport simply has not been asked to
+        work yet (it starts lazily) — distinct from a started-then-failed
+        transport, which ``healthy()`` still reports as unhealthy.
+        """
+        return self._initialized
+
     def healthy(self) -> bool:
         """Return True if the ACP transport is initialized and healthy."""
         if self._terminated:

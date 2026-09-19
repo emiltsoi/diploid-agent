@@ -204,12 +204,24 @@ class RuntimeMetrics:
         components: dict[str, Any] = {}
 
         acp_healthy = False
+        acp_status = "error"
         try:
-            acp_healthy = bool(self.engine.health())
+            engine = self.engine
+            if engine.health():
+                acp_healthy = True
+                acp_status = "ok"
+            else:
+                # A lazily-started transport that has not been asked to work
+                # yet is idle, not broken — don't report a fresh instance as
+                # degraded for it.
+                started_fn = getattr(engine, "transport_started", None)
+                if callable(started_fn) and not started_fn():
+                    acp_healthy = True
+                    acp_status = "idle"
         except Exception as exc:  # noqa: BLE001
             logger.debug("ACP health check failed: %s", exc)
         components["acp"] = {
-            "status": "ok" if acp_healthy else "error",
+            "status": acp_status,
             "healthy": acp_healthy,
         }
 

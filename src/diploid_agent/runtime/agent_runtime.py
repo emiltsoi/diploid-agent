@@ -734,7 +734,9 @@ class AgentRuntime(RuntimeAPI):
 
     def health(self) -> dict[str, Any]:
         """Return the current health of the runtime and its dependencies."""
-        return self._runtime_metrics.health()
+        health = self._runtime_metrics.health()
+        health["pending_restart"] = self._restart.pending_restart()
+        return health
 
     def _hindsight_health(self) -> bool:
         """Probe the Hindsight backend health endpoint."""

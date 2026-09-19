@@ -316,6 +316,11 @@ class AcpClient:
         with self._lock:
             return self._transport.healthy()
 
+    def transport_started(self) -> bool:
+        """Return True once the ACP transport has initialized a session."""
+        with self._lock:
+            return self._transport.started
+
     def session_alive(self, session_id: str) -> bool:
         """Probe whether an ACP session id is still valid."""
         self._ensure_started()

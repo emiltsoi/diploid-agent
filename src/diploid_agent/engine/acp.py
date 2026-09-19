@@ -221,6 +221,10 @@ class AcpEngine(AgentEngine):
     def health(self) -> bool:
         return self._client.health()
 
+    def transport_started(self) -> bool:
+        """Return True once the ACP transport has initialized a session."""
+        return self._client.transport_started()
+
     def session_alive(self, session_id: str) -> bool:
         return self._client.session_alive(session_id)
 

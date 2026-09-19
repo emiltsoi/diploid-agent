@@ -8,7 +8,7 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from diploid_agent.config import AuthorshipConfig
 from diploid_agent.plugins.contexts import ShutdownContext
@@ -277,6 +277,13 @@ class RuntimeRestart:
             )
             return False
         self._state.restart_draining.set()
+        with self._lock:
+            self._state.pending_restart = {
+                "service": service,
+                "reason": reason,
+                "chat_id": chat_id,
+                "draining_since": time.time(),
+            }
 
         def _drain_then_restart() -> None:
             try:
@@ -294,6 +301,22 @@ class RuntimeRestart:
 
         threading.Thread(target=_drain_then_restart, daemon=True, name="restart-drain").start()
         return True
+
+    def pending_restart(self) -> dict[str, Any] | None:
+        """Return legible detail of an in-progress graceful restart, if any.
+
+        A drain (restart or shutdown) without recorded detail reports
+        ``{"draining": True}`` — still observable, just without a named unit.
+        """
+        if not self._state.restart_draining.is_set():
+            return None
+        with self._lock:
+            info = dict(self._state.pending_restart or {})
+            info["active_turns"] = len(self._active_turns)
+            info["session_ops_pending"] = bool(self._session_ops)
+        if not info.get("service"):
+            info["draining"] = True
+        return info
 
     def _notify_restart_failed(
         self,
@@ -328,6 +351,7 @@ class RuntimeRestart:
         cooldown so a retry is not blocked.
         """
         self._state.restart_draining.clear()
+        self._state.pending_restart = None
         self._state.last_service_restart_at = 0.0
         if self._incidents is not None:
             try:
