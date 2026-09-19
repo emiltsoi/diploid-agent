@@ -97,7 +97,11 @@ def _safe_filename(name: str, *, fallback: str) -> str:
 
 from diploid_agent.transport.telegram.models import ChatInput, TelegramAttachment
 from diploid_agent.transport.telegram.voice import TRANSCRIBABLE_KINDS, transcribe
-from diploid_agent.transport.telegram.workers import DeliveryWorker, TurnWorker
+from diploid_agent.transport.telegram.workers import (
+    DeliveryWorker,
+    TurnWorker,
+    WakeDisplayWorker,
+)
 
 from .commands import TelegramCommandMixin
 from .sender import TelegramSenderMixin
@@ -186,6 +190,7 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
         self._pending_inputs: dict[int, deque[ChatInput]] = {}
         self._delivery_workers: dict[int, DeliveryWorker] = {}
         self._global_delivery_worker: DeliveryWorker | None = None
+        self._wake_displays: dict[int, WakeDisplayWorker] = {}
         self._last_user_message_ids: dict[int, int] = {}
         self._send_locks: dict[int, threading.RLock] = {}
         self._worker_lock = threading.RLock()
@@ -272,6 +277,26 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
                 return
             self._global_delivery_worker = DeliveryWorker(self, chat_id=None)
             self._global_delivery_worker.start()
+
+    def _start_wake_display(self, chat_id: int) -> None:
+        """Register a WakeDisplayWorker for a wake-driven turn, if enabled.
+
+        Called by DeliveryWorker when an outbox ``turn_started`` marker
+        arrives. Skipped when the flag is off, a display is already live, or
+        a TurnWorker owns the chat (a user turn streams its own reply).
+        """
+        if not self._live_telegram_config.wake_stream:
+            return
+        with self._worker_lock:
+            if chat_id in self._wake_displays or chat_id in self._active_workers:
+                return
+            worker = WakeDisplayWorker(self, chat_id)
+            self._wake_displays[chat_id] = worker
+            worker.start()
+
+    def _wake_display_for(self, chat_id: int) -> WakeDisplayWorker | None:
+        with self._worker_lock:
+            return self._wake_displays.get(chat_id)
 
     def _deliver_outbox_result(self, chat_id: int, chat_result: ChatResult) -> None:
         """Deliver an outbox ChatResult to Telegram, registering sent message IDs."""

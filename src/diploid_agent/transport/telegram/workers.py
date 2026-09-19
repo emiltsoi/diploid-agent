@@ -46,6 +46,54 @@ def _coerce_outbox_result(raw: Any) -> ChatResult | None:
     return _coerce_chat_result(raw)
 
 
+def _is_wake_marker(raw: Any) -> str | None:
+    """Return the marker's chat_id when an outbox item is a turn_started marker."""
+    if isinstance(raw, dict) and raw.get("kind") == "turn_started":
+        chat_id = raw.get("chat_id")
+        return str(chat_id) if chat_id is not None else None
+    return None
+
+
+def _fetch_turn_status(
+    poller: TelegramPoller, chat_id: int, wait: float = 0.0
+) -> dict[str, Any]:
+    """Long-poll the harness for one chat's turn status."""
+    if poller.runtime is not None:
+        try:
+            return poller.runtime.turn_status(str(chat_id), wait=wait)
+        except Exception:
+            logger.exception("Runtime turn_status failed")
+            return {"chat_id": str(chat_id), "status": "idle"}
+
+    if poller.harness_url is None:
+        return {"chat_id": str(chat_id), "status": "idle"}
+
+    try:
+        resp = poller.client.get(
+            f"{poller.harness_url}/turn/{chat_id}",
+            params={"wait": wait},
+            headers=poller._harness_headers(),
+            timeout=max(wait + 30.0, 60.0),
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception:
+        logger.exception("Harness /turn failed")
+        return {"chat_id": str(chat_id), "status": "idle"}
+
+
+def _result_to_dict(result: ChatResult) -> dict[str, Any]:
+    """Flatten a ChatResult into the dict shape StreamDisplay.finalize expects."""
+    return {
+        "reply": result.reply or "",
+        "notice": result.notice,
+        "session_number": result.session_number,
+        "turn_number": result.turn_number,
+        "session_id": result.session_id,
+        "continuation": getattr(result, "continuation", False),
+    }
+
+
 class TurnWorker(threading.Thread):
     """Run a single turn, stream partial output to Telegram, and support steering."""
 
@@ -142,28 +190,7 @@ class TurnWorker(threading.Thread):
             }
 
     def _harness_turn_status(self, wait: float = 0.0) -> dict[str, Any]:
-        if self.poller.runtime is not None:
-            try:
-                return self.poller.runtime.turn_status(str(self.chat_id), wait=wait)
-            except Exception:
-                logger.exception("Runtime turn_status failed")
-                return {"chat_id": str(self.chat_id), "status": "idle"}
-
-        if self.poller.harness_url is None:
-            return {"chat_id": str(self.chat_id), "status": "idle"}
-
-        try:
-            resp = self.poller.client.get(
-                f"{self.poller.harness_url}/turn/{self.chat_id}",
-                params={"wait": wait},
-                headers=self.poller._harness_headers(),
-                timeout=max(wait + 30.0, 60.0),
-            )
-            resp.raise_for_status()
-            return resp.json()
-        except Exception:
-            logger.exception("Harness /turn failed")
-            return {"chat_id": str(self.chat_id), "status": "idle"}
+        return _fetch_turn_status(self.poller, self.chat_id, wait=wait)
 
     def _send_placeholder(self, text: str) -> int | None:
         return self.poller._send_message(
@@ -269,6 +296,74 @@ class TurnWorker(threading.Thread):
             self.poller._close_client()
 
 
+class WakeDisplayWorker(threading.Thread):
+    """Stream a wake-driven turn's partial reply into a Telegram placeholder.
+
+    Registered by the poller when an outbox ``turn_started`` marker arrives;
+    the turn's real ChatResult is routed here via ``finish`` so the streamed
+    placeholder becomes the final message instead of double-posting. Reply
+    text only in v1 — no thought placeholder.
+    """
+
+    # Upper bound for the pathological case: a crashed turn can leave
+    # turn_status stuck on running with no result ever landing.
+    _MAX_SECONDS = 45 * 60
+    # Grace window for the routed result once status leaves "running".
+    _RESULT_GRACE = 30.0
+
+    def __init__(self, poller: TelegramPoller, chat_id: int):
+        super().__init__(daemon=True, name=f"wake-display-{chat_id}")
+        self.poller = poller
+        self.chat_id = chat_id
+        self._result: dict[str, Any] | None = None
+        self._result_event = threading.Event()
+
+    def finish(self, result: dict[str, Any]) -> None:
+        """Hand the turn's real result in for finalization."""
+        self._result = result
+        self._result_event.set()
+
+    def run(self) -> None:
+        display = StreamDisplay(
+            poller=self.poller,
+            chat_id=self.chat_id,
+            reply_to_message_id=None,
+            config=self.poller._live_telegram_config,
+            message_id=None,
+            thought_id=None,
+        )
+        deadline = time.monotonic() + self._MAX_SECONDS
+        # update() clears display_text once the status leaves "running", so
+        # keep the last streamed reply for the no-routed-result fallback.
+        last_display = ""
+        try:
+            while not self._result_event.is_set() and time.monotonic() < deadline:
+                wait = display.next_wait()
+                poll_started = time.monotonic()
+                status = _fetch_turn_status(self.poller, self.chat_id, wait=wait)
+                poll_elapsed = time.monotonic() - poll_started
+                if poll_elapsed < _MIN_POLL_INTERVAL:
+                    time.sleep(_MIN_POLL_INTERVAL - poll_elapsed)
+                display.update(status)
+                if display.display_text:
+                    last_display = display.display_text
+                if status.get("status") != "running":
+                    break
+            # The real result usually lands within moments of the status
+            # leaving "running"; wait briefly, then fall back to the text we
+            # already streamed so the chat still gets the reply.
+            self._result_event.wait(self._RESULT_GRACE)
+            result = self._result or {"reply": last_display}
+            display.finalize(result)
+        except Exception:
+            logger.exception("WakeDisplayWorker failed for chat %s", self.chat_id)
+        finally:
+            with self.poller._worker_lock:
+                if self.poller._wake_displays.get(self.chat_id) is self:
+                    self.poller._wake_displays.pop(self.chat_id, None)
+            self.poller._remove_placeholder_state(self.chat_id)
+
+
 class DeliveryWorker(threading.Thread):
     """Long-poll the runtime outbox and deliver ChatResults to Telegram.
 
@@ -294,42 +389,71 @@ class DeliveryWorker(threading.Thread):
     def stop(self) -> None:
         self._should_stop.set()
 
+    def _handle_marker(self, raw: Any) -> bool:
+        """Start a wake display when the item is a turn_started marker."""
+        marker_chat = _is_wake_marker(raw)
+        if marker_chat is None:
+            return False
+        if _is_telegram_chat_id(marker_chat):
+            self.poller._start_wake_display(int(marker_chat))
+        return True
+
     def _fetch_outbox(self) -> ChatResult | None:
-        """Poll the outbox and return the next ChatResult (or None if empty)."""
-        if self.chat_id is not None:
+        """Poll the outbox and return the next ChatResult (or None if empty).
+
+        ``turn_started`` markers are consumed inline and the poll repeats, so
+        a marker never stalls the queued result behind the empty backoff.
+        """
+        while not self._should_stop.is_set():
+            if self.chat_id is not None:
+                raw = self.poller.command_handler.call(
+                    method="outbox_pop",
+                    chat_id=self.chat_id,
+                    http_path="/outbox/{chat_id}",
+                    http_method="GET",
+                    wait=self._POLL_WAIT,
+                )
+                if self._handle_marker(raw):
+                    continue
+                return _coerce_outbox_result(raw)
+
+            self._next_chat_id = None
             raw = self.poller.command_handler.call(
                 method="outbox_pop",
-                chat_id=self.chat_id,
-                http_path="/outbox/{chat_id}",
+                http_path="/outbox",
                 http_method="GET",
                 wait=self._POLL_WAIT,
+                requires_chat_id=False,
+                return_chat_id=True,
             )
-            return _coerce_outbox_result(raw)
-
-        self._next_chat_id = None
-        raw = self.poller.command_handler.call(
-            method="outbox_pop",
-            http_path="/outbox",
-            http_method="GET",
-            wait=self._POLL_WAIT,
-            requires_chat_id=False,
-            return_chat_id=True,
-        )
-        if raw is None:
-            return None
-        if isinstance(raw, tuple):
-            chat_id, result = raw[0], _coerce_outbox_result(raw[1])
-        elif isinstance(raw, dict):
-            if "error" in raw:
+            if raw is None:
                 return None
-            chat_id, result = raw.get("chat_id"), _coerce_outbox_result(raw)
+            if isinstance(raw, tuple):
+                if self._handle_marker(raw[1]):
+                    continue
+                chat_id, result = raw[0], _coerce_outbox_result(raw[1])
+            elif isinstance(raw, dict):
+                if "error" in raw:
+                    return None
+                if self._handle_marker(raw):
+                    continue
+                chat_id, result = raw.get("chat_id"), _coerce_outbox_result(raw)
+            else:
+                return _coerce_outbox_result(raw)
+            if chat_id is None or not _is_telegram_chat_id(str(chat_id)):
+                logger.debug("Skipping non-Telegram outbox item for chat %s", chat_id)
+                return None
+            self._next_chat_id = int(str(chat_id))
+            return result
+        return None
+
+    def _deliver(self, chat_id: int, chat_result: ChatResult) -> None:
+        """Route the result into a live wake display or send it directly."""
+        display = self.poller._wake_display_for(chat_id)
+        if display is not None:
+            display.finish(_result_to_dict(chat_result))
         else:
-            return _coerce_outbox_result(raw)
-        if chat_id is None or not _is_telegram_chat_id(str(chat_id)):
-            logger.debug("Skipping non-Telegram outbox item for chat %s", chat_id)
-            return None
-        self._next_chat_id = int(str(chat_id))
-        return result
+            self.poller._deliver_outbox_result(chat_id, chat_result)
 
     def run(self) -> None:
         try:
@@ -340,13 +464,13 @@ class DeliveryWorker(threading.Thread):
                         self._should_stop.wait(self._EMPTY_BACKOFF)
                         continue
                     if self.chat_id is not None:
-                        self.poller._deliver_outbox_result(self.chat_id, chat_result)
+                        self._deliver(self.chat_id, chat_result)
                     else:
                         chat_id = self._next_chat_id
                         if chat_id is None:
                             time.sleep(self._POLL_WAIT)
                             continue
-                        self.poller._deliver_outbox_result(chat_id, chat_result)
+                        self._deliver(chat_id, chat_result)
                 except Exception:
                     logger.exception("DeliveryWorker error for chat %s", self.chat_id)
                     time.sleep(self._POLL_WAIT)
