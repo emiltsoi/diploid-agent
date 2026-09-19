@@ -4,10 +4,14 @@ The control socket lives at a deterministic per-service path so a child's
 baked ``DIPLOID_CONTROL_SOCKET`` survives transport generations and process
 restarts. ``ensure_listening()`` re-binds after any ``close()``, and a
 connect-probe keeps a new binder from stealing a *live* socket.
+
+``DIPLOID_CONTROL_DIR`` scopes the whole namespace; conftest sets it to a
+per-test tmpdir so parallel workers never share socket paths.
 """
 
 import json
 import os
+import shutil
 import socket
 import stat
 import threading
@@ -49,7 +53,7 @@ def _send_restart(path: Path, service: str, reason: str = "test", token: str | N
 
 
 def test_stable_path_and_dir_permissions() -> None:
-    """The socket lives at /tmp/diploid-ctl-<service>/control.sock with 0700."""
+    """The socket lives at $DIPLOID_CONTROL_DIR/diploid-ctl-<service>/control.sock with 0700."""
     name = _name()
     listener = _listener(name, [])
     try:
@@ -62,6 +66,51 @@ def test_stable_path_and_dir_permissions() -> None:
         assert path.exists()
     finally:
         listener.close()
+
+
+def test_control_dir_defaults_to_tempdir(monkeypatch) -> None:
+    """Without DIPLOID_CONTROL_DIR the socket base stays the system temp dir."""
+    monkeypatch.delenv("DIPLOID_CONTROL_DIR", raising=False)
+    name = _name()
+    listener = _listener(name, [])
+    try:
+        assert listener.socket_path.parent.parent == Path(control_mod.tempfile.gettempdir())
+        assert listener.socket_path.parent.name == f"diploid-ctl-{name}"
+    finally:
+        listener.close()
+
+
+def test_control_dir_env_scopes_socket_base(monkeypatch) -> None:
+    """DIPLOID_CONTROL_DIR relocates the per-service socket namespace."""
+    # AF_UNIX sun_path is ~107 chars — the base must stay shallow.
+    base = Path(control_mod.tempfile.mkdtemp(prefix="dpctl-a-"))
+    monkeypatch.setenv("DIPLOID_CONTROL_DIR", str(base))
+    name = _name()
+    listener = _listener(name, [])
+    try:
+        assert listener.socket_path == base / f"diploid-ctl-{name}" / "control.sock"
+        assert listener.socket_path.exists()
+        assert listener.env()["DIPLOID_CONTROL_SOCKET"] == str(listener.socket_path)
+    finally:
+        listener.close()
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def test_control_dir_isolates_same_service_name(monkeypatch) -> None:
+    """Same service name under two control dirs binds two separate sockets."""
+    name = _name()
+    paths: list[Path] = []
+    for worker in ("w1", "w2"):
+        base = Path(control_mod.tempfile.mkdtemp(prefix=f"dpctl-{worker}-"))
+        monkeypatch.setenv("DIPLOID_CONTROL_DIR", str(base))
+        listener = _listener(name, [])
+        try:
+            paths.append(listener.socket_path)
+        finally:
+            listener.close()
+    assert paths[0] != paths[1]
+    for path in paths:
+        shutil.rmtree(path.parent.parent, ignore_errors=True)
 
 
 def test_close_then_ensure_listening_rebinds_same_path() -> None:
@@ -132,7 +181,10 @@ def test_foreign_live_socket_is_not_stolen(monkeypatch) -> None:
     monkeypatch.setattr(control_mod, "_PROBE_LIVE_RETRY_INTERVAL", 0.05)
 
     name = _name()
-    path = Path(control_mod.tempfile.gettempdir()) / f"diploid-ctl-{name}" / "control.sock"
+    base = Path(
+        os.environ.get("DIPLOID_CONTROL_DIR") or control_mod.tempfile.gettempdir()
+    )
+    path = base / f"diploid-ctl-{name}" / "control.sock"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.unlink(missing_ok=True)
 

@@ -74,7 +74,12 @@ class ControlListener:
         self._control_timeout = control_timeout
         self._watchdog_timeout = watchdog_timeout
         safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", service_name or "unknown.service")
-        self._control_socket_dir = Path(tempfile.gettempdir()) / f"diploid-ctl-{safe_name}"
+        # DIPLOID_CONTROL_DIR scopes the per-service socket namespace (test
+        # isolation: parallel runs get separate dirs). The /tmp default keeps
+        # the stable-path contract: a child spawned by an older generation
+        # still reaches the current listener across process restarts.
+        base = Path(os.environ.get("DIPLOID_CONTROL_DIR") or tempfile.gettempdir())
+        self._control_socket_dir = base / f"diploid-ctl-{safe_name}"
         self._control_socket_path = self._control_socket_dir / "control.sock"
         self._control_listener_running = False
         self._control_listener_thread: threading.Thread | None = None

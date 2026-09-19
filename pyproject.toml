@@ -34,6 +34,7 @@ plugins = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    "pytest-xdist>=3.6",
     "ruff>=0.5",
     "respx>=0.20",
 ]
@@ -49,7 +50,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = ["-m", "not slow"]
+addopts = ["-m", "not slow", "-n", "auto"]
 markers = [
     "slow: tests that exercise real external binaries or APIs",
 ]
