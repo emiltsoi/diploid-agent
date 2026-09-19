@@ -260,6 +260,9 @@ class DeliveryWorker(threading.Thread):
     """
 
     _POLL_WAIT = 5.0
+    # Client-side floor between polls — only reached on empty results or
+    # fast-fail error paths; the server-side wait paces the normal cycle.
+    _EMPTY_BACKOFF = 1.0
 
     def __init__(self, poller: TelegramPoller, chat_id: int | None = None) -> None:
         name = "delivery-global" if chat_id is None else f"delivery-{chat_id}"
@@ -339,7 +342,7 @@ class DeliveryWorker(threading.Thread):
             try:
                 chat_result = self._fetch_outbox()
                 if chat_result is None:
-                    time.sleep(self._POLL_WAIT)
+                    self._should_stop.wait(self._EMPTY_BACKOFF)
                     continue
                 if self.chat_id is not None:
                     self.poller._deliver_outbox_result(self.chat_id, chat_result)

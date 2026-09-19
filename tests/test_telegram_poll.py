@@ -3208,3 +3208,22 @@ def test_placeholder_sent_before_attachment_ingest(tmp_path: Path) -> None:
     worker._run_turn(chat_input)
 
     assert order[:2] == ["placeholder", "ingest"]
+
+def test_delivery_worker_empty_backoff_is_interruptible(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """An empty outbox must not park the worker on an uninterruptible sleep."""
+    monkeypatch.setattr(DeliveryWorker, "_EMPTY_BACKOFF", 60.0)
+    runtime = _FakeDeliveryRuntime()
+    poller = TelegramPoller(
+        token="dummy",
+        runtime=runtime,  # type: ignore[arg-type]
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    worker = DeliveryWorker(poller, 12345)
+    worker.start()
+    time.sleep(0.3)
+    worker.stop()
+    worker.join(timeout=5.0)
+    # With Event.wait the worker exits promptly; time.sleep(60) would still be parked.
+    assert not worker.is_alive()
