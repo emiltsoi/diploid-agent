@@ -3443,3 +3443,50 @@ def test_piper_legacy_signature_fallback(tmp_path: Path, monkeypatch: Any) -> No
         assert calls == [1, 2]
     finally:
         voice_mod._voice_cache.clear()
+
+
+
+# ---------------------------------------------------------------------------
+# StreamDisplay — heartbeat cap and continuation commit lifecycle
+# ---------------------------------------------------------------------------
+
+
+
+def _stream_display(poller: TelegramPoller, **overrides: Any) -> Any:
+    from diploid_agent.transport.telegram.stream_display import StreamDisplay
+
+    config = SimpleNamespace(
+        intermediate_messages=True,
+        intermediate_idle=0.0,
+        intermediate_min_chars=10,
+    )
+    return StreamDisplay(
+        poller=poller,
+        chat_id=12345,
+        reply_to_message_id=None,
+        config=config,
+        message_id=overrides.get("message_id"),
+        thought_id=None,
+    )
+
+
+
+# ---------------------------------------------------------------------------
+# StreamDisplay — heartbeat cap and continuation commit lifecycle
+# ---------------------------------------------------------------------------
+
+
+
+def test_next_wait_derives_cap_from_heartbeat_interval(tmp_path: Path) -> None:
+    """The long-poll cap follows _HEARTBEAT_INTERVAL, not a stale constant."""
+    from diploid_agent.transport.telegram.formatting import _HEARTBEAT_INTERVAL
+
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    display = _stream_display(poller)
+    wait = display.next_wait()
+    # With the old 25.0 constant this would return exactly 25.0.
+    assert 25.0 < wait <= _HEARTBEAT_INTERVAL

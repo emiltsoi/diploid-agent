@@ -119,7 +119,7 @@ class StreamDisplay:
         # Wake for the earlier of the heartbeat deadline and the commit
         # deadline. A 0.5 s floor prevents a tight busy loop when no
         # placeholder can be edited, while still letting us react quickly.
-        return min(25.0, max(0.5, min(remaining, commit_wait)))
+        return min(_HEARTBEAT_INTERVAL, max(0.5, min(remaining, commit_wait)))
 
     def update(self, status: dict[str, Any]) -> None:
         """Apply one /turn status poll to the live placeholder(s)."""
