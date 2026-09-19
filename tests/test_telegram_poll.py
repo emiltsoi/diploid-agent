@@ -3784,6 +3784,7 @@ def _stream_display(poller: TelegramPoller, **overrides: Any) -> Any:
         intermediate_messages=True,
         intermediate_idle=0.0,
         intermediate_min_chars=10,
+        tool_progress=True,
     )
     return StreamDisplay(
         poller=poller,
@@ -3850,3 +3851,119 @@ def test_continuation_deletes_committed_and_restreams(tmp_path: Path) -> None:
         }
     )
     assert edits[-1][1].startswith("First paragraph ends here.")
+
+
+# ---------------------------------------------------------------------------
+# StreamDisplay — tool-progress line (last_side_effect)
+# ---------------------------------------------------------------------------
+
+
+def _tool_display(
+    poller: TelegramPoller, *, tool_progress: bool = True, message_id: int | None = 100
+) -> Any:
+    from diploid_agent.transport.telegram.stream_display import StreamDisplay
+
+    config = SimpleNamespace(
+        intermediate_messages=True,
+        intermediate_idle=0.0,
+        intermediate_min_chars=10,
+        tool_progress=tool_progress,
+    )
+    return StreamDisplay(
+        poller=poller,
+        chat_id=12345,
+        reply_to_message_id=None,
+        config=config,
+        message_id=message_id,
+        thought_id=None,
+    )
+
+
+def _edit_poller(tmp_path: Path) -> tuple[TelegramPoller, list[tuple[int, str]]]:
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    edits: list[tuple[int, str]] = []
+    poller._edit_message_text = lambda chat_id, mid, text, **kw: edits.append((mid, text)) or True
+    poller._save_placeholder_state = lambda *a, **kw: None
+    return poller, edits
+
+
+def test_tool_progress_renders_on_empty_tail(tmp_path: Path) -> None:
+    """A new side effect replaces the bare '...' while no text is streaming."""
+    poller, edits = _edit_poller(tmp_path)
+    display = _tool_display(poller)
+    display.update(
+        {"status": "running", "message_text": "", "last_side_effect": "exec: pytest (running)"}
+    )
+    assert edits == [(100, "· exec: pytest (running)")]
+
+
+def test_tool_progress_dedupes_unchanged_side_effect(tmp_path: Path) -> None:
+    """Identical progress chunks do not churn placeholder edits."""
+    poller, edits = _edit_poller(tmp_path)
+    display = _tool_display(poller)
+    status = {
+        "status": "running",
+        "message_text": "",
+        "last_side_effect": "exec: pytest (running)",
+    }
+    display.update(status)
+    display.update(status)
+    display.update(status)
+    assert edits == [(100, "· exec: pytest (running)")]
+
+
+def test_tool_progress_renders_each_transition(tmp_path: Path) -> None:
+    """Each distinct tool title/status replaces the previous line."""
+    poller, edits = _edit_poller(tmp_path)
+    display = _tool_display(poller)
+    for se in ("exec: pytest (running)", "exec: pytest (completed)", "read: foo.py (running)"):
+        display.update({"status": "running", "message_text": "", "last_side_effect": se})
+    assert [t for _, t in edits] == [
+        "· exec: pytest (running)",
+        "· exec: pytest (completed)",
+        "· read: foo.py (running)",
+    ]
+
+
+def test_tool_progress_hidden_while_text_streams(tmp_path: Path) -> None:
+    """Streaming reply text wins — the tool line is an empty-tail-only render."""
+    poller, edits = _edit_poller(tmp_path)
+    display = _tool_display(poller)
+    display.update(
+        {
+            "status": "running",
+            "message_text": "Working on it",
+            "last_side_effect": "exec: pytest (running)",
+        }
+    )
+    assert edits == [(100, "Working on it")]
+
+
+def test_tool_progress_flag_off_keeps_bare_placeholder(tmp_path: Path) -> None:
+    """tool_progress=False never renders the side effect."""
+    poller, edits = _edit_poller(tmp_path)
+    display = _tool_display(poller, tool_progress=False)
+    display.update(
+        {"status": "running", "message_text": "", "last_side_effect": "exec: pytest (running)"}
+    )
+    assert edits == []
+
+
+def test_tool_progress_heartbeat_composes_side_effect(tmp_path: Path) -> None:
+    """The idle heartbeat keeps the tool line and adds the liveness suffix."""
+    from diploid_agent.transport.telegram.formatting import _HEARTBEAT_INTERVAL
+
+    poller, edits = _edit_poller(tmp_path)
+    display = _tool_display(poller)
+    display.update(
+        {"status": "running", "message_text": "", "last_side_effect": "exec: pytest (running)"}
+    )
+    display.last_edit_at = time.monotonic() - _HEARTBEAT_INTERVAL - 1
+    display.update(
+        {"status": "running", "message_text": "", "last_side_effect": "exec: pytest (running)"}
+    )
+    assert edits[-1][1].startswith("· exec: pytest (running)\n\n(still working,")

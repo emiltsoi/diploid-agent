@@ -125,6 +125,7 @@ class TelegramConfig(BaseModel):
     task_board: bool = True
     wake_stream: bool = True
     bot_menu: bool = True
+    tool_progress: bool = True
     message_format: Literal["plain", "markdown_v2"] = "plain"
     code_style: Literal["inline", "box"] = "inline"
     attachments_enabled: bool = True

@@ -64,6 +64,8 @@ class StreamDisplay:
         self.committed_display = ""
         self.committed_message_id: int | None = None
         self.committed_raw_ok = True
+        self.side_effect = ""
+        self.last_side_effect_seen = ""
         self.last_growth_at = self.turn_start_at = time.monotonic()
         self.last_edit_at = self.turn_start_at
 
@@ -73,6 +75,16 @@ class StreamDisplay:
             text,
             reply_to_message_id=self.reply_to_message_id,
         )
+
+    def _idle_placeholder(self) -> str:
+        """Placeholder body while no reply text is streaming.
+
+        With ``tool_progress`` enabled and a recorded tool side effect, show
+        what the turn is actually running instead of a bare ``...``.
+        """
+        if self.side_effect:
+            return f"· {self.side_effect}"
+        return _REPLY_PLACEHOLDER
 
     def _uncommitted_tail(self, full: str) -> str:
         if not full:
@@ -137,11 +149,14 @@ class StreamDisplay:
             # Drop the paragraph seam so the new message does not open with
             # blank lines; committed_display still tracks the raw slice.
             self.visible = self.tail_text[:4096].lstrip("\n")
+            if self.config.tool_progress:
+                self.side_effect = status.get("last_side_effect") or ""
         else:
             self.text = ""
             self.display_text = ""
             self.tail_text = ""
             self.visible = ""
+            self.side_effect = ""
         edited = False
 
         # Start a reply placeholder the moment text starts arriving, even
@@ -195,6 +210,20 @@ class StreamDisplay:
                         )
                     edited = True
 
+        # Tool-progress line: while the streamed tail is empty (think/tool
+        # phase) the placeholder shows the current side effect instead of a
+        # bare "...". A changed side effect renders immediately rather than
+        # waiting for the next heartbeat.
+        if (
+            self.message_id is not None
+            and not self.visible
+            and self.side_effect != self.last_side_effect_seen
+        ):
+            body = self._idle_placeholder()
+            self.poller._edit_message_text(self.chat_id, self.message_id, body)
+            self.last_text_sent = body
+            edited = True
+
         if self.thought_id is not None:
             thought = status.get("thought_text", "")
             if thought:
@@ -211,7 +240,7 @@ class StreamDisplay:
             # knows the harness is still alive.
             elapsed = now - self.turn_start_at
             if self.message_id is not None:
-                base = self.tail_text[:4096].lstrip("\n") or _REPLY_PLACEHOLDER
+                base = self.tail_text[:4096].lstrip("\n") or self._idle_placeholder()
                 heartbeat = _build_heartbeat_text(base, elapsed)
                 if heartbeat != self.last_text_sent:
                     self.poller._edit_message_text(self.chat_id, self.message_id, heartbeat)
@@ -227,6 +256,7 @@ class StreamDisplay:
             # Reset the timer even if we had no placeholder to update, so a
             # failed sendMessage cannot turn this loop into a tight poll.
             self.last_edit_at = now
+        self.last_side_effect_seen = self.side_effect
 
     def await_result(self, chat_future: Any, *, stopped: bool) -> dict[str, Any]:
         """Collect the turn result, tolerating stop and harness errors."""
