@@ -47,8 +47,13 @@ class MemoryMcpServer:
     def __init__(self, chat_id: str, harness_url: str) -> None:
         self.chat_id = chat_id
         self.harness_url = harness_url.rstrip("/")
+        headers: dict[str, str] = {}
+        api_key = os.environ.get("HARNESS_API_KEY")
+        if api_key:
+            headers["X-API-Key"] = api_key
         self._client = httpx.Client(
             base_url=self.harness_url,
+            headers=headers,
             # Recalls on a large bank take ~35-40s server-side; stay above the
             # backend budget (hindsight.timeout, default 120s) plus overhead.
             timeout=150.0,

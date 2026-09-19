@@ -122,3 +122,47 @@ def test_memory_mcp_promotes_via_http(tmp_path: Path, monkeypatch) -> None:
         "chat_id": "chat-1",
         "message": "The user prefers tea.",
     }
+
+
+@respx.mock
+def test_memory_mcp_sends_api_key_when_configured(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HARNESS_API_KEY", "test-key-123")
+    route = respx.post("http://127.0.0.1:4003/recall").mock(
+        return_value=Response(200, json={"reply": "ok"})
+    )
+    _exchange(
+        monkeypatch,
+        [
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "memory_recall", "arguments": {"query": "x"}},
+            },
+        ],
+    )
+    assert route.called
+    assert route.calls[0].request.headers["X-API-Key"] == "test-key-123"
+
+
+@respx.mock
+def test_memory_mcp_omits_api_key_when_unset(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("HARNESS_API_KEY", raising=False)
+    route = respx.post("http://127.0.0.1:4003/recall").mock(
+        return_value=Response(200, json={"reply": "ok"})
+    )
+    _exchange(
+        monkeypatch,
+        [
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "memory_recall", "arguments": {"query": "x"}},
+            },
+        ],
+    )
+    assert route.called
+    assert "X-API-Key" not in route.calls[0].request.headers
