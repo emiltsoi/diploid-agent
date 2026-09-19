@@ -116,9 +116,7 @@ def _tg_response(payload: dict, status: int = 200):
     resp.json = MagicMock(return_value=payload)
     if status >= 400:
         resp.raise_for_status = MagicMock(
-            side_effect=httpx.HTTPStatusError(
-                f"{status}", request=MagicMock(), response=resp
-            )
+            side_effect=httpx.HTTPStatusError(f"{status}", request=MagicMock(), response=resp)
         )
     else:
         resp.raise_for_status = MagicMock()
@@ -165,7 +163,11 @@ def test_update_task_board_resends_and_rekeys_on_deleted_message(tmp_path) -> No
     client.post.side_effect = [
         _tg_response({"ok": True, "result": {"message_id": 42}}),
         _tg_response(
-            {"ok": False, "error_code": 400, "description": "Bad Request: message to edit not found"},
+            {
+                "ok": False,
+                "error_code": 400,
+                "description": "Bad Request: message to edit not found",
+            },
             status=400,
         ),
         _tg_response({"ok": True, "result": {"message_id": 99}}),

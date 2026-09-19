@@ -51,6 +51,10 @@ class Notifier(ABC):
         """Delete an existing message, if the backend supports it."""
         return False
 
+    def update_task_board(self, chat_id: str, text: str) -> bool:
+        """Send or edit the per-chat task board message, if supported."""
+        return False
+
     def begin_typing(self, chat_id: str) -> None:
         """Start a continuous typing indicator for this chat."""
         self.typing(chat_id)
@@ -328,9 +332,7 @@ class TelegramNotifier(Notifier):
             except (ValueError, TypeError):
                 description = ""
         except Exception:
-            logger.exception(
-                "Failed to edit task board message %s in chat %s", message_id, chat_id
-            )
+            logger.exception("Failed to edit task board message %s in chat %s", message_id, chat_id)
             return "error"
         lowered = description.lower()
         if "not modified" in lowered:

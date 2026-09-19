@@ -58,6 +58,7 @@ from diploid_agent.runtime.restart import RuntimeRestart
 from diploid_agent.runtime.state import RuntimeState
 from diploid_agent.runtime.store import ChatSessionStore
 from diploid_agent.runtime.subagent import RuntimeSubagent
+from diploid_agent.runtime.task_board import build_task_board
 from diploid_agent.runtime.timer_service import TimerService
 from diploid_agent.runtime.typing import RuntimeTyping
 from diploid_agent.runtime.wake_queue import WakeQueue
@@ -90,6 +91,7 @@ class AgentRuntime(RuntimeAPI):
 
     def __init__(self, config: Config):
         self.config = config
+        self._task_board = None
         self._init_core()
         self._init_stores()
         self._init_services()
@@ -187,6 +189,10 @@ class AgentRuntime(RuntimeAPI):
         self.event_bus = EventBus()
         self.event_bus.start()
         self.plan_manager = PlanManager(plan_root)
+        self._task_board = build_task_board(self)
+        if self._task_board is not None:
+            self._task_board.start()
+            self.plan_manager.on_change = self._task_board.handle
         self._typing = RuntimeTyping(notifier_fn=lambda: self.notifier)
         self.task_engine = TaskEngine(
             self.plan_manager,
@@ -847,7 +853,11 @@ class AgentRuntime(RuntimeAPI):
 
     def shutdown(self, drain_timeout: float = 120.0) -> None:
         """Drain active turns, notify plugins, and stop background workers."""
-        self._lifecycle.shutdown(drain_timeout)
+        try:
+            self._lifecycle.shutdown(drain_timeout)
+        finally:
+            if self._task_board is not None:
+                self._task_board.stop()
 
     @property
     def _runtime_overrides_path(self) -> Path:
