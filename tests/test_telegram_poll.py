@@ -2558,9 +2558,7 @@ def test_wake_display_disabled_by_flag(tmp_path: Path) -> None:
     assert io.sent == [(12345, "wake reply")]
 
 
-def test_wake_display_finalize_without_routed_result(
-    tmp_path: Path, monkeypatch: Any
-) -> None:
+def test_wake_display_finalize_without_routed_result(tmp_path: Path, monkeypatch: Any) -> None:
     """If the result never routes, the display finalizes from streamed text."""
     from diploid_agent.transport.telegram.workers import WakeDisplayWorker
 
@@ -2589,9 +2587,7 @@ def test_wake_display_finalize_without_routed_result(
     assert poller._wake_displays == {}
 
 
-def test_wake_display_stale_marker_leaves_no_message(
-    tmp_path: Path, monkeypatch: Any
-) -> None:
+def test_wake_display_stale_marker_leaves_no_message(tmp_path: Path, monkeypatch: Any) -> None:
     """A marker for an already-terminal turn must not leave a stray message.
 
     The outcome today is a benign flicker — the display creates a "..."

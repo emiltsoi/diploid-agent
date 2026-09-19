@@ -55,9 +55,7 @@ def _is_wake_marker(raw: Any) -> str | None:
     return None
 
 
-def _fetch_turn_status(
-    poller: TelegramPoller, chat_id: int, wait: float = 0.0
-) -> dict[str, Any]:
+def _fetch_turn_status(poller: TelegramPoller, chat_id: int, wait: float = 0.0) -> dict[str, Any]:
     """Long-poll the harness for one chat's turn status."""
     if poller.runtime is not None:
         try:
