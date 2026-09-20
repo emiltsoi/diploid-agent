@@ -122,13 +122,16 @@ def test_turn_stream_dedups_identical_tool_updates() -> None:
     runtime._active_turns["chat-1"] = active
     stream = TurnStream(runtime, "chat-1")
 
+    # Real ACP wire shape: title/status live at the top level of the update.
     update = {
         "sessionUpdate": "tool_call_update",
-        "content": {"title": "exec", "status": "running"},
+        "toolCallId": "call-1",
+        "title": "exec",
+        "status": "in_progress",
     }
     stream.on_update(update)
     first_at = active.last_side_effect_at
-    assert active.last_side_effect == "exec (running)"
+    assert active.last_side_effect == "exec (in_progress)"
 
     stream.on_update(update)
     # Identical title+status composes the same line: no stamp, no notify.
@@ -139,11 +142,34 @@ def test_turn_stream_dedups_identical_tool_updates() -> None:
     stream.on_update(
         {
             "sessionUpdate": "tool_call_update",
-            "content": {"title": "exec", "status": "completed"},
+            "toolCallId": "call-1",
+            "title": "exec",
+            "status": "completed",
         }
     )
     assert active.last_side_effect == "exec (completed)"
     assert active.last_side_effect_at > first_at
+
+
+def test_turn_stream_falls_back_to_nested_content_title() -> None:
+    """Non-standard updates nesting title/status inside content still work."""
+    runtime = _FakeRuntime()
+    active = ActiveTurn(
+        chat_id="chat-1",
+        session_id="session-1",
+        user_message="hello",
+        start_time=time.time(),
+    )
+    runtime._active_turns["chat-1"] = active
+    stream = TurnStream(runtime, "chat-1")
+
+    stream.on_update(
+        {
+            "sessionUpdate": "tool_call",
+            "content": {"title": "exec", "status": "running"},
+        }
+    )
+    assert active.last_side_effect == "exec (running)"
 
 
 class _FakeRuntime:

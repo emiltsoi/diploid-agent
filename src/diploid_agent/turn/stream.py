@@ -60,13 +60,17 @@ class TurnStream:
                         content = raw_content
                     else:
                         content = {}
+                    # ACP carries title/kind/status/toolCallId at the top
+                    # level of the update; content is the content-block
+                    # array. Check top level first, content as fallback.
                     title = (
-                        content.get("title")
-                        or content.get("kind")
-                        or content.get("toolCallId")
+                        update.get("title")
+                        or update.get("kind")
+                        or update.get("toolCallId")
+                        or content.get("title")
                         or "tool"
                     )
-                    status = content.get("status") or "running"
+                    status = update.get("status") or content.get("status") or "running"
                     now = time.time()
                     composed = f"{title} ({status})"[:160]
                     # Notify only when the displayed string actually changes:
