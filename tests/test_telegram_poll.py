@@ -1875,6 +1875,54 @@ def test_send_message_forwards_reply_markup(tmp_path: Path) -> None:
     assert calls[0].get("reply_markup") == json.dumps(markup)
 
 
+def test_keyboard_sweep_rides_first_markup_free_send(tmp_path: Path) -> None:
+    """First send per chat clears legacy reply-keyboard fossils; later sends don't."""
+    poller = TelegramPoller(
+        token="dummy",
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(url: str, *, data: Any = None, **kwargs: Any) -> httpx.Response:
+        calls.append(data or {})
+        return _fake_response(200, {"ok": True, "result": {"message_id": 42}})
+
+    poller.client.post = fake_post  # type: ignore[method-assign]
+
+    poller._send_message(123, "first")
+    poller._send_message(123, "second")
+    poller._send_message(456, "other chat")
+
+    assert json.loads(calls[0]["reply_markup"]) == {"remove_keyboard": True}
+    assert "reply_markup" not in calls[1]
+    assert json.loads(calls[2]["reply_markup"]) == {"remove_keyboard": True}
+
+
+def test_keyboard_sweep_skips_pending_question(tmp_path: Path) -> None:
+    """A live pending question may own the keyboard — don't remove it."""
+    poller = TelegramPoller(
+        token="dummy",
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(url: str, *, data: Any = None, **kwargs: Any) -> httpx.Response:
+        calls.append(data or {})
+        return _fake_response(200, {"ok": True, "result": {"message_id": 42}})
+
+    poller.client.post = fake_post  # type: ignore[method-assign]
+    (tmp_path / ".poller-placeholders").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".poller-placeholders" / "123.ask.json").write_text(
+        json.dumps({"chat_id": 123, "options": ["a", "b"]})
+    )
+
+    poller._send_message(123, "first")
+    poller._send_message(123, "second")
+
+    assert "reply_markup" not in calls[0]
+    assert "reply_markup" not in calls[1]
+
+
 def test_send_text_extracts_ask_block_and_sends_keyboard(tmp_path: Path) -> None:
     """A reply with a ```ask block should be sent as an inline keyboard question."""
     poller = TelegramPoller(
@@ -3598,7 +3646,8 @@ def test_ask_keyboard_attached_to_last_chunk(tmp_path: Path) -> None:
 
     sends = [p for m, p in calls if m == "sendMessage"]
     assert len(sends) == 2
-    assert "reply_markup" not in sends[0]
+    # Earlier chunks may carry the one-time keyboard sweep, never the ask.
+    assert "inline_keyboard" not in sends[0].get("reply_markup", "")
     markup = json.loads(sends[1]["reply_markup"])
     assert markup["inline_keyboard"]
     # The pending question is bound to the message that carries the keyboard.

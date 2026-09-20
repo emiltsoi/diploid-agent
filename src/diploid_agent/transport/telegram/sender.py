@@ -27,6 +27,7 @@ from diploid_agent.transport.interactive import (
     FileRef,
     build_empty_inline_keyboard,
     build_inline_keyboard,
+    build_keyboard_remove,
     extract_ask_block,
     extract_file_blocks,
     extract_say_block,
@@ -202,6 +203,14 @@ class TelegramSenderMixin:
     ) -> int | None:
         """Send a Telegram message and return its message_id."""
         text = text[:4096]
+        # Piggyback a keyboard sweep on the first markup-free send per chat:
+        # legacy ReplyKeyboardMarkup fossils persist client-side until a
+        # message carries remove_keyboard. Skipped when a pending question
+        # may legitimately own the keyboard.
+        if reply_markup is None and chat_id not in self._keyboard_swept:
+            self._keyboard_swept.add(chat_id)
+            if self._load_pending_question(chat_id) is None:
+                reply_markup = build_keyboard_remove()
         try:
             params: dict[str, Any] = {"chat_id": chat_id, "text": text}
             if parse_mode:

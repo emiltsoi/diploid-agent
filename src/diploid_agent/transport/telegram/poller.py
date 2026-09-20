@@ -191,6 +191,7 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
         self._delivery_workers: dict[int, DeliveryWorker] = {}
         self._global_delivery_worker: DeliveryWorker | None = None
         self._wake_displays: dict[int, WakeDisplayWorker] = {}
+        self._keyboard_swept: set[int] = set()
         self._last_user_message_ids: dict[int, int] = {}
         self._send_locks: dict[int, threading.RLock] = {}
         self._worker_lock = threading.RLock()
