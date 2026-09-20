@@ -4,7 +4,6 @@ from diploid_agent.transport.interactive import (
     build_empty_inline_keyboard,
     build_inline_keyboard,
     build_keyboard_remove,
-    build_reply_keyboard,
     extract_ask_block,
     is_ask_cancel_callback,
     parse_ask_callback_index,
@@ -50,27 +49,6 @@ def test_extract_ask_block_returns_none_on_invalid_json() -> None:
     _visible, block = extract_ask_block(text)
     assert block is None
     assert "not json" in _visible
-
-
-def test_build_reply_keyboard() -> None:
-    markup = build_reply_keyboard(["A", "B"])
-    assert markup["resize_keyboard"] is True
-    assert markup["one_time_keyboard"] is True
-    assert markup["keyboard"] == [[{"text": "A"}], [{"text": "B"}]]
-
-
-def test_build_reply_keyboard_with_cancel() -> None:
-    markup = build_reply_keyboard(["A", "B"], cancel="Cancel")
-    assert markup["keyboard"] == [
-        [{"text": "A"}],
-        [{"text": "B"}],
-        [{"text": "Cancel"}],
-    ]
-
-
-def test_build_reply_keyboard_skips_duplicate_cancel() -> None:
-    markup = build_reply_keyboard(["A", "Cancel"], cancel="Cancel")
-    assert markup["keyboard"] == [[{"text": "A"}], [{"text": "Cancel"}]]
 
 
 def test_extract_ask_block_cancellable() -> None:

@@ -2668,6 +2668,11 @@ def test_wake_display_transient_result_does_not_finish(tmp_path: Path) -> None:
     # ...and the real reply finalized through the placeholder edit path.
     final = next(s for s in sent_detail if s["text"] == "wake reply")
     assert final.get("first_message_id") is not None
+    # The wake worker pops itself from _wake_displays in its own cleanup,
+    # which can land after the final send — wait rather than assert a race.
+    deadline = time.time() + 5.0
+    while poller._wake_displays and time.time() < deadline:
+        time.sleep(0.05)
     assert poller._wake_displays == {}
 
 

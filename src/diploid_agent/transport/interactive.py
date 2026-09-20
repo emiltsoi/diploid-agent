@@ -45,22 +45,6 @@ class AskBlock:
     cancel_label: str = "Cancel"
 
 
-def build_reply_keyboard(options: list[str], cancel: str | None = None) -> dict[str, Any]:
-    """Return a Telegram ReplyKeyboardMarkup for a list of option strings.
-
-    If ``cancel`` is provided and not already in ``options``, it is added as a
-    final row so the user can dismiss the prompt.
-    """
-    keyboard = [[{"text": opt}] for opt in options]
-    if cancel and cancel not in options:
-        keyboard.append([{"text": cancel}])
-    return {
-        "keyboard": keyboard,
-        "resize_keyboard": True,
-        "one_time_keyboard": True,
-    }
-
-
 def build_keyboard_remove() -> dict[str, Any]:
     """Return a ReplyKeyboardRemove markup."""
     return {"remove_keyboard": True}
