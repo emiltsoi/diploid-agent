@@ -92,10 +92,12 @@ class TurnStream:
                     )
                     if command:
                         title = f"{update.get('kind') or 'exec'}: {command}"
-                        if isinstance(call_id, str) and call_id:
-                            self._tool_commands[call_id] = title
                     elif remembered:
                         title = remembered
+                    # Updates carry no title/kind — remember the resolved
+                    # title so later chunks don't fall back to the call id.
+                    if isinstance(call_id, str) and call_id and title != call_id:
+                        self._tool_commands[call_id] = title
                     now = time.time()
                     composed = f"{title} ({status})"[:160]
                     # Notify only when the displayed string actually changes:
