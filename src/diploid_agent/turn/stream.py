@@ -21,6 +21,11 @@ class TurnStream:
     def __init__(self, runtime: Any, chat_id: str) -> None:
         self._runtime = runtime
         self._chat_id = chat_id
+        # toolCallId → composed title learned from an earlier update's
+        # rawInput; tool_call_update chunks don't repeat rawInput (or
+        # kind), so the title would flap back to the terminal id without
+        # the memory.
+        self._tool_commands: dict[str, str] = {}
 
     def _maybe_emit_partial(self) -> None:
         a = self._runtime._active_turns.get(self._chat_id)
@@ -74,12 +79,23 @@ class TurnStream:
                     # Exec titles are terminal ids ("exec:0#hash"); prefer the
                     # real command line from rawInput when the tool provides it.
                     raw_input = update.get("rawInput")
+                    call_id = update.get("toolCallId")
+                    command = None
                     if isinstance(raw_input, dict):
                         for key in ("command", "CommandLine", "commandLine", "cmd"):
                             cmd = raw_input.get(key)
                             if isinstance(cmd, str) and cmd.strip():
-                                title = f"{update.get('kind') or 'exec'}: {cmd.strip()}"
+                                command = cmd.strip()
                                 break
+                    remembered = (
+                        self._tool_commands.get(call_id) if isinstance(call_id, str) else None
+                    )
+                    if command:
+                        title = f"{update.get('kind') or 'exec'}: {command}"
+                        if isinstance(call_id, str) and call_id:
+                            self._tool_commands[call_id] = title
+                    elif remembered:
+                        title = remembered
                     now = time.time()
                     composed = f"{title} ({status})"[:160]
                     # Notify only when the displayed string actually changes:
