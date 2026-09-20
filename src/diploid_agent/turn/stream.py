@@ -71,6 +71,15 @@ class TurnStream:
                         or "tool"
                     )
                     status = update.get("status") or content.get("status") or "running"
+                    # Exec titles are terminal ids ("exec:0#hash"); prefer the
+                    # real command line from rawInput when the tool provides it.
+                    raw_input = update.get("rawInput")
+                    if isinstance(raw_input, dict):
+                        for key in ("command", "CommandLine", "commandLine", "cmd"):
+                            cmd = raw_input.get(key)
+                            if isinstance(cmd, str) and cmd.strip():
+                                title = f"{update.get('kind') or 'exec'}: {cmd.strip()}"
+                                break
                     now = time.time()
                     composed = f"{title} ({status})"[:160]
                     # Notify only when the displayed string actually changes:
@@ -80,7 +89,15 @@ class TurnStream:
                     if changed:
                         a.last_side_effect = composed
                         a.last_side_effect_at = now
-                    a.side_effects.append({"title": title, "status": status, "at": now})
+                    # Record rawInput keys so breadcrumbs reveal which fields
+                    # the agent actually emits when our guesses miss.
+                    entry = {"title": title, "status": status, "at": now}
+                    if isinstance(raw_input, dict) and raw_input:
+                        entry["input"] = {
+                            k: (v[:80] if isinstance(v, str) else v)
+                            for k, v in list(raw_input.items())[:6]
+                        }
+                    a.side_effects.append(entry)
             if a and changed:
                 with a._condition:
                     a._condition.notify_all()

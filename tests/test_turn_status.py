@@ -172,6 +172,33 @@ def test_turn_stream_falls_back_to_nested_content_title() -> None:
     assert active.last_side_effect == "exec (running)"
 
 
+def test_turn_stream_prefers_raw_input_command_over_terminal_title() -> None:
+    """Exec terminal-id titles are replaced by the real command line."""
+    runtime = _FakeRuntime()
+    active = ActiveTurn(
+        chat_id="chat-1",
+        session_id="session-1",
+        user_message="hello",
+        start_time=time.time(),
+    )
+    runtime._active_turns["chat-1"] = active
+    stream = TurnStream(runtime, "chat-1")
+
+    stream.on_update(
+        {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "call-1",
+            "kind": "execute",
+            "title": "exec:0#8d26229e80f5426896d800c6b1e9fd15",
+            "status": "in_progress",
+            "rawInput": {"command": "sleep 8 && git log --oneline -1"},
+        }
+    )
+    assert active.last_side_effect == "execute: sleep 8 && git log --oneline -1 (in_progress)"
+    # rawInput keys are captured into the breadcrumb for inspection.
+    assert active.side_effects[-1]["input"]["command"].startswith("sleep 8")
+
+
 class _FakeRuntime:
     def __init__(self) -> None:
         self._active_turns: dict[str, ActiveTurn] = {}
