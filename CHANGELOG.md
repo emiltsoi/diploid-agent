@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.11 — 2026-09-20
 
 ### Added
 
@@ -14,6 +14,11 @@
   of the intermediate-commit accounting. `harness.telegram.tool_progress`
   (default `true`) gates it and is live-updatable via `/config telegram`.
   Applies to user turns and streamed wake turns alike.
+- Tool titles/statuses are read from the top-level ACP `tool_call` /
+  `tool_call_update` fields with a nested-content fallback; exec calls
+  prefer the `rawInput` command over the opaque terminal-id title, and the
+  composed title is remembered per `toolCallId` so later chunks that omit
+  `rawInput`/`kind` keep the command title (`· execute: sleep 8 …`).
 
 ## 0.6.10 — 2026-09-20
 
