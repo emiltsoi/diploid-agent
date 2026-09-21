@@ -12,8 +12,9 @@ from typing import TYPE_CHECKING, Any
 from diploid_agent.models import ChatResult
 from diploid_agent.runtime.outbox import _is_telegram_chat_id
 from diploid_agent.transport.command_handler import _coerce_chat_result
+from diploid_agent.transport.interactive import extract_ask_block
 from diploid_agent.transport.telegram.formatting import _REPLY_PLACEHOLDER
-from diploid_agent.transport.telegram.models import ChatInput
+from diploid_agent.transport.telegram.models import ChatInput, WakeTombstone
 from diploid_agent.transport.telegram.stream_display import StreamDisplay
 
 if TYPE_CHECKING:
@@ -45,6 +46,13 @@ def _coerce_outbox_result(raw: Any) -> ChatResult | None:
         if isinstance(raw, ChatResult):
             return raw
     return _coerce_chat_result(raw)
+
+
+def _normalize_wake_reply(text: str) -> str:
+    """Normalize a reply for tombstone matching — the same treatment the
+    streamed display applied, so both sides compare like-for-like."""
+    display_text, _ = extract_ask_block(text or "")
+    return display_text.strip()
 
 
 def _is_wake_marker(raw: Any) -> str | None:
@@ -308,21 +316,42 @@ class WakeDisplayWorker(threading.Thread):
     # turn_status stuck on running with no result ever landing.
     _MAX_SECONDS = 45 * 60
     # Grace window for the routed result once status leaves "running".
-    # Residual edge: a result landing after this window finds no display and
-    # direct-sends — the user sees the reply twice (streamed + fresh). That
-    # fails open deliberately; a tombstone risks eating replies entirely.
+    # A result landing after this window finds no display; the tombstone the
+    # worker leaves on exit lets _deliver fold it into the sent bubbles
+    # instead of direct-sending a duplicate.
     _RESULT_GRACE = 30.0
 
-    def __init__(self, poller: TelegramPoller, chat_id: int):
+    def __init__(
+        self,
+        poller: TelegramPoller,
+        chat_id: int,
+        session_number: int | None = None,
+        turn_number: int | None = None,
+    ):
         super().__init__(daemon=True, name=f"wake-display-{chat_id}")
         self.poller = poller
         self.chat_id = chat_id
+        self._session_number = session_number
+        self._turn_number = turn_number
         self._result: dict[str, Any] | None = None
         self._result_event = threading.Event()
 
     def finish(self, result: dict[str, Any]) -> None:
         """Hand the turn's real result in for finalization."""
-        self._result = result
+        with self.poller._worker_lock:
+            self._result = result
+            # If the worker already exited on the grace-miss path and left a
+            # tombstone, this result routed here instead of through the
+            # delivery-side tombstone match — remove the ghost so it cannot
+            # match a later result. Keyed on this worker's own session/turn
+            # so a newer turn's tombstone is never touched.
+            tombstone = self.poller._wake_tombstones.get(self.chat_id)
+            if (
+                tombstone is not None
+                and tombstone.session_number == self._session_number
+                and tombstone.turn_number == self._turn_number
+            ):
+                self.poller._wake_tombstones.pop(self.chat_id, None)
         self._result_event.set()
 
     def run(self) -> None:
@@ -371,6 +400,23 @@ class WakeDisplayWorker(threading.Thread):
             with self.poller._worker_lock:
                 if self.poller._wake_displays.get(self.chat_id) is self:
                     self.poller._wake_displays.pop(self.chat_id, None)
+                # Grace-miss exit only: the routed result never arrived, so
+                # leave a tombstone for _deliver to fold a late result into
+                # the sent bubbles. A finish()-routed exit (_result set)
+                # must never write one — the reply already landed.
+                if self._result is None and display.final_text:
+                    self.poller._wake_tombstones[self.chat_id] = WakeTombstone(
+                        full_text=display.final_text,
+                        last_message_id=(
+                            display.final_sent_ids[-1]
+                            if display.final_sent_ids
+                            else display.committed_message_id
+                        ),
+                        last_bubble_content=display.final_last_bubble or None,
+                        session_number=self._session_number,
+                        turn_number=self._turn_number,
+                        finalized_at=time.monotonic(),
+                    )
             self.poller._remove_placeholder_state(self.chat_id)
 
 
@@ -411,7 +457,11 @@ class DeliveryWorker(threading.Thread):
         if marker_chat is None:
             return False
         if _is_telegram_chat_id(marker_chat):
-            self.poller._start_wake_display(int(marker_chat))
+            self.poller._start_wake_display(
+                int(marker_chat),
+                session_number=raw.get("session_number"),
+                turn_number=raw.get("turn_number"),
+            )
         return True
 
     def _fetch_outbox(self) -> ChatResult | None:
@@ -463,12 +513,80 @@ class DeliveryWorker(threading.Thread):
             return result
         return None
 
+    def _deliver_against_tombstone(self, chat_id: int, chat_result: ChatResult) -> bool:
+        """Fold or drop a late result against a grace-miss tombstone.
+
+        Returns True when the result was handled (dropped as a pure duplicate
+        or folded into the last bubble); False means the caller should
+        direct-send — fail-open for every non-matching or diverged case.
+        """
+        tombstone = self.poller._wake_tombstone_for(chat_id)
+        if tombstone is None or tombstone.last_message_id is None:
+            return False
+        if (
+            tombstone.session_number is None
+            or tombstone.session_number != chat_result.session_number
+            or tombstone.turn_number != chat_result.turn_number
+        ):
+            return False
+        incoming = _normalize_wake_reply(chat_result.reply)
+        if not incoming:
+            return False
+        # A (session, turn) match always consumes the tombstone, whichever
+        # branch the comparison lands in.
+        self.poller._pop_wake_tombstone(chat_id)
+        metrics = self.poller.metrics
+        if incoming == tombstone.full_text:
+            logger.info(
+                "Dropping duplicate wake result for chat %s (tombstone finalized %.1fs ago)",
+                chat_id,
+                time.monotonic() - tombstone.finalized_at,
+            )
+            if metrics is not None:
+                metrics.inc("wake_tombstone_drop_total")
+            return True
+        if incoming.startswith(tombstone.full_text):
+            delta = incoming[len(tombstone.full_text) :]
+            merged = tombstone.last_bubble_content + delta
+            if tombstone.last_bubble_content and len(merged) <= 4096:
+                self.poller._edit_message_text(chat_id, tombstone.last_message_id, merged)
+            else:
+                self.poller._send_text(
+                    chat_id,
+                    delta,
+                    reply_to_message_id=chat_result.reply_to_message_id,
+                )
+            logger.info(
+                "Folded late wake-result tail (%d chars) for chat %s",
+                len(delta),
+                chat_id,
+            )
+            if metrics is not None:
+                metrics.inc("wake_tombstone_fold_total")
+            return True
+        logger.warning(
+            "Wake tombstone diverged for chat %s — late result does not extend the finalized text; sending directly",
+            chat_id,
+        )
+        if metrics is not None:
+            metrics.inc("wake_tombstone_diverge_total")
+        return False
+
     def _deliver(self, chat_id: int, chat_result: ChatResult) -> None:
         """Route the result into a live wake display or send it directly."""
-        display = self.poller._wake_display_for(chat_id)
-        if display is not None and not chat_result.transient:
-            display.finish(_result_to_dict(chat_result))
-        else:
+        handled = False
+        if not chat_result.transient:
+            # Lookup + finish under one lock so the worker's grace-miss exit
+            # cannot interleave a tombstone write between the two — a routed
+            # result must never race a ghost tombstone into existence.
+            with self.poller._worker_lock:
+                display = self.poller._wake_displays.get(chat_id)
+                if display is not None:
+                    display.finish(_result_to_dict(chat_result))
+                    handled = True
+            if not handled:
+                handled = self._deliver_against_tombstone(chat_id, chat_result)
+        if not handled:
             # Transient items (outbox heartbeat nudges, mesh floats, restart
             # and subagent notices) are not the displayed turn's result —
             # routing one to finish() would kill the stream mid-turn and

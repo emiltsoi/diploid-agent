@@ -180,7 +180,9 @@ class TurnDispatch(TurnPipeline):
             # A user-typed /continue can double-type with the poller — harmless.
             self.runtime._typing.on_turn_started(chat_id)
             if notify:
-                self.runtime._outbox.emit_turn_started(chat_id)
+                self.runtime._outbox.emit_turn_started(
+                    chat_id, session_number=session_number, turn_number=turn_number
+                )
             outcome = self._call_engine(
                 chat_id=chat_id,
                 user_message=user_message,

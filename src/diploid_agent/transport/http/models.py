@@ -89,6 +89,10 @@ class OutboxResponse(BaseModel):
     chat_id: str | None = None
     kind: str = "result"
     result: ChatResponse | None = None
+    # Present on kind="turn_started" markers so a grace-missed wake display
+    # can tombstone-match the turn's late-arriving result.
+    session_number: int | None = None
+    turn_number: int | None = None
 
 
 class DispatchRequest(BaseModel):

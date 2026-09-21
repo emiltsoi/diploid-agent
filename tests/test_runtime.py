@@ -758,7 +758,22 @@ def test_emit_turn_started_enqueues_marker(tmp_path: Path) -> None:
     try:
         runtime._outbox.emit_turn_started("12345")
         popped = runtime.outbox_pop("12345", wait=0.5)
-        assert popped == {"kind": "turn_started", "chat_id": "12345", "result": None}
+        assert popped == {
+            "kind": "turn_started",
+            "chat_id": "12345",
+            "session_number": None,
+            "turn_number": None,
+            "result": None,
+        }
+        runtime._outbox.emit_turn_started("12345", session_number=3, turn_number=7)
+        popped = runtime.outbox_pop("12345", wait=0.5)
+        assert popped == {
+            "kind": "turn_started",
+            "chat_id": "12345",
+            "session_number": 3,
+            "turn_number": 7,
+            "result": None,
+        }
     finally:
         runtime.shutdown()
 
@@ -801,7 +816,13 @@ def test_wake_turn_enqueues_marker_before_result(tmp_path: Path) -> None:
     assert result.reply == "wake reply"
 
     marker = runtime.outbox_pop("chat-1", wait=1.0)
-    assert marker == {"kind": "turn_started", "chat_id": "chat-1", "result": None}
+    assert marker == {
+        "kind": "turn_started",
+        "chat_id": "chat-1",
+        "session_number": 2,
+        "turn_number": 2,
+        "result": None,
+    }
     final = runtime.outbox_pop("chat-1", wait=1.0)
     assert final is not None
     assert final.reply == "wake reply"

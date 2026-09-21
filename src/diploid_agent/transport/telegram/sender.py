@@ -612,6 +612,7 @@ class TelegramSenderMixin:
         *,
         first_message_id: int | None = None,
         reply_to_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> list[int]:
         """Send or edit a message, splitting it into multiple Telegram messages if needed.
 
@@ -631,6 +632,7 @@ class TelegramSenderMixin:
                 text,
                 first_message_id=first_message_id,
                 reply_to_message_id=reply_to_message_id,
+                out_chunks=out_chunks,
             )
         # Voice synthesis + upload run outside the send lock: a slow or wedged
         # piper call must not serialize every outbound message for this chat.
@@ -645,11 +647,15 @@ class TelegramSenderMixin:
         *,
         first_message_id: int | None = None,
         reply_to_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> tuple[list[int], str | None]:
         """Implementation of _send_text; caller must hold the per-chat send lock.
 
         Returns the sent message ids and any extracted ```say text, which the
-        caller synthesizes and sends after the lock is released.
+        caller synthesizes and sends after the lock is released. When
+        ``out_chunks`` is given, the rendered content of each successfully
+        sent chunk is appended to it — lets a wake tombstone know exactly
+        what text the last bubble carries.
         """
         ask_block: AskBlock | None = None
         display_text = text
@@ -755,6 +761,8 @@ class TelegramSenderMixin:
                     )
                     break
                 sent.append(msg_id)
+            if out_chunks is not None:
+                out_chunks.append(content)
 
             if i == total and ask_block is not None:
                 self._save_pending_question(chat_id, ask_block, msg_id if sent else None)

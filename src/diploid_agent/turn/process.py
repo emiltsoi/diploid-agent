@@ -252,7 +252,9 @@ class TurnProcess(TurnPipeline):
                 # Visible wake turns get a stream display; silent wakes stay
                 # typing-only. emit_turn_started no-ops without outbox delivery.
                 if notify and not wake_event.silent:
-                    self.runtime._outbox.emit_turn_started(chat_id)
+                    self.runtime._outbox.emit_turn_started(
+                        chat_id, session_number=session_number, turn_number=turn_number
+                    )
             outcome = self._call_engine(
                 chat_id=chat_id,
                 user_message=user_message,

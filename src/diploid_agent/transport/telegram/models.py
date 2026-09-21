@@ -16,6 +16,25 @@ class TelegramAttachment:
     file_size: int | None = None
 
 
+@dataclass
+class WakeTombstone:
+    """Record of a wake display that finalized without its routed result.
+
+    Left behind when ``WakeDisplayWorker`` exits on the grace-miss path so a
+    late outbox result can fold into the already-sent bubbles instead of
+    double-posting. ``last_bubble_content`` is the rendered text of
+    ``last_message_id`` — ``None`` when unknown, in which case the delivery
+    side sends the delta standalone rather than editing.
+    """
+
+    full_text: str
+    last_message_id: int | None
+    last_bubble_content: str | None
+    session_number: int | None
+    turn_number: int | None
+    finalized_at: float
+
+
 @dataclass(frozen=True)
 class ChatInput:
     """A normalized user message from Telegram, including any reply-to context."""

@@ -62,6 +62,8 @@ def register_sessions(
                 chat_id=chat_id or item.get("chat_id"),
                 kind="turn_started",
                 result=None,
+                session_number=item.get("session_number"),
+                turn_number=item.get("turn_number"),
             )
         return OutboxResponse(chat_id=chat_id, result=_to_response(item))
 

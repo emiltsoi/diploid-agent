@@ -76,19 +76,35 @@ class RuntimeOutbox:
             self._outbox.append((chat_id, chat_result))
             self._outbox_condition.notify_all()
 
-    def emit_turn_started(self, chat_id: str) -> None:
+    def emit_turn_started(
+        self,
+        chat_id: str,
+        session_number: int | None = None,
+        turn_number: int | None = None,
+    ) -> None:
         """Queue a ``turn_started`` marker so transports can stream the turn.
 
         Markers only make sense when a transport is consuming the queue, so
         this is a no-op unless outbox delivery is enabled. The marker dict is
         self-describing — the same shape ``OutboxResponse`` serializes — so
         both the in-process runtime path and the HTTP route can read it.
+        ``session_number``/``turn_number`` identify the turn so a grace-missed
+        wake display can tombstone-match its late-arriving result.
         """
         if not self._outbox_delivery_enabled:
             return
         with self._outbox_condition:
             self._outbox.append(
-                (chat_id, {"kind": "turn_started", "chat_id": chat_id, "result": None})
+                (
+                    chat_id,
+                    {
+                        "kind": "turn_started",
+                        "chat_id": chat_id,
+                        "session_number": session_number,
+                        "turn_number": turn_number,
+                        "result": None,
+                    },
+                )
             )
             self._outbox_condition.notify_all()
 

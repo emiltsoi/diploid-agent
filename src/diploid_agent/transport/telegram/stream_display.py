@@ -63,7 +63,13 @@ class StreamDisplay:
         self.committed_text = ""
         self.committed_display = ""
         self.committed_message_id: int | None = None
+        self.committed_last_chunk = ""
         self.committed_raw_ok = True
+        # Finalize outcome — read by WakeDisplayWorker when it exits on the
+        # grace-miss path to write a WakeTombstone for a late-arriving result.
+        self.final_sent_ids: list[int] = []
+        self.final_text = ""
+        self.final_last_bubble = ""
         self.side_effect = ""
         self.last_side_effect_seen = ""
         self.last_growth_at = self.turn_start_at = time.monotonic()
@@ -201,6 +207,7 @@ class StreamDisplay:
                         self.committed_text = ""
                         self.committed_raw_ok = False
                     self.committed_message_id = self.message_id
+                    self.committed_last_chunk = shown
                     self.last_text_sent = _REPLY_PLACEHOLDER
                     self.last_growth_at = now
                     self.message_id = self._send_placeholder(_REPLY_PLACEHOLDER)
@@ -336,12 +343,17 @@ class StreamDisplay:
         )
 
         sent: list[int] = []
+        chunks: list[str] = []
         if reply and reply.strip():
             sent = self.poller._send_text(
                 self.chat_id,
                 reply,
                 reply_to_message_id=self.reply_to_message_id,
+                out_chunks=chunks,
             )
+        self.final_sent_ids = sent
+        self.final_text = extract_ask_block(reply)[0].strip() if reply else ""
+        self.final_last_bubble = chunks[-1] if chunks else ""
         self._register_and_notice(result, sent, reply)
 
     def _finalize_placeholder(self, reply: str, result: dict[str, Any]) -> None:
@@ -374,6 +386,7 @@ class StreamDisplay:
             # transformed (e.g. the ask block was stripped). Send only the
             # visible suffix so the committed message is not duplicated.
             reply = display_reply[len(self.committed_display) :].lstrip("\n")
+        chunks: list[str] = []
         if not reply or not reply.strip():
             # If the turn produced no final text, do not leave the placeholder
             # hanging. Delete it and send the notice (if any) as a fresh message.
@@ -386,11 +399,16 @@ class StreamDisplay:
                 reply,
                 first_message_id=self.message_id,
                 reply_to_message_id=self.reply_to_message_id,
+                out_chunks=chunks,
             )
         else:
             sent = self.poller._send_text(
                 self.chat_id,
                 reply,
                 reply_to_message_id=self.reply_to_message_id,
+                out_chunks=chunks,
             )
+        self.final_sent_ids = sent
+        self.final_text = display_reply
+        self.final_last_bubble = chunks[-1] if chunks else self.committed_last_chunk
         self._register_and_notice(result, sent, reply)

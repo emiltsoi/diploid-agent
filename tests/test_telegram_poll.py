@@ -261,6 +261,7 @@ def test_handle_update_routes_metrics_command(tmp_path: Path) -> None:
         *,
         reply_to_message_id: int | None = None,
         first_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> None:
         sent.append((chat_id, text, reply_to_message_id))
 
@@ -292,6 +293,7 @@ def test_handle_update_routes_metrics_command_with_bot_username(tmp_path: Path) 
         *,
         reply_to_message_id: int | None = None,
         first_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> None:
         sent.append((chat_id, text, reply_to_message_id))
 
@@ -323,6 +325,7 @@ def test_handle_update_routes_command_with_extra_whitespace(tmp_path: Path) -> N
         *,
         reply_to_message_id: int | None = None,
         first_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> None:
         sent.append((chat_id, text, reply_to_message_id))
 
@@ -354,6 +357,7 @@ def test_handle_update_routes_recall_command_with_bot_username_and_args(tmp_path
         *,
         reply_to_message_id: int | None = None,
         first_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> None:
         pass
 
@@ -385,6 +389,7 @@ def test_handle_update_routes_mcp_list(tmp_path: Path) -> None:
         *,
         reply_to_message_id: int | None = None,
         first_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> None:
         sent.append((chat_id, text, reply_to_message_id))
 
@@ -417,6 +422,7 @@ def test_handle_update_sub_command_arity_and_usage(tmp_path: Path) -> None:
         *,
         reply_to_message_id: int | None = None,
         first_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> None:
         sent.append((chat_id, text, reply_to_message_id))
 
@@ -481,6 +487,7 @@ def test_handle_update_routes_mcp_enable(tmp_path: Path) -> None:
         *,
         reply_to_message_id: int | None = None,
         first_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> None:
         sent.append((chat_id, text, reply_to_message_id))
 
@@ -512,6 +519,7 @@ def test_handle_update_routes_skill_list(tmp_path: Path) -> None:
         *,
         reply_to_message_id: int | None = None,
         first_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> None:
         sent.append((chat_id, text, reply_to_message_id))
 
@@ -543,6 +551,7 @@ def test_handle_update_routes_skill_disable(tmp_path: Path) -> None:
         *,
         reply_to_message_id: int | None = None,
         first_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> None:
         sent.append((chat_id, text, reply_to_message_id))
 
@@ -574,6 +583,7 @@ def test_handle_update_routes_state_command(tmp_path: Path) -> None:
         *,
         reply_to_message_id: int | None = None,
         first_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> None:
         sent.append((chat_id, text, reply_to_message_id))
 
@@ -607,6 +617,7 @@ def test_handle_update_routes_help_command(tmp_path: Path) -> None:
         *,
         reply_to_message_id: int | None = None,
         first_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> None:
         sent.append((chat_id, text, reply_to_message_id))
 
@@ -640,6 +651,7 @@ def test_handle_update_routes_restart_command(tmp_path: Path) -> None:
         *,
         reply_to_message_id: int | None = None,
         first_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> None:
         sent.append((chat_id, text, reply_to_message_id))
 
@@ -708,6 +720,7 @@ def test_stream_turn_finalizes_thought_before_final(tmp_path: Path) -> None:
         *,
         first_message_id: int | None = None,
         reply_to_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> list[int]:
         calls.append(("send_text", chat_id, text, first_message_id))
         return [first_message_id or 100]
@@ -784,6 +797,7 @@ def test_stream_turn_keeps_thought_when_status_goes_idle(tmp_path: Path) -> None
         *,
         first_message_id: int | None = None,
         reply_to_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> list[int]:
         calls.append(("send_text", chat_id, text, first_message_id))
         return [first_message_id or 100]
@@ -876,6 +890,7 @@ def test_stream_turn_thought_tail_updates(tmp_path: Path) -> None:
         *,
         first_message_id: int | None = None,
         reply_to_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> list[int]:
         return [first_message_id or 100]
 
@@ -932,6 +947,7 @@ def test_stream_turn_empty_reply_deletes_placeholder(tmp_path: Path) -> None:
         *,
         first_message_id: int | None = None,
         reply_to_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> list[int]:
         sent.append((text, reply_to_message_id))
         return [first_message_id or 100]
@@ -996,6 +1012,7 @@ def test_stream_turn_continuation_deletes_committed_message(tmp_path: Path) -> N
         *,
         first_message_id: int | None = None,
         reply_to_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> list[int]:
         sent.append(("send_text", chat_id, text, first_message_id))
         return [first_message_id or 100]
@@ -1409,6 +1426,7 @@ def test_stream_turn_splits_intermediate_messages(tmp_path: Path, monkeypatch: A
         *,
         first_message_id: int | None = None,
         reply_to_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> list[int]:
         send_text_calls.append((chat_id, text, first_message_id))
         return [first_message_id or 100]
@@ -1504,6 +1522,7 @@ def test_stream_turn_no_split_when_intermediate_messages_disabled(
         *,
         first_message_id: int | None = None,
         reply_to_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> list[int]:
         send_text_calls.append((chat_id, text, first_message_id))
         return [first_message_id or 100]
@@ -1582,6 +1601,7 @@ def test_stream_turn_no_duplicate_when_ask_block_added_after_commit(
         *,
         first_message_id: int | None = None,
         reply_to_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> list[int]:
         send_text_calls.append((chat_id, text, first_message_id))
         return [first_message_id or 100]
@@ -1673,6 +1693,7 @@ def test_stream_turn_no_duplicate_when_final_reply_stripped_of_ask_block(
         *,
         first_message_id: int | None = None,
         reply_to_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> list[int]:
         send_text_calls.append((chat_id, text, first_message_id))
         return [first_message_id or 100]
@@ -1755,6 +1776,7 @@ def test_stream_turn_no_duplicate_when_stream_text_has_trailing_whitespace(
         *,
         first_message_id: int | None = None,
         reply_to_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> list[int]:
         send_text_calls.append((chat_id, text, first_message_id))
         return [first_message_id or 100]
@@ -2393,6 +2415,7 @@ def test_handle_update_routes_subagents_command(tmp_path: Path) -> None:
         *,
         reply_to_message_id: int | None = None,
         first_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> None:
         sent.append((chat_id, text, reply_to_message_id))
 
@@ -2487,6 +2510,7 @@ def test_delivery_worker_sends_outbox_result(tmp_path: Path) -> None:
         *,
         reply_to_message_id: int | None = None,
         first_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> list[int]:
         sent.append((chat_id, text, reply_to_message_id))
         return [100]
@@ -2724,6 +2748,236 @@ def test_wake_display_transient_result_does_not_finish(tmp_path: Path) -> None:
     assert poller._wake_displays == {}
 
 
+def _seed_tombstone(
+    poller: TelegramPoller,
+    chat_id: int = 12345,
+    *,
+    full_text: str = "wake reply",
+    last_message_id: int | None = 9001,
+    last_bubble_content: str = "wake reply",
+    session_number: int | None = 1,
+    turn_number: int | None = 2,
+) -> None:
+    from diploid_agent.transport.telegram.models import WakeTombstone
+
+    poller._wake_tombstones[chat_id] = WakeTombstone(
+        full_text=full_text,
+        last_message_id=last_message_id,
+        last_bubble_content=last_bubble_content,
+        session_number=session_number,
+        turn_number=turn_number,
+        finalized_at=time.monotonic(),
+    )
+
+
+def test_tombstone_drops_pure_duplicate(tmp_path: Path) -> None:
+    """A late result identical to the finalized text is dropped, not resent."""
+    runtime = _FakeDeliveryRuntime()
+    poller, io = _make_wake_poller(tmp_path, runtime)
+    _seed_tombstone(poller)
+    worker = DeliveryWorker(poller, 12345)
+
+    worker._deliver(12345, ChatResult(reply="wake reply", session_number=1, turn_number=2))
+
+    assert io.sent == []
+    assert io.edits == []
+    assert poller._wake_tombstones == {}
+
+
+def test_tombstone_folds_extended_result(tmp_path: Path) -> None:
+    """A late result extending the finalized text edits the delta into the last bubble."""
+    runtime = _FakeDeliveryRuntime()
+    poller, io = _make_wake_poller(tmp_path, runtime)
+    _seed_tombstone(poller)
+    worker = DeliveryWorker(poller, 12345)
+
+    worker._deliver(
+        12345, ChatResult(reply="wake reply — plus a late tail", session_number=1, turn_number=2)
+    )
+
+    assert io.sent == []
+    assert io.edits == [(12345, "wake reply — plus a late tail")]
+    assert poller._wake_tombstones == {}
+
+
+def test_tombstone_overflow_sends_delta_alone(tmp_path: Path) -> None:
+    """A delta that would overflow 4096 goes out as its own bounded message."""
+    runtime = _FakeDeliveryRuntime()
+    poller, io = _make_wake_poller(tmp_path, runtime)
+    _seed_tombstone(poller, last_bubble_content="x" * 4000)
+    worker = DeliveryWorker(poller, 12345)
+
+    worker._deliver(
+        12345, ChatResult(reply="wake reply" + "y" * 200, session_number=1, turn_number=2)
+    )
+
+    assert io.edits == []
+    assert io.sent == [(12345, "y" * 200)]
+    assert poller._wake_tombstones == {}
+
+
+def test_tombstone_turn_mismatch_sends_and_keeps(tmp_path: Path) -> None:
+    """A (session, turn) mismatch direct-sends and leaves the tombstone."""
+    runtime = _FakeDeliveryRuntime()
+    poller, io = _make_wake_poller(tmp_path, runtime)
+    _seed_tombstone(poller)
+    worker = DeliveryWorker(poller, 12345)
+
+    worker._deliver(12345, ChatResult(reply="wake reply", session_number=1, turn_number=3))
+
+    assert io.sent == [(12345, "wake reply")]
+    assert io.edits == []
+    assert 12345 in poller._wake_tombstones
+
+
+def test_tombstone_diverged_result_fails_open(tmp_path: Path) -> None:
+    """A matched turn whose text diverged direct-sends — and consumes the tombstone."""
+    runtime = _FakeDeliveryRuntime()
+    poller, io = _make_wake_poller(tmp_path, runtime)
+    _seed_tombstone(poller)
+    worker = DeliveryWorker(poller, 12345)
+
+    worker._deliver(
+        12345, ChatResult(reply="something else entirely", session_number=1, turn_number=2)
+    )
+
+    assert io.sent == [(12345, "something else entirely")]
+    assert io.edits == []
+    assert poller._wake_tombstones == {}
+
+
+def test_tombstone_ignores_transient(tmp_path: Path) -> None:
+    """Transient results bypass the tombstone entirely."""
+    runtime = _FakeDeliveryRuntime()
+    poller, io = _make_wake_poller(tmp_path, runtime)
+    _seed_tombstone(poller)
+    worker = DeliveryWorker(poller, 12345)
+
+    worker._deliver(
+        12345,
+        ChatResult(reply="wake reply", session_number=1, turn_number=2, transient=True),
+    )
+
+    assert io.sent == [(12345, "wake reply")]
+    assert 12345 in poller._wake_tombstones
+
+
+def test_turn_started_clears_tombstone(tmp_path: Path) -> None:
+    """A new turn_started marker clears any stale tombstone for the chat."""
+    runtime = _FakeDeliveryRuntime()
+    poller, _io = _make_wake_poller(tmp_path, runtime)
+    _seed_tombstone(poller)
+
+    poller._start_wake_display(12345)
+    try:
+        assert poller._wake_tombstones == {}
+        assert 12345 in poller._wake_displays
+    finally:
+        spawned = poller._wake_displays.pop(12345, None)
+        if spawned is not None:
+            spawned.finish({})
+            spawned.join(timeout=5.0)
+
+
+def test_wake_display_tombstone_written_on_grace_miss(tmp_path: Path, monkeypatch: Any) -> None:
+    """Grace-miss exit writes a tombstone carrying marker ids + sent bubble id."""
+    from diploid_agent.transport.telegram.workers import WakeDisplayWorker
+
+    monkeypatch.setattr(WakeDisplayWorker, "_RESULT_GRACE", 0.5)
+    runtime = _FakeDeliveryRuntime(
+        outbox=[
+            {
+                "kind": "turn_started",
+                "chat_id": "12345",
+                "session_number": 3,
+                "turn_number": 7,
+                "result": None,
+            }
+        ]
+    )
+    statuses = iter(
+        [
+            {"status": "running", "message_text": "partial text", "thought_text": ""},
+            {"status": "idle", "message_text": "", "thought_text": ""},
+        ]
+    )
+    runtime.turn_status = lambda chat_id, wait=0.0: next(  # type: ignore[attr-defined]
+        statuses, {"status": "idle", "message_text": "", "thought_text": ""}
+    )
+    poller, io = _make_wake_poller(tmp_path, runtime)
+
+    worker = DeliveryWorker(poller, 12345)
+    worker.start()
+    deadline = time.time() + 10.0
+    while time.time() < deadline and 12345 not in poller._wake_tombstones:
+        time.sleep(0.05)
+    worker.stop()
+    worker.join(timeout=2.0)
+
+    assert any("partial text" in text for _, text in io.sent)
+    tombstone = poller._wake_tombstones[12345]
+    assert tombstone.full_text == "partial text"
+    assert tombstone.session_number == 3
+    assert tombstone.turn_number == 7
+    assert tombstone.last_message_id is not None
+    assert tombstone.finalized_at > 0
+
+
+def test_wake_display_routed_result_leaves_no_tombstone(tmp_path: Path) -> None:
+    """A finish()-routed exit must not write a tombstone."""
+    runtime = _FakeDeliveryRuntime(
+        outbox=[
+            {"kind": "turn_started", "chat_id": "12345", "result": None},
+            ChatResult(reply="wake reply", turn_number=2, session_number=1),
+        ]
+    )
+    statuses = iter(
+        [
+            {"status": "running", "message_text": "wake rep", "thought_text": ""},
+            {"status": "idle", "message_text": "", "thought_text": ""},
+        ]
+    )
+    runtime.turn_status = lambda chat_id, wait=0.0: next(  # type: ignore[attr-defined]
+        statuses, {"status": "idle", "message_text": "", "thought_text": ""}
+    )
+    poller, io = _make_wake_poller(tmp_path, runtime)
+    poller._last_user_message_ids[12345] = 50
+
+    worker = DeliveryWorker(poller, 12345)
+    worker.start()
+    deadline = time.time() + 5.0
+    while not io.sent and time.time() < deadline:
+        time.sleep(0.05)
+    worker.stop()
+    worker.join(timeout=2.0)
+
+    assert any("wake reply" in text for _, text in io.sent)
+    assert poller._wake_tombstones == {}
+
+
+def test_send_text_out_chunks_captures_rendered(tmp_path: Path, monkeypatch: Any) -> None:
+    """out_chunks captures exactly the content each sent bubble carries."""
+    runtime = _FakeDeliveryRuntime()
+    poller = TelegramPoller(
+        token="dummy",
+        runtime=runtime,  # type: ignore[arg-type]
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    ids = iter(range(100, 200))
+    sent_contents: list[str] = []
+    monkeypatch.setattr(
+        poller,
+        "_send_message",
+        lambda chat_id, text, **kw: sent_contents.append(text) or next(ids),
+    )
+
+    chunks: list[str] = []
+    sent = poller._send_text(12345, "a" * 5000, out_chunks=chunks)
+
+    assert len(sent) == 2
+    assert chunks == sent_contents
+
+
 def test_turn_worker_queued_input_is_processed(tmp_path: Path) -> None:
     """A second message sent while a turn is running is queued and processed next."""
     slow_runtime = _FakeDeliveryRuntime()
@@ -2748,6 +3002,7 @@ def test_turn_worker_queued_input_is_processed(tmp_path: Path) -> None:
         *,
         reply_to_message_id: int | None = None,
         first_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> list[int]:
         sent.append(text)
         return [100]
@@ -2791,6 +3046,7 @@ def test_handle_update_starts_worker_and_queues_messages(tmp_path: Path) -> None
         *,
         reply_to_message_id: int | None = None,
         first_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> list[int]:
         sent.append(text)
         return [100]
@@ -2865,6 +3121,7 @@ def test_handle_update_routes_graceful_restart_command(tmp_path: Path) -> None:
         *,
         reply_to_message_id: int | None = None,
         first_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> None:
         sent.append((chat_id, text, reply_to_message_id))
 
@@ -2902,6 +3159,7 @@ def test_handle_update_routes_graceful_restart_with_explicit_service(tmp_path: P
         *,
         reply_to_message_id: int | None = None,
         first_message_id: int | None = None,
+        out_chunks: list[str] | None = None,
     ) -> None:
         sent.append((chat_id, text, reply_to_message_id))
 

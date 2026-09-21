@@ -101,6 +101,7 @@ from diploid_agent.transport.telegram.workers import (
     DeliveryWorker,
     TurnWorker,
     WakeDisplayWorker,
+    WakeTombstone,
 )
 
 from .commands import TelegramCommandMixin
@@ -191,6 +192,7 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
         self._delivery_workers: dict[int, DeliveryWorker] = {}
         self._global_delivery_worker: DeliveryWorker | None = None
         self._wake_displays: dict[int, WakeDisplayWorker] = {}
+        self._wake_tombstones: dict[int, WakeTombstone] = {}
         self._keyboard_swept: set[int] = set()
         self._last_user_message_ids: dict[int, int] = {}
         self._send_locks: dict[int, threading.RLock] = {}
@@ -279,7 +281,13 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
             self._global_delivery_worker = DeliveryWorker(self, chat_id=None)
             self._global_delivery_worker.start()
 
-    def _start_wake_display(self, chat_id: int) -> None:
+    def _start_wake_display(
+        self,
+        chat_id: int,
+        *,
+        session_number: int | None = None,
+        turn_number: int | None = None,
+    ) -> None:
         """Register a WakeDisplayWorker for a wake-driven turn, if enabled.
 
         Called by DeliveryWorker when an outbox ``turn_started`` marker
@@ -291,13 +299,29 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
         with self._worker_lock:
             if chat_id in self._wake_displays or chat_id in self._active_workers:
                 return
-            worker = WakeDisplayWorker(self, chat_id)
+            # A new turn owns the channel — any leftover tombstone belongs to
+            # a stale turn and must not match this turn's late results.
+            self._wake_tombstones.pop(chat_id, None)
+            worker = WakeDisplayWorker(
+                self,
+                chat_id,
+                session_number=session_number,
+                turn_number=turn_number,
+            )
             self._wake_displays[chat_id] = worker
             worker.start()
 
     def _wake_display_for(self, chat_id: int) -> WakeDisplayWorker | None:
         with self._worker_lock:
             return self._wake_displays.get(chat_id)
+
+    def _wake_tombstone_for(self, chat_id: int) -> WakeTombstone | None:
+        with self._worker_lock:
+            return self._wake_tombstones.get(chat_id)
+
+    def _pop_wake_tombstone(self, chat_id: int) -> WakeTombstone | None:
+        with self._worker_lock:
+            return self._wake_tombstones.pop(chat_id, None)
 
     def _deliver_outbox_result(self, chat_id: int, chat_result: ChatResult) -> None:
         """Deliver an outbox ChatResult to Telegram, registering sent message IDs."""
