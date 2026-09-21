@@ -88,6 +88,15 @@ result. Wake turns also get typing presence for their whole duration. Gates:
 silent wakes stay typing-only — and `harness.notifications.outbox_delivery`
 for the marker itself.
 
+If the real `ChatResult` lands after the display's 30-second result grace,
+the worker exits on a *tombstone*: the finalized text, last-bubble content,
+and `(session, turn)` key. A late identical result is then dropped instead
+of double-posted, an extended one has its delta edited into the last bubble
+(or sent standalone past the 4096-char cap), and a diverged one fails open
+as a direct send — counted via `wake_tombstone_drop_total` / `fold_total` /
+`diverge_total`. Tombstones are consumed on match, cleared by the next
+`turn_started`, and in-memory only.
+
 The same outbox path is used for the optional mesh Telegram float. When
 `harness.notifications.mesh_telegram_float` is `true`, the harness inserts a
 system message such as `System: [mesh] aurelia → vesper: pong` into the outbox

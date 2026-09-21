@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.6.12 — 2026-09-22
+
+### Fixed
+
+- **Wake-turn results no longer double-post after the grace window**: when a
+  `WakeDisplayWorker` exits on the grace-miss path (the real `ChatResult`
+  lands after the 30s `_RESULT_GRACE`), it leaves a per-chat tombstone
+  carrying the finalized text, last-bubble content/id, and the
+  `(session, turn)` key. `DeliveryWorker` then folds an identical late
+  result (dropped), an extending one (delta edited into the last bubble,
+  or sent standalone past 4096), and fails open on divergence — with
+  `wake_tombstone_drop_total` / `fold_total` / `diverge_total` counters.
+  Tombstones are consumed on match, cleared by a new `turn_started`, and
+  in-memory only (a restart keeps today's fail-open behavior).
+- **Stale reply-keyboards are swept passively**: the first markup-free send
+  per chat piggybacks `remove_keyboard`, so fossil keyboards left by old
+  `ask` blocks disappear without a boot-time notification flash; skipped
+  while a pending `.ask.json` may still own the keyboard.
+- A flaky wake-display test now waits for the worker's self-pop instead of
+  racing it.
+
+### Added
+
+- **Real-wire ACP fixture capture**: `tests/capture_acp_updates.py` runs a
+  live `devin acp` child and dumps every `session/update` payload to
+  `tests/fixtures/acp_updates.jsonl`, replayed through `TurnStream` — so
+  extraction is tested against wire truth, not guessed shapes. It already
+  caught a fifth title-flap mode (`tool_call_update` chunks carrying no
+  `title`/`kind` at all); the per-`toolCallId` title memory now covers all
+  tools, not just command-derived ones.
+
+### Removed
+
+- The dead `build_reply_keyboard` helper.
+
 ## 0.6.11 — 2026-09-20
 
 ### Added
