@@ -4279,3 +4279,17 @@ def test_tool_progress_heartbeat_composes_side_effect(tmp_path: Path) -> None:
         {"status": "running", "message_text": "", "last_side_effect": "exec: pytest (running)"}
     )
     assert edits[-1][1].startswith("· exec: pytest (running)\n\n(still working,")
+
+
+def test_error_reply_exposes_exception_detail() -> None:
+    """The failure fallback names the real error instead of a bare apology."""
+    from diploid_agent.transport.telegram.formatting import _error_reply
+
+    msg = _error_reply("Sorry, the harness is having trouble.", ConnectionError("refused\nby peer"))
+    assert "ConnectionError" in msg
+    assert "refused by peer" in msg  # newlines collapse to one line
+    assert "Try again in a moment." in msg
+
+    long = _error_reply("Sorry.", RuntimeError("x" * 500))
+    assert len(long) < 320
+    assert long.endswith("Try again in a moment.")

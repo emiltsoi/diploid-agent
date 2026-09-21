@@ -84,3 +84,18 @@ def _build_heartbeat_text(base: str, elapsed: float, limit: int = 4096) -> str:
     if max_base <= 0:
         return total[:limit]
     return base[:max_base] + "..." + suffix
+
+
+def _error_reply(prefix: str, exc: BaseException) -> str:
+    """Build the user-facing failure line with the real error attached.
+
+    The bare "having trouble" text hid actionable causes (a dead model name,
+    a refused connection) behind a generic apology. Append ``ExcType: msg``
+    on one line so the chat shows what actually failed; cap the detail so a
+    huge error payload cannot blow up the message.
+    """
+    detail = f"{type(exc).__name__}: {exc}"
+    detail = " ".join(detail.split())
+    if len(detail) > 240:
+        detail = detail[:237].rstrip() + "..."
+    return f"{prefix} [{detail}] Try again in a moment."

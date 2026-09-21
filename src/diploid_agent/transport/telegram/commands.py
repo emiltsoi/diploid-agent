@@ -28,6 +28,7 @@ from diploid_agent.models import ChatResult
 from diploid_agent.transport.command_handler import _coerce_chat_result
 from diploid_agent.transport.telegram.formatting import (
     _TELEGRAM_HELP,
+    _error_reply,
     _format_subagent_time,
 )
 from diploid_agent.transport.telegram.models import ChatInput
@@ -157,10 +158,10 @@ class TelegramCommandMixin:
                 )
                 resp.raise_for_status()
                 return resp.json()
-        except Exception:
+        except Exception as exc:
             logger.exception("Harness /chat failed")
             return {
-                "reply": "Sorry, the harness is having trouble. Try again in a moment.",
+                "reply": _error_reply("Sorry, the harness is having trouble.", exc),
                 "notice": None,
             }
 

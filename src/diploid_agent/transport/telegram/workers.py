@@ -13,7 +13,7 @@ from diploid_agent.models import ChatResult
 from diploid_agent.runtime.outbox import _is_telegram_chat_id
 from diploid_agent.transport.command_handler import _coerce_chat_result
 from diploid_agent.transport.interactive import extract_ask_block
-from diploid_agent.transport.telegram.formatting import _REPLY_PLACEHOLDER
+from diploid_agent.transport.telegram.formatting import _REPLY_PLACEHOLDER, _error_reply
 from diploid_agent.transport.telegram.models import ChatInput, WakeTombstone
 from diploid_agent.transport.telegram.stream_display import StreamDisplay
 
@@ -157,10 +157,10 @@ class TurnWorker(threading.Thread):
                     "dispatch_id": getattr(result, "dispatch_id", None),
                     "continuation": getattr(result, "continuation", False),
                 }
-            except Exception:
+            except Exception as exc:
                 logger.exception("Runtime process failed")
                 return {
-                    "reply": "Sorry, the runtime is having trouble. Try again in a moment.",
+                    "reply": _error_reply("Sorry, the runtime is having trouble.", exc),
                     "notice": None,
                 }
 
@@ -189,10 +189,10 @@ class TurnWorker(threading.Thread):
             )
             resp.raise_for_status()
             return resp.json()
-        except Exception:
+        except Exception as exc:
             logger.exception("Harness /chat failed")
             return {
-                "reply": "Sorry, the harness is having trouble. Try again in a moment.",
+                "reply": _error_reply("Sorry, the harness is having trouble.", exc),
                 "notice": None,
             }
 

@@ -15,6 +15,7 @@ from diploid_agent.transport.telegram.formatting import (
     _REPLY_PLACEHOLDER,
     _THINKING_PREFIX,
     _build_heartbeat_text,
+    _error_reply,
     _format_thought,
 )
 
@@ -278,10 +279,10 @@ class StreamDisplay:
                 "reply": self.display_text or self.text,
                 "notice": "Turn stopped by user; the harness did not return a final reply.",
             }
-        except Exception:
+        except Exception as exc:
             logger.exception("Turn failed")
             return {
-                "reply": "Sorry, the harness is having trouble. Try again in a moment.",
+                "reply": _error_reply("Sorry, the harness is having trouble.", exc),
                 "notice": None,
             }
 
