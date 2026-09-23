@@ -85,8 +85,8 @@ class TokenEstimator:
         window size is unknown, both percentages are zero.
         """
         context_window = self.context_window_for(record.model if record else None)
-        cumulative = record.cumulative_metrics if record else {}
-        last_turn = record.last_turn_metrics if record else {}
+        cumulative = (record.cumulative_metrics or {}) if record else {}
+        last_turn = (record.last_turn_metrics or {}) if record else {}
 
         result: dict[str, Any] = {
             "context_window": context_window,

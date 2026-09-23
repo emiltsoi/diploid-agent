@@ -926,6 +926,34 @@ def test_build_follow_up_small_soul_under_context_pressure(tmp_path: Path) -> No
     assert not pctx_follow.force_new_session
 
 
+def test_build_follow_up_fresh_record_without_metrics(tmp_path: Path) -> None:
+    """A fresh record has no cumulative/last-turn metrics yet — must not crash.
+
+    Regression: ``SessionRecord.cumulative_metrics`` is ``None`` until the first
+    completed turn persists runtime metrics, so every follow-up turn on a new
+    session crashed in ``context_pressure`` with ``AttributeError: 'NoneType'``.
+    """
+    builder = _make_builder_with_plugins(tmp_path, [])
+    record = SessionRecord(
+        chat_id="chat-1",
+        session_number=1,
+        session_id="session-1",
+        model="swe-1-7",
+        persona="test-pilot",
+        cwd=str(tmp_path),
+        created_at=time.time(),
+        updated_at=time.time(),
+        turn_number=1,
+        cumulative_metrics=None,
+        last_turn_metrics=None,
+    )
+    builder.config.engine.context_window = 1000
+    builder.config.harness.proactive_new_session_threshold = 5.0
+
+    pctx = builder.build_follow_up("chat-1", "hello again", record=record)
+    assert not pctx.force_new_session
+
+
 def test_build_follow_up_proactive_fresh_session(
     tmp_path: Path,
 ) -> None:
