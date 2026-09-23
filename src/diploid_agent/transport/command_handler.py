@@ -80,9 +80,9 @@ class CommandHandler:
     ) -> Any:
         """Call a runtime method or the matching HTTP endpoint.
 
-        For ``GET`` requests, ``http_path`` may contain a ``{chat_id}``
-        placeholder that is filled from ``chat_id``.  For ``POST`` requests the
-        body is built from ``kwargs`` plus ``chat_id``.
+        ``http_path`` may contain a ``{chat_id}`` placeholder that is filled
+        from ``chat_id``.  For ``POST`` requests the body is built from
+        ``kwargs`` plus ``chat_id``.
         """
         if self.runtime is not None:
             try:
@@ -106,12 +106,12 @@ class CommandHandler:
             headers["X-API-Key"] = self.api_key
 
         try:
+            path = (
+                http_path.format(chat_id=str(chat_id))
+                if "{chat_id}" in http_path
+                else http_path
+            )
             if http_method == "GET":
-                path = (
-                    http_path.format(chat_id=str(chat_id))
-                    if "{chat_id}" in http_path
-                    else http_path
-                )
                 params = {k: v for k, v in kwargs.items() if v is not None}
                 resp = client.get(f"{self.harness_url}{path}", headers=headers, params=params)
             else:
@@ -122,7 +122,7 @@ class CommandHandler:
                 if requires_chat_id and chat_id is not None:
                     body["chat_id"] = str(chat_id)
                 resp = client.post(
-                    f"{self.harness_url}{http_path}",
+                    f"{self.harness_url}{path}",
                     json=body,
                     headers=headers,
                 )
