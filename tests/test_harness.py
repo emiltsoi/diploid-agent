@@ -18,7 +18,7 @@ from diploid_agent.config import (
     Secrets,
 )
 from diploid_agent.harness import ConversationHarness
-from diploid_agent.models import ChatResult
+from diploid_agent.models import ActiveTurn, ChatResult
 
 
 def _make_config(
@@ -453,8 +453,8 @@ def test_model_switch_in_place_without_session_falls_back(monkeypatch, tmp_path:
         harness.client.close()
 
 
-def test_model_switch_in_place_during_turn_is_refused(monkeypatch, tmp_path: Path) -> None:
-    """An in-place switch is refused while a turn is running for the chat."""
+def test_model_switch_in_place_during_turn_is_queued(monkeypatch, tmp_path: Path) -> None:
+    """An in-place switch parks behind a running turn and replays after it."""
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
     config = _make_config(tmp_path, fixture_root)
     harness = ConversationHarness(config)
@@ -473,16 +473,29 @@ def test_model_switch_in_place_during_turn_is_refused(monkeypatch, tmp_path: Pat
         lambda session_id, model: set_calls.append((session_id, model)),
     )
 
-    from diploid_agent.models import ActiveTurn
-
     try:
         harness.process("chat-busy", "hello")
         harness._active_turns["chat-busy"] = ActiveTurn(
             "chat-busy", "session-1", "working", time.time()
         )
         result = harness.switch_model("chat-busy", "glm-5-2", in_place=True)
-        assert "in progress" in result.reply
+        assert "queued" in result.reply
         assert set_calls == []
+        parked = [
+            e
+            for e in harness.wake_queue.pending(chat_id="chat-busy")
+            if e.reason == "session_op"
+        ]
+        assert len(parked) == 1
+        assert parked[0].payload["op"] == "switch_model"
+        assert parked[0].payload["in_place"] is True
+
+        # The parked wake replays the in-place switch on the live session.
+        harness._active_turns.pop("chat-busy")
+        replayed = harness.turn_controller.run_session_op("chat-busy", parked[0].payload)
+        assert "glm-5-2" in replayed.reply
+        assert set_calls == [("session-1", "glm-5-2")]
+        assert harness.active_record("chat-busy").model == "glm-5-2"
     finally:
         harness.client.close()
 
@@ -567,12 +580,22 @@ def test_session_op_blocks_turns_and_other_ops(monkeypatch, tmp_path: Path) -> N
         assert entered.wait(timeout=10)
         assert "chat-gate" in harness._session_ops
 
-        # A user message and another session op are both refused while the
-        # switch holds the chat.
+        # A user message is refused while the switch holds the chat; a
+        # session op parks as a session_op wake instead of refusing.
         busy_turn = harness.process("chat-gate", "are you there?")
         assert "session operation is in progress" in busy_turn.reply
         busy_new = harness.new_session("chat-gate")
-        assert "in progress" in busy_new.reply
+        assert "queued" in busy_new.reply
+        parked = [
+            e
+            for e in harness.wake_queue.pending(chat_id="chat-gate")
+            if e.reason == "session_op"
+        ]
+        assert len(parked) == 1
+        assert parked[0].payload["op"] == "new"
+        # A second op refuses while one is parked.
+        second = harness.new_session("chat-gate")
+        assert "already queued" in second.reply
         assert send_calls == []
 
         release.set()
@@ -585,6 +608,71 @@ def test_session_op_blocks_turns_and_other_ops(monkeypatch, tmp_path: Path) -> N
         assert record.model == "glm-5-2"
     finally:
         release.set()
+        harness.client.close()
+
+
+def test_queued_session_op_replays_via_wake(monkeypatch, tmp_path: Path) -> None:
+    """A `/new` parked during a turn runs when the session_op wake fires."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root)
+    harness = ConversationHarness(config)
+
+    monkeypatch.setattr(
+        harness.client,
+        "create_session",
+        lambda prompt, *, cwd=None, model=None, **kwargs: AcpPromptResult(
+            reply="Ready.", session_id="session-1"
+        ),
+    )
+    monkeypatch.setattr(
+        harness.client,
+        "send_message",
+        lambda session_id, prompt, *, cwd=None, model=None, **kwargs: AcpPromptResult(
+            reply="Follow-up.", session_id=session_id
+        ),
+    )
+
+    try:
+        harness.process("chat-q", "hello")
+        assert harness.active_record("chat-q").session_number == 1
+
+        # While the chat is busy the op parks as a session_op wake.
+        harness._active_turns["chat-q"] = ActiveTurn(
+            "chat-q", "session-1", "working", time.time()
+        )
+        queued = harness.new_session("chat-q")
+        assert "queued" in queued.reply
+        events = [
+            e
+            for e in harness.wake_queue.pending(chat_id="chat-q")
+            if e.reason == "session_op"
+        ]
+        assert len(events) == 1
+
+        # The wake reschedules while the gate is still closed...
+        busy = harness.wake("chat-q", event_id=events[0].id)
+        assert busy.reply == "Chat is busy; wake re-enqueued."
+
+        # ...and replays once the turn clears, completing the wake.
+        harness._active_turns.pop("chat-q")
+        done = harness.wake("chat-q", event_id=events[0].id)
+        assert done.reply == ""
+        record = harness.active_record("chat-q")
+        assert record.session_number == 2
+        assert record.label == "new session"
+    finally:
+        harness.client.close()
+
+
+def test_run_session_op_drops_unknown_payload(monkeypatch, tmp_path: Path) -> None:
+    """A malformed parked op is dropped, not surfaced or retried."""
+    fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
+    config = _make_config(tmp_path, fixture_root)
+    harness = ConversationHarness(config)
+    try:
+        result = harness.turn_controller.run_session_op("chat-x", {"op": "bogus"})
+        assert result.reply == ""
+    finally:
         harness.client.close()
 
 

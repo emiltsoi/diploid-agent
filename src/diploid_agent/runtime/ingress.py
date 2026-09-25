@@ -193,6 +193,18 @@ class RuntimeIngress:
 
         try:
             payload = event.payload if event else {}
+            if reason == "session_op":
+                result = self._turn_controller.run_session_op(chat_id, payload)
+                if result.reply == "Chat is busy; wake re-enqueued.":
+                    # Gate still closed — the wake handler reschedules.
+                    return result
+                # Queued ops complete outside the turn pipeline, so nothing
+                # else delivers their result — deliver it here, then return an
+                # empty marker so the handler completes the wake without
+                # re-delivering.
+                if result.reply or result.notice:
+                    self._turn_controller.runtime._deliver_chat_result(chat_id, result)
+                return ChatResult(reply="")
             if reason == "plan_task_update":
                 user_message = self._planning._build_plan_task_update_message(payload)
             elif reason == "plan_completed":

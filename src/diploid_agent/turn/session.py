@@ -5,11 +5,12 @@ from __future__ import annotations
 import contextlib
 import logging
 import time
+from typing import Any
 
 from diploid_agent.acp_client.utils import _normalize_model
 from diploid_agent.engine import TurnRequest
 from diploid_agent.locking import locked
-from diploid_agent.models import ChatResult, SessionRecord
+from diploid_agent.models import ChatResult, SessionRecord, WakeEvent
 from diploid_agent.plugins.contexts import (
     RehydrationReason,
     SessionActiveContext,
@@ -25,19 +26,67 @@ logger = logging.getLogger(__name__)
 class TurnSession(TurnComponent):
     """Session management for a single chat."""
 
-    def _session_op_busy(self, chat_id: str) -> ChatResult | None:
+    def _session_op_busy(
+        self, chat_id: str, *, queue: dict[str, Any] | None = None
+    ) -> ChatResult | None:
         """Refusal while a turn or another session op is in flight for the chat.
 
         Session ops release the runtime lock for their ACP calls
         (``_call_unlocked``); without this gate a turn or a second op could
         slip into that window and overwrite the session record mid-flight.
+
+        With ``queue`` set, a closed gate parks the request as a
+        ``session_op`` wake instead of refusing — the wake retries until the
+        chat goes idle and then replays the op (``run_session_op``).
         """
-        if chat_id in self.runtime._active_turns or chat_id in self.runtime._session_ops:
+        if chat_id not in self.runtime._active_turns and chat_id not in self.runtime._session_ops:
+            return None
+        if queue is not None:
+            return self._queue_session_op(chat_id, queue)
+        return ChatResult(
+            reply="A turn or session operation is in progress for this chat.",
+            notice="Wait for it to finish, then retry.",
+        )
+
+    def _queue_session_op(self, chat_id: str, op: dict[str, Any]) -> ChatResult:
+        """Park a session op behind the active turn as a ``session_op`` wake.
+
+        At most one parked op per chat — a second request is refused rather
+        than stacked, because only the latest session boundary would matter
+        anyway. The wake shares the ``user_request`` retry cadence
+        (``retry_after`` 2s), so it replays within seconds of the chat going
+        idle, and it persists across restarts like other queued wakes.
+        """
+        wake_queue = self.runtime.wake_queue
+        if wake_queue is None:
             return ChatResult(
                 reply="A turn or session operation is in progress for this chat.",
                 notice="Wait for it to finish, then retry.",
             )
-        return None
+        for event in wake_queue.pending(chat_id=chat_id):
+            if event.reason == "session_op":
+                return ChatResult(
+                    reply="A session operation is already queued for this chat.",
+                    notice="It will run when the current turn finishes.",
+                )
+        wake_queue.enqueue(
+            WakeEvent(
+                id="",
+                chat_id=chat_id,
+                reason="session_op",
+                priority=10,
+                scheduled_at=time.time(),
+                created_at=time.time(),
+                payload={**op, "retry_after": 2.0},
+                silent=True,
+                ready=True,
+            )
+        )
+        label = op.get("label") or "Session change"
+        return ChatResult(
+            reply=f"{label} queued — it will run when the current turn finishes.",
+            notice="The session operation was parked behind the active turn.",
+        )
 
     @contextlib.contextmanager
     def _hold_session_op(self, chat_id: str):
@@ -251,7 +300,9 @@ class TurnSession(TurnComponent):
         )
 
     @locked
-    def switch_model(self, chat_id: str, model: str, *, in_place: bool = False) -> ChatResult:
+    def switch_model(
+        self, chat_id: str, model: str, *, in_place: bool = False, queue_on_busy: bool = True
+    ) -> ChatResult:
         """Switch the model for a chat.
 
         By default this archives the active session and starts a fresh ACP
@@ -266,7 +317,17 @@ class TurnSession(TurnComponent):
                 reply="The service is draining for a restart; please retry in a moment.",
                 notice="Restart in progress; the model was not switched.",
             )
-        if (busy := self._session_op_busy(chat_id)) is not None:
+        queue = (
+            {
+                "op": "switch_model",
+                "model": model,
+                "in_place": in_place,
+                "label": f"Switch to model `{model}`",
+            }
+            if queue_on_busy
+            else None
+        )
+        if (busy := self._session_op_busy(chat_id, queue=queue)) is not None:
             return busy
         with self._hold_session_op(chat_id):
             record = self.runtime.active_record(chat_id)
@@ -335,9 +396,12 @@ class TurnSession(TurnComponent):
         )
 
     @locked
-    def new_session(self, chat_id: str, model: str | None = None) -> ChatResult:
+    def new_session(
+        self, chat_id: str, model: str | None = None, *, queue_on_busy: bool = True
+    ) -> ChatResult:
         """Start a fresh ACP session for a chat, clearing the active context."""
-        if (busy := self._session_op_busy(chat_id)) is not None:
+        queue = {"op": "new", "model": model, "label": "New session"} if queue_on_busy else None
+        if (busy := self._session_op_busy(chat_id, queue=queue)) is not None:
             return busy
         with self._hold_session_op(chat_id):
             record = self.runtime.active_record(chat_id)
@@ -354,9 +418,20 @@ class TurnSession(TurnComponent):
             )
 
     @locked
-    def resume_session(self, chat_id: str, session_number: int) -> ChatResult:
+    def resume_session(
+        self, chat_id: str, session_number: int, *, queue_on_busy: bool = True
+    ) -> ChatResult:
         """Resume an archived session as the active one."""
-        if (busy := self._session_op_busy(chat_id)) is not None:
+        queue = (
+            {
+                "op": "resume",
+                "session_number": session_number,
+                "label": f"Resume of session {session_number}",
+            }
+            if queue_on_busy
+            else None
+        )
+        if (busy := self._session_op_busy(chat_id, queue=queue)) is not None:
             return busy
         with self._hold_session_op(chat_id):
             return self._resume_session(chat_id, session_number)
@@ -567,9 +642,20 @@ class TurnSession(TurnComponent):
         )
 
     @locked
-    def branch_session(self, chat_id: str, session_number: int) -> ChatResult:
+    def branch_session(
+        self, chat_id: str, session_number: int, *, queue_on_busy: bool = True
+    ) -> ChatResult:
         """Branch from an archived session, creating a new active session."""
-        if (busy := self._session_op_busy(chat_id)) is not None:
+        queue = (
+            {
+                "op": "branch",
+                "session_number": session_number,
+                "label": f"Branch of session {session_number}",
+            }
+            if queue_on_busy
+            else None
+        )
+        if (busy := self._session_op_busy(chat_id, queue=queue)) is not None:
             return busy
         with self._hold_session_op(chat_id):
             return self._branch_session(chat_id, session_number)

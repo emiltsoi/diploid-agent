@@ -41,6 +41,9 @@ _WAKE_RETRY_REPLIES = {
     "Another instance is currently handling this chat.",
     "A turn is already in progress; continuation queued.",
     "A session operation is in progress for this chat.",
+    # Session-op gate refusal — normally normalized to the wake-busy reply by
+    # run_session_op, listed so any path that surfaces it still retries.
+    "A turn or session operation is in progress for this chat.",
 }
 
 # Replies that should be dropped rather than delivered to the user. These are

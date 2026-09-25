@@ -212,6 +212,51 @@ class TurnController:
             notice="The next message will start a fresh Devin session.",
         )
 
+    def run_session_op(self, chat_id: str, payload: dict[str, Any]) -> ChatResult:
+        """Execute a parked ``session_op`` wake for a chat.
+
+        The caller (``RuntimeIngress.wake``) already holds the chat's
+        instance lock. A still-closed gate — another op holding
+        ``_session_ops``, an active turn, or a draining service — returns
+        the wake-busy reply so the wake is rescheduled rather than lost.
+        Ops run with ``queue_on_busy=False`` so the rare gate race refuses
+        into the same retry instead of stacking a second wake.
+        """
+        with self._lock:
+            if (
+                self.runtime._restart_draining.is_set()
+                or chat_id in self.runtime._active_turns
+                or chat_id in self.runtime._session_ops
+            ):
+                return ChatResult(reply="Chat is busy; wake re-enqueued.")
+
+        op = payload.get("op")
+        model = payload.get("model")
+        session_number = payload.get("session_number")
+        if op == "new":
+            result = self.session.new_session(chat_id, model=model, queue_on_busy=False)
+        elif op == "switch_model" and model:
+            result = self.session.switch_model(
+                chat_id, model, in_place=bool(payload.get("in_place")), queue_on_busy=False
+            )
+        elif op == "resume" and session_number is not None:
+            result = self.session.resume_session(
+                chat_id, int(session_number), queue_on_busy=False
+            )
+        elif op == "branch" and session_number is not None:
+            result = self.session.branch_session(
+                chat_id, int(session_number), queue_on_busy=False
+            )
+        else:
+            logger.warning("Dropping unknown queued session op for %s: %s", chat_id, payload)
+            return ChatResult(reply="")
+
+        if result.reply == "A turn or session operation is in progress for this chat.":
+            # The inner gate lost the race after the pre-check — normalize to
+            # the wake-busy reply so the wake retries instead of surfacing it.
+            return ChatResult(reply="Chat is busy; wake re-enqueued.")
+        return result
+
     def _finalize_session_activation(self, *args: Any, **kwargs: Any) -> Any:
         """Record the turn, append the record, notify plugins, and return the result."""
         return self.session._finalize_session_activation(*args, **kwargs)
