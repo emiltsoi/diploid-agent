@@ -482,9 +482,7 @@ def test_model_switch_in_place_during_turn_is_queued(monkeypatch, tmp_path: Path
         assert "queued" in result.reply
         assert set_calls == []
         parked = [
-            e
-            for e in harness.wake_queue.pending(chat_id="chat-busy")
-            if e.reason == "session_op"
+            e for e in harness.wake_queue.pending(chat_id="chat-busy") if e.reason == "session_op"
         ]
         assert len(parked) == 1
         assert parked[0].payload["op"] == "switch_model"
@@ -587,9 +585,7 @@ def test_session_op_blocks_turns_and_other_ops(monkeypatch, tmp_path: Path) -> N
         busy_new = harness.new_session("chat-gate")
         assert "queued" in busy_new.reply
         parked = [
-            e
-            for e in harness.wake_queue.pending(chat_id="chat-gate")
-            if e.reason == "session_op"
+            e for e in harness.wake_queue.pending(chat_id="chat-gate") if e.reason == "session_op"
         ]
         assert len(parked) == 1
         assert parked[0].payload["op"] == "new"
@@ -637,15 +633,11 @@ def test_queued_session_op_replays_via_wake(monkeypatch, tmp_path: Path) -> None
         assert harness.active_record("chat-q").session_number == 1
 
         # While the chat is busy the op parks as a session_op wake.
-        harness._active_turns["chat-q"] = ActiveTurn(
-            "chat-q", "session-1", "working", time.time()
-        )
+        harness._active_turns["chat-q"] = ActiveTurn("chat-q", "session-1", "working", time.time())
         queued = harness.new_session("chat-q")
         assert "queued" in queued.reply
         events = [
-            e
-            for e in harness.wake_queue.pending(chat_id="chat-q")
-            if e.reason == "session_op"
+            e for e in harness.wake_queue.pending(chat_id="chat-q") if e.reason == "session_op"
         ]
         assert len(events) == 1
 

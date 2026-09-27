@@ -278,9 +278,7 @@ def test_create_session_no_warn_when_model_accepted(monkeypatch, tmp_path: Path)
         if method == "session/new":
             return {
                 "sessionId": "s-1",
-                "configOptions": [
-                    {"id": "model", "options": [{"value": "swe-2-high"}]}
-                ],
+                "configOptions": [{"id": "model", "options": [{"value": "swe-2-high"}]}],
             }
         return {}
 

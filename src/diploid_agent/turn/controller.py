@@ -240,13 +240,9 @@ class TurnController:
                 chat_id, model, in_place=bool(payload.get("in_place")), queue_on_busy=False
             )
         elif op == "resume" and session_number is not None:
-            result = self.session.resume_session(
-                chat_id, int(session_number), queue_on_busy=False
-            )
+            result = self.session.resume_session(chat_id, int(session_number), queue_on_busy=False)
         elif op == "branch" and session_number is not None:
-            result = self.session.branch_session(
-                chat_id, int(session_number), queue_on_busy=False
-            )
+            result = self.session.branch_session(chat_id, int(session_number), queue_on_busy=False)
         else:
             logger.warning("Dropping unknown queued session op for %s: %s", chat_id, payload)
             return ChatResult(reply="")

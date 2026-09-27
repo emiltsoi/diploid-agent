@@ -106,11 +106,7 @@ class CommandHandler:
             headers["X-API-Key"] = self.api_key
 
         try:
-            path = (
-                http_path.format(chat_id=str(chat_id))
-                if "{chat_id}" in http_path
-                else http_path
-            )
+            path = http_path.format(chat_id=str(chat_id)) if "{chat_id}" in http_path else http_path
             if http_method == "GET":
                 params = {k: v for k, v in kwargs.items() if v is not None}
                 resp = client.get(f"{self.harness_url}{path}", headers=headers, params=params)
