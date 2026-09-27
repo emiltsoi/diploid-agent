@@ -16,6 +16,7 @@ from typing import Any, ClassVar
 from diploid_agent.acp_client.lifecycle import AcpLifecycleLog
 from diploid_agent.config import Config
 from diploid_agent.context.anchors import PromptAnchors
+from diploid_agent.context.handoff import handoff_stub_path, write_handoff_stub
 from diploid_agent.context.pressure import ContextPressure
 from diploid_agent.context.reply_quote import ReplyQuoteFormatter
 from diploid_agent.context.token_estimator import TokenEstimator
@@ -1021,6 +1022,22 @@ class ContextBuilder:
             force_new_session = False
             soul_mode = "small"
             handoff_turn = True
+        # Handoff floor: the handoff turn only *asks* the outgoing self to
+        # write `## next-self`, and some folds never grant one at all. Write
+        # the harness stub now — before the fold — so a turn that dies
+        # mid-write still leaves intent + pins for whoever wakes next. The
+        # stub never overwrites a model-authored section; see context/handoff.py.
+        if (
+            (handoff_turn or force_new_session)
+            and record is not None
+            and self.config.harness.pressure_handoff_stub_enabled
+        ):
+            write_handoff_stub(
+                handoff_stub_path(Path(self.config.harness.sessions_root), chat_id),
+                session_number=record.session_number,
+                turn_number=record.next_turn_number(),
+                arriving=user_message,
+            )
         resolved_reason = (
             rehydration_reason
             if rehydration_reason is not None

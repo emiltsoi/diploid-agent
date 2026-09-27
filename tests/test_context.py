@@ -1006,6 +1006,81 @@ def test_build_follow_up_pressure_handoff_turn(tmp_path: Path) -> None:
     assert "next you" in pctx.prompt
 
 
+def _pressure_record(tmp_path: Path, **overrides) -> SessionRecord:
+    kwargs = {
+        "chat_id": "chat-1",
+        "session_number": 1,
+        "session_id": "session-1",
+        "model": "swe-1-7",
+        "persona": "test-pilot",
+        "cwd": str(tmp_path),
+        "created_at": time.time(),
+        "updated_at": time.time(),
+        "turn_number": 5,
+        "cumulative_metrics": {"total_tokens": 950},
+        "last_turn_metrics": {"input_tokens": 950},
+    }
+    kwargs.update(overrides)
+    return SessionRecord(**kwargs)
+
+
+def test_pressure_handoff_grants_turn_and_writes_stub(tmp_path: Path) -> None:
+    """The handoff-turn grant also writes the harness floor stub."""
+    builder = _make_builder(tmp_path)
+    builder.config.harness.pressure_handoff_enabled = True
+    builder.config.engine.context_window = 1000
+
+    pctx = builder.build_follow_up("chat-1", "check the rollout", record=_pressure_record(tmp_path))
+    assert "handoff turn" in pctx.prompt
+    stub = tmp_path / "sessions" / "chat-1" / "chat_self_state.md"
+    assert stub.exists()
+    text = stub.read_text()
+    assert "## next-self" in text
+    assert "<!-- harness-handoff -->" in text
+    assert "check the rollout" in text
+
+
+def test_pressure_fold_writes_stub_without_handoff_turn(tmp_path: Path) -> None:
+    """A spent handoff flag still leaves the stub at the fold itself."""
+    builder = _make_builder(tmp_path)
+    builder.config.harness.pressure_handoff_enabled = True
+    builder.config.engine.context_window = 1000
+
+    pctx = builder.build_follow_up(
+        "chat-1",
+        "how are you?",
+        record=_pressure_record(tmp_path, pressure_handoff_done=True),
+    )
+    assert pctx.force_new_session
+    stub = tmp_path / "sessions" / "chat-1" / "chat_self_state.md"
+    assert stub.exists()
+    assert "<!-- harness-handoff -->" in stub.read_text()
+
+
+def test_pressure_handoff_stub_disabled_writes_nothing(tmp_path: Path) -> None:
+    builder = _make_builder(tmp_path)
+    builder.config.harness.pressure_handoff_enabled = True
+    builder.config.harness.pressure_handoff_stub_enabled = False
+    builder.config.engine.context_window = 1000
+
+    builder.build_follow_up("chat-1", "hi", record=_pressure_record(tmp_path))
+    assert not (tmp_path / "sessions" / "chat-1" / "chat_self_state.md").exists()
+
+
+def test_pressure_stub_does_not_shadow_model_handoff(tmp_path: Path) -> None:
+    """A model-authored ## next-self is never overwritten by the stub."""
+    builder = _make_builder(tmp_path)
+    builder.config.harness.pressure_handoff_enabled = True
+    builder.config.engine.context_window = 1000
+    stub = tmp_path / "sessions" / "chat-1" / "chat_self_state.md"
+    stub.parent.mkdir(parents=True)
+    original = "# self state\n\n## next-self\n\nI wrote this myself.\n"
+    stub.write_text(original)
+
+    builder.build_follow_up("chat-1", "hi", record=_pressure_record(tmp_path))
+    assert stub.read_text() == original
+
+
 def test_build_follow_up_pressure_handoff_one_shot(tmp_path: Path) -> None:
     """Once the handoff turn is spent, the next pressure trigger rebuilds."""
     builder = _make_builder(tmp_path)

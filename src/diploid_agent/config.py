@@ -674,6 +674,9 @@ class HarnessConfig(BaseModel):
     pressure_handoff_enabled: bool = (
         True  # grant one bounded turn to author a handoff before a pressure rebuild
     )
+    pressure_handoff_stub_enabled: bool = (
+        True  # harness writes a ## next-self floor stub if the turn never authored one
+    )
     proactive_input_buffer_factor: float = 1.2  # multiplier for last-turn tokens when estimating
     proactive_soul_token_budget: int = 500  # cheap fresh-soul token budget for proactive sizing
     wake_context_token_budget: int = 0  # 0 = disabled; soft cap for first-turn compact prompts
