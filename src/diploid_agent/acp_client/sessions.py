@@ -241,7 +241,7 @@ class AcpSessionOps:
             ctx["failure_detail"]["phase"] = "resume"
             try:
                 phase_start = time.perf_counter()
-                await self._client._call_with_resume_retry(
+                resume_result = await self._client._call_with_resume_retry(
                     "session/resume",
                     resume_params,
                     call_timeout,
@@ -256,7 +256,7 @@ class AcpSessionOps:
                     resume_method = "load"
                     ctx["failure_detail"]["phase"] = "load"
                     phase_start = time.perf_counter()
-                    await self._client._call_with_resume_retry(
+                    resume_result = await self._client._call_with_resume_retry(
                         "session/load",
                         load_params,
                         call_timeout,
@@ -265,6 +265,11 @@ class AcpSessionOps:
                     detail["resume_ms"] = round((time.perf_counter() - phase_start) * 1000, 2)
                 else:
                     raise
+            if isinstance(resume_result, dict):
+                options = self._extract_model_options(resume_result)
+                if options:
+                    self._state._model_options = options
+            self._warn_if_model_unavailable(use_model)
             ctx["failure_detail"]["phase"] = "config"
             phase_start = time.perf_counter()
             await self._client._apply_session_config(
@@ -418,6 +423,7 @@ class AcpSessionOps:
 
         if self._state._model_options is None:
             self._state._model_options = self._extract_model_options(session)
+        self._warn_if_model_unavailable(use_model)
 
         # Honor the requested mode and model for this session.
         await self._client._apply_session_config(session_id, use_model, timeout=session_new_timeout)
@@ -476,6 +482,31 @@ class AcpSessionOps:
             if opt.get("id") == "model":
                 return [o["value"] for o in opt.get("options", [])]
         return []
+
+    def _warn_if_model_unavailable(self, use_model: str) -> None:
+        """Warn when the configured model is not in the ACP child's live list.
+
+        ``devin models list`` (the account catalog) and the ``devin acp``
+        accepted-model set can diverge after a silent CLI update — a dead
+        name then surfaces as a ``set_config_option`` rejection or a stale
+        resume hours later. ``session/new``/``session/resume`` responses
+        carry the accepted values in ``configOptions``; check them at
+        session start so the mismatch warns before it bites.
+        """
+        options = self._state._model_options
+        if not options or use_model in options:
+            return
+        logger.warning(
+            "Configured model %r is not in the ACP child's accepted model list: %s",
+            use_model,
+            options,
+        )
+        if self._client._lifecycle_log is not None:
+            self._client._lifecycle_log.write(
+                "session.model.unavailable",
+                model=use_model,
+                detail={"available": list(options)},
+            )
 
     async def _prompt(
         self,

@@ -15,6 +15,7 @@ import pytest
 from diploid_agent.acp_client import (
     AcpClient,
     AcpError,
+    AcpLifecycleLog,
     AcpMcpError,
     AcpModelError,
     AcpPromptResult,
@@ -226,6 +227,72 @@ def test_create_session_uses_empty_mcp_servers(monkeypatch, tmp_path: Path) -> N
     # `session/new` must not receive inline server definitions; the active list
     # is communicated to `devin acp` via `mcp_config.json` instead.
     assert new_session_calls[0][1]["mcpServers"] == []
+
+
+def test_create_session_warns_when_model_not_accepted(monkeypatch, tmp_path: Path) -> None:
+    """session/new returns the child's accepted model list — a configured model
+    missing from it must warn at session start, not bite at a later resume."""
+    log = AcpLifecycleLog(tmp_path / "lifecycle.jsonl")
+    client = AcpClient(
+        agent_bin="/bin/true", api_key="test-key", model="swe-2-max", lifecycle_log=log
+    )
+    client._loop = asyncio.new_event_loop()
+
+    async def fake_call(method: str, params: Any, timeout: float | None = None) -> Any:
+        if method == "session/new":
+            return {
+                "sessionId": "s-1",
+                "configOptions": [
+                    {
+                        "id": "model",
+                        "options": [{"value": "swe-2-high"}, {"value": "swe-1-7"}],
+                    }
+                ],
+            }
+        return {}
+
+    async def fake_prompt(*args: Any, **kwargs: Any) -> AcpPromptResult:
+        return AcpPromptResult(reply="ok")
+
+    monkeypatch.setattr(client, "_call", fake_call)
+    monkeypatch.setattr(client, "_prompt", fake_prompt)
+
+    result = client._loop.run_until_complete(client._create_session("hi"))
+
+    assert result.reply == "ok"
+    events = log.recent_events()
+    unavailable = [e for e in events if e["event"] == "session.model.unavailable"]
+    assert len(unavailable) == 1
+    assert unavailable[0]["model"] == "swe-2-max"
+    assert unavailable[0]["detail"]["available"] == ["swe-2-high", "swe-1-7"]
+
+
+def test_create_session_no_warn_when_model_accepted(monkeypatch, tmp_path: Path) -> None:
+    log = AcpLifecycleLog(tmp_path / "lifecycle.jsonl")
+    client = AcpClient(
+        agent_bin="/bin/true", api_key="test-key", model="swe-2-high", lifecycle_log=log
+    )
+    client._loop = asyncio.new_event_loop()
+
+    async def fake_call(method: str, params: Any, timeout: float | None = None) -> Any:
+        if method == "session/new":
+            return {
+                "sessionId": "s-1",
+                "configOptions": [
+                    {"id": "model", "options": [{"value": "swe-2-high"}]}
+                ],
+            }
+        return {}
+
+    async def fake_prompt(*args: Any, **kwargs: Any) -> AcpPromptResult:
+        return AcpPromptResult(reply="ok")
+
+    monkeypatch.setattr(client, "_call", fake_call)
+    monkeypatch.setattr(client, "_prompt", fake_prompt)
+
+    client._loop.run_until_complete(client._create_session("hi"))
+
+    assert not [e for e in log.recent_events() if e["event"] == "session.model.unavailable"]
 
 
 def test_acp_error_classifier_detects_model_error() -> None:
