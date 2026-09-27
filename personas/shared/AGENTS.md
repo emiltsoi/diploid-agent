@@ -109,3 +109,63 @@ The `diploid-memory` MCP server is always available. When you learn a fact, pref
 If you state an important fact in a reply, you may also wrap it in a ` ```memory ` block; the harness will promote it automatically.
 
 Do not rely on the conversation transcript alone. Use the tools explicitly.
+
+## Implementation work — declared-intensity pipeline
+
+Adapted from obra/superpowers (`subagent-driven-development`) and the Hermes
+fleet's tiered workflow (v2.13.x), joint decision by Vesper + Aurelia,
+2026-09-27. Discipline on machinery we already run — no engine, no new infra.
+
+Every multi-step implementation plan declares its intensity in its header:
+
+```
+tier · spec_owner · gates · pipeline(full|skipped) · bar
+```
+
+One decision at entry; the work runs at that intensity without meta-judgment
+inside. A skipped pipeline is a recorded choice, never silence. `bar:` is the
+acceptance bar — work closes AT the bar, and an external review fire earns ONE
+fix pass with residuals adjudicated, not open-ended rounds.
+
+### Tiers
+
+| Tier | Shape |
+|------|-------|
+| **Direct-inline** (default) | One focused change; no dispatch; lint/test + self-review |
+| **SDD** | Plan → fresh implementer subagent per task → cheap-tier reviewer per task → `.sdd/` ledger → final branch review |
+| **SDD + sister cross-exam** | Risky / architecture-bearing work — sister reviews the plan BEFORE it seals and the branch at close |
+
+Escalation: either sister or the user bumps a tier mid-stream on a structural
+find. Saved-plan rule: approving scope is not approving the plan — the written
+plan is reviewed before anything runs (self-review at SDD, sister at top tier).
+
+### The SDD loop
+
+- **Implementer dispatches are fresh** — they never inherit the controller's
+  context. The dispatch brief carries exactly what the task needs, as a file
+  in the `.sdd/` workspace, not pasted into the prompt.
+- **Task-scope changes go back to the implementer** — otherwise the reviewer
+  gates a moving target. Mechanical deltas (format, typo, comment) the
+  controller fixes directly and logs as a ledger ruling.
+- **Reviewer-as-triage, not truth.** A cheap-model reviewer is a net, not a
+  verdict: verify its findings mechanically (compile, grep, run the test)
+  before acting. Reserve the strongest model for the final whole-branch
+  review.
+- **Fix rounds are capped at 5.** Rounds 1–3 resume the same implementer;
+  rounds 4–5 dispatch fresh on a model a tier up; at 5 the breaker trips —
+  adjudicate every open finding, defer minors, escalate criticals.
+- **Rulings, not stalls.** Conflicts and ambiguities get decided and logged
+  (`Ruling: <decision> — <why> — <cost if wrong>`), not parked on a question.
+  Stop only for: irreversible/destructive ops, security-sensitive actions,
+  side effects outside the workspace that norms say to ask about, or a plan
+  so broken every path forward is a guess.
+
+### The `.sdd/` ledger
+
+Each plan gets `<repo>/.sdd/<plan-slug>.ledger.md` — git-ignored scratch; git
+log is the true recovery map if it is wiped. First line names the plan file;
+then one line per dispatch (task · subagent · verdict · commit), rulings
+recorded in place. It is the fold-surviving spine: when a session compacts
+mid-plan, resume from ledger + `git log`, never from memory. Handoff/self-state
+notes reference the active ledger path. Task states marked `complete` are done
+— never re-dispatch them.
