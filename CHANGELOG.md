@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.6.13 — 2026-09-27
+
+### Added
+
+- **Queued session ops**: `/new`, `/branch`, `/resume`, and in-place model
+  switches sent while a turn is running now park as a `session_op` wake and
+  replay via normal delivery once the chat idles — a typo no longer becomes
+  a twenty-minute refusal maze. One parked op per chat; `/stop`, `/restart`,
+  and `steer()` interrupts stay immediate.
+- **Harness-written handoff stub at pressure folds**: `context/handoff.py`
+  writes a `<!-- harness-handoff -->` `## next-self` block to
+  `chat_self_state.md` at handoff-grant and at fold — carrying last intent,
+  last side effect (from the continuity snapshot), and the arriving
+  message. Refreshed across repeats, and never overwrites a model-authored
+  `## next-self`: the stub is the floor, the pen is the ceiling. Gated by
+  `harness.pressure_handoff_stub_enabled`.
+- **Model-name probe at session start**: `session/new` and
+  `session/resume`/`session/load` responses carry the ACP child's accepted
+  model list in `configOptions`; when the configured model is missing a
+  warning is logged and `session.model.unavailable` lands in the lifecycle
+  log — a silent CLI model rename now warns at session start instead of
+  killing a resume hours later.
+
+### Fixed
+
+- **`{chat_id}` substitution in `http_path` applies to POSTs too**.
+- **Fresh session records tolerate `None` metrics**.
+- **A fold discharges the daily append budget**: `count-appends` resets the
+  day's bucket when the watched memory file shrinks — a compaction already
+  paid its debt, so the pen keeps moving instead of nagging "over soft
+  budget" until midnight.
+- **Quiet tasks stay quiet; task wakes coalesce to a digest**: `delivery:
+  silent` cron jobs enqueue no completion wake on a clean finish (failed /
+  timed-out / partial outcomes still wake — a silent job dying is the
+  monitor's job), and pending task-update wakes for the same plan merge
+  into a single digest event.
+
 ## 0.6.12 — 2026-09-22
 
 ### Fixed
