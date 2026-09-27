@@ -75,6 +75,34 @@ def test_count_appends_over_budget_nudges(tmp_path: Path, capsys) -> None:
     assert "over soft budget" in out
 
 
+def test_count_appends_fold_discharges_budget(tmp_path: Path, capsys) -> None:
+    """A file that shrank since last seen means a fold happened — the day's
+    count discharges to 0 so the pen keeps moving instead of nagging all day."""
+    mem = tmp_path / "MEMORY.md"
+    state = tmp_path / "daily_appends.json"
+    mem.write_text("a\n")
+    count_appends(_args(mem, state, budget=2))
+    for i in range(3):
+        mem.write_text(mem.read_text() + f"new{i}\n")
+        count_appends(_args(mem, state, budget=2))
+    assert "over soft budget" in capsys.readouterr().out
+
+    mem.write_text("folded summary\n")  # compaction shrinks the file
+    count_appends(_args(mem, state, budget=2))
+    out = capsys.readouterr().out.strip().splitlines()[-1]
+    assert "+0 appended, 0/2 today" in out
+    assert "fold detected" in out
+    data = json.loads(state.read_text())
+    today = next(iter(data["days"]))
+    assert data["days"][today]["persona"] == 0
+
+    # The pen keeps moving: post-fold appends count again from zero.
+    mem.write_text("folded summary\nnew line\n")
+    count_appends(_args(mem, state, budget=2))
+    out = capsys.readouterr().out.strip().splitlines()[-1]
+    assert "+1 appended, 1/2 today" in out
+
+
 def test_count_appends_missing_file(tmp_path: Path, capsys) -> None:
     state = tmp_path / "daily_appends.json"
     assert count_appends(_args(tmp_path / "nope.md", state)) == 1

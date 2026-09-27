@@ -64,11 +64,19 @@ def count_appends(args: argparse.Namespace) -> int:
     seen_key = f"{target.name}@{bucket}"
     last = seen.get(seen_key)
     appended = 0 if last is None else max(0, line_count - int(last))
+    # A smaller file means a fold/compaction happened. The budget bounds
+    # growth pressure — a folded page already paid its debt, so discharge
+    # the day's count and let the pen keep moving instead of nagging
+    # "over budget" for the rest of the day.
+    folded = last is not None and line_count < int(last)
     seen[seen_key] = line_count
 
     today = _local_day(now)
     day = days.setdefault(today, {})
-    day[bucket] = int(day.get(bucket, 0)) + appended
+    if folded:
+        day[bucket] = 0
+    else:
+        day[bucket] = int(day.get(bucket, 0)) + appended
 
     # Keep the ledger small: yesterday's counts are already history.
     stale = [d for d in days if (now - time.mktime(time.strptime(d, "%Y-%m-%d"))) > 7 * DAY_SECONDS]
@@ -80,7 +88,9 @@ def count_appends(args: argparse.Namespace) -> int:
 
     total = int(day.get(bucket, 0))
     status = f"{bucket}: +{appended} appended, {total}/{args.budget} today"
-    if total > args.budget:
+    if folded:
+        status += " — fold detected; budget reset"
+    elif total > args.budget:
         status += " — over soft budget; consider compacting before more appends"
     print(status)
     return 0
