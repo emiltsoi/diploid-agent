@@ -182,6 +182,78 @@ def test_plan_without_chat_id_skips_wakes(runtime):
     assert runtime.wake_queue.due_count(now=time.time() + 1) == 0
 
 
+def test_quiet_task_clean_completion_enqueues_no_update(runtime):
+    """A `delivery: silent` cron task finishing cleanly must not page the chat."""
+    plan = runtime.plan_create(
+        "__cron__",
+        chat_id="chat-1",
+        tasks=[
+            Task(name="cron:counted-persona-memory", command="true", chat_id="chat-1", quiet=True)
+        ],
+    )
+    runtime.event_bus.post(
+        Event(
+            type="task.completed",
+            payload={
+                "plan_id": plan.id,
+                "task_id": plan.tasks[0].id,
+                "result": "persona: +1 appended",
+                "log": "",
+            },
+        )
+    )
+    _wait_for_due_wakes(runtime, "chat-1", expected=1)
+    wakes = _pop_wakes(runtime, "chat-1")
+    # Only the plan conclusion wakes — the quiet completion produced nothing.
+    assert [w.reason for w in wakes] == ["plan_completed"]
+
+
+def test_quiet_task_failure_still_wakes(runtime):
+    """A silent job that is dying is exactly what the wake exists to say."""
+    plan = runtime.plan_create(
+        "__cron__",
+        chat_id="chat-1",
+        tasks=[
+            Task(name="cron:counted-persona-memory", command="false", chat_id="chat-1", quiet=True)
+        ],
+    )
+    runtime.event_bus.post(
+        Event(
+            type="task.failed",
+            payload={"plan_id": plan.id, "task_id": plan.tasks[0].id, "log": "boom"},
+        )
+    )
+    _wait_for_due_wakes(runtime, "chat-1", expected=2)
+    wakes = _pop_wakes(runtime, "chat-1")
+    assert wakes[0].reason == "plan_task_update"
+    assert wakes[0].payload["task_status"] == "failed"
+
+
+def test_task_updates_coalesce_into_one_digest(runtime):
+    """Two completions on one plan fold into a single wake with both tasks."""
+    plan = runtime.plan_create(
+        "deploy",
+        chat_id="chat-1",
+        tasks=[
+            Task(name="lint", command="echo ok", chat_id="chat-1"),
+            Task(name="test", command="echo ok", chat_id="chat-1"),
+        ],
+    )
+    for t in plan.tasks:
+        runtime.event_bus.post(
+            Event(
+                type="task.completed",
+                payload={"plan_id": plan.id, "task_id": t.id, "result": "ok", "log": ""},
+            )
+        )
+    _wait_for_due_wakes(runtime, "chat-1", expected=2)
+    wakes = _pop_wakes(runtime, "chat-1")
+    updates = [w for w in wakes if w.reason == "plan_task_update"]
+    assert len(updates) == 1
+    names = {t["task_name"] for t in updates[0].payload["tasks"]}
+    assert names == {"lint", "test"}
+
+
 def test_plan_task_update_message_format(runtime):
     payload = {
         "plan_name": "deploy",
@@ -199,6 +271,32 @@ def test_plan_task_update_message_format(runtime):
     assert "Task status: done" in msg
     assert "Detail: all clean" in msg
     assert "1/3" in msg
+
+
+def test_plan_task_update_digest_format(runtime):
+    payload = {
+        "plan_name": "__cron__",
+        "plan_status": "active",
+        "completed_count": 24,
+        "total_count": 25,
+        "tasks": [
+            {
+                "task_name": "cron:counted-persona-memory",
+                "task_status": "failed",
+                "task_detail": "boom",
+            },
+            {
+                "task_name": "cron:guarded-soul",
+                "task_status": "done",
+                "task_detail": "digest posted",
+            },
+        ],
+    }
+    msg = runtime._build_plan_task_update_message(payload)
+    assert "[system wake: plan task update]" in msg
+    assert "24/25" in msg
+    assert "- cron:counted-persona-memory: failed (boom)" in msg
+    assert "- cron:guarded-soul: done (digest posted)" in msg
 
 
 def test_plan_completed_message_format(runtime):

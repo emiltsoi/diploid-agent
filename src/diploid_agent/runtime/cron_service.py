@@ -742,6 +742,11 @@ class CronService:
             description=description,
             chat_id=resolved.chat_id,
             cwd=cwd,
+            # A `delivery: silent` job's task-completion wake is pure
+            # bookkeeping noise — every counted-memory tick used to page the
+            # chat. Turn/digest deliveries keep their wakes; failures of any
+            # job still surface (see RuntimePlanning._enqueue_plan_task_wake).
+            quiet=spec.delivery == "silent",
         )
         if spec.call.type == "script":
             task.type = TaskType.SHELL

@@ -93,6 +93,37 @@ class WakeQueue:
             self._in_memory[event.id] = event
         return event
 
+    def merge_into_ready(self, event: WakeEvent, *, key: str) -> bool:
+        """Fold `event` into an already-ready, unleased event sharing its
+        ``reason``, ``chat_id``, and ``payload["plan_id"] == key``.
+
+        Pending bookkeeping wakes for one plan coalesce into a single digest
+        event instead of one ping per task. ``payload["tasks"]`` lists are
+        concatenated; every other payload key takes the newer event's value.
+        Returns True when the event was absorbed (caller must not enqueue it).
+        """
+        now = time.time()
+        with self._transaction():
+            candidates = [
+                e
+                for e in self._in_memory.values()
+                if e.chat_id == event.chat_id
+                and e.reason == event.reason
+                and e.ready
+                and (e.leased_until is None or e.leased_until <= now)
+                and e.payload.get("plan_id") == key
+            ]
+            if not candidates:
+                return False
+            target = max(candidates, key=lambda e: e.created_at)
+            merged = dict(target.payload)
+            tasks = list(merged.get("tasks") or [])
+            tasks.extend(event.payload.get("tasks") or [])
+            merged.update({k: v for k, v in event.payload.items() if k != "tasks"})
+            merged["tasks"] = tasks
+            target.payload = merged
+            return True
+
     def get(self, event_id: str) -> WakeEvent | None:
         with self._transaction():
             return self._in_memory.get(event_id)

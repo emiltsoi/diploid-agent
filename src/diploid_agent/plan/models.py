@@ -64,6 +64,11 @@ class Task(BaseModel):
     acp_timeout: float | None = None
     mcp_servers: list[dict[str, Any]] | None = None
     dispatch_id: str | None = None
+    # Quiet tasks (e.g. cron jobs with `delivery: silent`) produce no
+    # task-completion wake on a clean finish — bookkeeping must not page the
+    # user. Failed / timed-out / partial outcomes still wake: a silent job
+    # that is dying is exactly the thing a monitor exists to say.
+    quiet: bool = False
 
     @field_validator("cwd")
     @classmethod
