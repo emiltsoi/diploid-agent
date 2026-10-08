@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import logging
@@ -33,6 +34,12 @@ _PROBE_TIMEOUT_SECONDS = 0.5
 # which both mean a live listener is present — is treated as "live" so a probe
 # can never steal a socket a live listener still owns.
 _PROBE_STALE_ERRORS = (ConnectionRefusedError, FileNotFoundError)
+# Errnos that also prove stale inside the generic OSError branch: ENOTSOCK
+# (macOS raises it where Linux returns ECONNREFUSED — connecting a socket to
+# a non-socket file) means the inode at the path is not a socket, and a bound
+# unix socket cannot replace a file without an unlink, so it can never be a
+# live listener.
+_PROBE_STALE_ERRNOS = frozenset({errno.ENOTSOCK})
 # A live foreign listener is retried briefly before we give up: during a
 # `systemctl restart` overlap the old process can still hold the socket for a
 # moment while systemd stops it.
@@ -260,10 +267,12 @@ class ControlListener:
             # Refused or vanished mid-race: nobody is listening.
             probe.close()
             return "stale"
-        except OSError:
+        except OSError as exc:
+            probe.close()
+            if exc.errno in _PROBE_STALE_ERRNOS:
+                return "stale"
             # Inconclusive (e.g. EAGAIN / timeout on a full backlog — both mean
             # a live listener). Report live rather than risk stealing the path.
-            probe.close()
             return "live_foreign"
         try:
             with probe:
