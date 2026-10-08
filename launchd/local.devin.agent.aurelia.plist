@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>local.devin.agent.aurelia</string>
+    <!-- Same spawn law + systemd mapping as the vesper plist. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/libexec/fleet-host</string>
+        <string>/Users/emil/CascadeProjects/diploid-agent/systemd/harness-run.sh</string>
+        <string>config/harness.yaml</string>
+        <string>4003</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/emil/CascadeProjects/diploid-agent</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/Users/emil/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>GIT_AUTHOR_NAME</key>
+        <string>Aurelia</string>
+        <key>GIT_AUTHOR_EMAIL</key>
+        <string>aurelia@diploid.fleet</string>
+        <key>GIT_COMMITTER_NAME</key>
+        <string>Aurelia</string>
+        <key>GIT_COMMITTER_EMAIL</key>
+        <string>aurelia@diploid.fleet</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>ExitTimeOut</key>
+    <integer>150</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/emil/Library/Logs/diploid-aurelia.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/emil/Library/Logs/diploid-aurelia.err.log</string>
+</dict>
+</plist>

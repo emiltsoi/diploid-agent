@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>local.devin.probe.aurelia</string>
+    <!-- One-shot probe: runs once per kickstart, exits. fleet-host is the
+         FDA-honoured binary — this proves the spawn law for OUR chain
+         (venv python + devin) the way kore proved it for node. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/libexec/fleet-host</string>
+        <string>/Users/emil/CascadeProjects/diploid-agent/.venv/bin/python</string>
+        <string>/Users/emil/CascadeProjects/diploid-agent/probes/mac_gates.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/emil/CascadeProjects/diploid-agent</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/Users/emil/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/emil/Library/Logs/diploid-probe-aurelia.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/emil/Library/Logs/diploid-probe-aurelia.err.log</string>
+</dict>
+</plist>
