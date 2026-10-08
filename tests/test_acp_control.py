@@ -9,6 +9,7 @@ connect-probe keeps a new binder from stealing a *live* socket.
 per-test tmpdir so parallel workers never share socket paths.
 """
 
+import hashlib
 import json
 import os
 import shutil
@@ -74,16 +75,22 @@ def test_control_dir_defaults_to_tempdir(monkeypatch) -> None:
     name = _name()
     listener = _listener(name, [])
     try:
-        assert listener.socket_path.parent.parent == Path(control_mod.tempfile.gettempdir())
-        assert listener.socket_path.parent.name == f"diploid-ctl-{name}"
+        intended = Path(control_mod.tempfile.gettempdir()) / f"diploid-ctl-{name}" / "control.sock"
+        if len(os.fsencode(intended)) > 100:
+            # Deep tempdir (macOS /var/folders/...) — the hashed /tmp fallback.
+            assert listener.socket_path.parent.parent == Path("/tmp")
+        else:
+            assert listener.socket_path.parent.parent == Path(control_mod.tempfile.gettempdir())
+            assert listener.socket_path.parent.name == f"diploid-ctl-{name}"
     finally:
         listener.close()
 
 
 def test_control_dir_env_scopes_socket_base(monkeypatch) -> None:
     """DIPLOID_CONTROL_DIR relocates the per-service socket namespace."""
-    # AF_UNIX sun_path is ~107 chars — the base must stay shallow.
-    base = Path(control_mod.tempfile.mkdtemp(prefix="dpctl-a-"))
+    # AF_UNIX sun_path is ~107 chars — the base must stay shallow. Pin under
+    # /tmp: macOS mkdtemp honours the deep per-user TMPDIR.
+    base = Path(control_mod.tempfile.mkdtemp(prefix="dpctl-a-", dir="/tmp"))
     monkeypatch.setenv("DIPLOID_CONTROL_DIR", str(base))
     name = _name()
     listener = _listener(name, [])
@@ -101,7 +108,7 @@ def test_control_dir_isolates_same_service_name(monkeypatch) -> None:
     name = _name()
     paths: list[Path] = []
     for worker in ("w1", "w2"):
-        base = Path(control_mod.tempfile.mkdtemp(prefix=f"dpctl-{worker}-"))
+        base = Path(control_mod.tempfile.mkdtemp(prefix=f"dpctl-{worker}-", dir="/tmp"))
         monkeypatch.setenv("DIPLOID_CONTROL_DIR", str(base))
         listener = _listener(name, [])
         try:
@@ -111,6 +118,41 @@ def test_control_dir_isolates_same_service_name(monkeypatch) -> None:
     assert paths[0] != paths[1]
     for path in paths:
         shutil.rmtree(path.parent.parent, ignore_errors=True)
+
+
+def test_deep_control_dir_falls_back_to_hashed_tmp_path(monkeypatch) -> None:
+    """A base deep enough to overflow sun_path lands at /tmp/diploid-ctl-<sha>."""
+    # A nested base under the (possibly deep) system tempdir guarantees the
+    # intended path exceeds 100 bytes on every platform.
+    base = Path(
+        control_mod.tempfile.mkdtemp(prefix="dpctl-deep-", dir=control_mod.tempfile.gettempdir())
+    ) / "nested" / "deeper" / "still-going"
+    base.mkdir(parents=True)
+    monkeypatch.setenv("DIPLOID_CONTROL_DIR", str(base))
+    name = _name()
+    intended = base / f"diploid-ctl-{name}" / "control.sock"
+    assert len(os.fsencode(intended)) > 100
+
+    listener = _listener(name, [])
+    try:
+        digest = hashlib.sha256(os.fsencode(intended)).hexdigest()[:16]
+        assert listener.socket_path == Path("/tmp") / f"diploid-ctl-{digest}" / "control.sock"
+        assert listener.socket_path.exists()
+        assert listener.env()["DIPLOID_CONTROL_SOCKET"] == str(listener.socket_path)
+        # Deterministic: close + re-listen rendezvous on the same fallback path.
+        path = listener.socket_path
+        listener.close()
+        assert not path.exists()
+        second = _listener(name, [])
+        try:
+            assert second.socket_path == path
+            ack = _send_restart(path, name, token=second._token)
+            assert ack["status"] == "ok"
+        finally:
+            second.close()
+    finally:
+        listener.close()
+        shutil.rmtree(base.parent.parent, ignore_errors=True)
 
 
 def test_close_then_ensure_listening_rebinds_same_path() -> None:

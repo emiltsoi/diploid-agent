@@ -37,9 +37,12 @@ def _isolated_control_dir(monkeypatch):
 
     The dir is a shallow ``/tmp/dpctl-t-*`` rather than ``tmp_path``: AF_UNIX
     ``sun_path`` is ~107 chars and a worker tmpdir would push the socket path
-    past the limit.
+    past the limit. ``dir="/tmp"`` pins the parent because macOS
+    ``tempfile.mkdtemp`` honours the per-user ``TMPDIR`` under
+    ``/var/folders/...`` — deep enough on its own to overflow sun_path and
+    trip the hashed-path fallback.
     """
-    base = Path(tempfile.mkdtemp(prefix="dpctl-t-"))
+    base = Path(tempfile.mkdtemp(prefix="dpctl-t-", dir="/tmp"))
     monkeypatch.setenv("DIPLOID_CONTROL_DIR", str(base))
     yield
     shutil.rmtree(base, ignore_errors=True)
