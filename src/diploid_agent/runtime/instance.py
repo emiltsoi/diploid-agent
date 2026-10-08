@@ -6,6 +6,8 @@ import fcntl
 import json
 import logging
 import os
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -86,7 +88,21 @@ class InstanceManager:
         try:
             status_path = Path(f"/proc/{pid}/status")
             if not status_path.exists():
-                # /proc may not exist in some environments; fall back to kill only.
+                # No /proc (macOS): ps reports zombies with a leading Z in STAT.
+                if sys.platform == "darwin":
+                    try:
+                        out = subprocess.run(
+                            ["ps", "-o", "stat=", "-p", str(pid)],
+                            capture_output=True,
+                            text=True,
+                            timeout=5,
+                            check=False,
+                        )
+                        if out.returncode == 0 and out.stdout.strip().startswith("Z"):
+                            return False
+                    except (OSError, subprocess.TimeoutExpired):
+                        pass
+                # Fall back to kill-only liveness.
                 return True
             for line in status_path.read_text().splitlines():
                 if line.startswith("State:"):

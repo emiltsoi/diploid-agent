@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -79,8 +80,19 @@ class ControlListener:
         # the stable-path contract: a child spawned by an older generation
         # still reaches the current listener across process restarts.
         base = Path(os.environ.get("DIPLOID_CONTROL_DIR") or tempfile.gettempdir())
-        self._control_socket_dir = base / f"diploid-ctl-{safe_name}"
-        self._control_socket_path = self._control_socket_dir / "control.sock"
+        dirname = f"diploid-ctl-{safe_name}"
+        socket_path = base / dirname / "control.sock"
+        if len(os.fsencode(socket_path)) > 100:
+            # AF_UNIX sun_path is 104 bytes on macOS (108 on Linux); a deep
+            # base — the per-user /var/folders tempdir or a test tmp_path —
+            # overflows it. Fall back to a deterministic short path so
+            # children still rendezvous on the same service name + base.
+            digest = hashlib.sha256(os.fsencode(socket_path)).hexdigest()[:16]
+            base = Path("/tmp")
+            dirname = f"diploid-ctl-{digest}"
+            socket_path = base / dirname / "control.sock"
+        self._control_socket_dir = base / dirname
+        self._control_socket_path = socket_path
         self._control_listener_running = False
         self._control_listener_thread: threading.Thread | None = None
         self._control_socket: socket.socket | None = None

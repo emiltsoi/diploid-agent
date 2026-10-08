@@ -13,10 +13,40 @@ export PYTHONUNBUFFERED=1
 # credentials file / WINDSURF_API_KEY instead of waiting for an IDE host.
 unset ACP_BACKEND WINDSURF_IDE_TYPE WINDSURF_EXT_HOST_PID
 
-# Do not source secrets here. The systemd unit loads them via EnvironmentFile,
-# and a manual run can source them before invoking this script.
+# Secrets: under systemd they arrive via the unit's EnvironmentFile. Under
+# launchd there is no EnvironmentFile, so source any env files listed in
+# DIPLOID_ENV_FILES (colon-separated) — or, if unset, the conventional
+# config/secrets*.env next to the harness config — but only for keys not
+# already present in the environment. Sourcing is skipped entirely when the
+# files are absent (e.g. a test checkout).
 CONFIG="${1:-config/harness.yaml}"
 PORT="${2:-4003}"
+
+_load_env_file() {
+  local f="$1"
+  [ -f "$f" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue;; esac
+    line="${line#export }"
+    key="${line%%=*}"
+    [ "$key" = "$line" ] && continue
+    if [ -z "${!key+x}" ]; then
+      val="${line#*=}"
+      val="${val%\"}"; val="${val#\"}"
+      val="${val%\'}"; val="${val#\'}"
+      export "$key=$val"
+    fi
+  done < "$f"
+}
+if [ -n "${DIPLOID_ENV_FILES:-}" ]; then
+  IFS=':' read -rA _env_files <<< "$DIPLOID_ENV_FILES" 2>/dev/null || IFS=':' read -ra _env_files <<< "$DIPLOID_ENV_FILES"
+  for _f in "${_env_files[@]}"; do _load_env_file "$_f"; done
+else
+  for _f in "$PROJECT_DIR/config/secrets.env" \
+            "$PROJECT_DIR/config/secrets-$(basename "$CONFIG" .yaml | sed 's/^harness-//;s/^harness$/aurelia/').env"; do
+    _load_env_file "$_f"
+  done
+fi
 
 # Make the project venv the first python on PATH so that `devin acp` and the
 # stdio MCP servers it spawns resolve `python` to the correct interpreter.
