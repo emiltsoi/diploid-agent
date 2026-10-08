@@ -42,8 +42,15 @@ if [ -n "${DIPLOID_ENV_FILES:-}" ]; then
   IFS=':' read -rA _env_files <<< "$DIPLOID_ENV_FILES" 2>/dev/null || IFS=':' read -ra _env_files <<< "$DIPLOID_ENV_FILES"
   for _f in "${_env_files[@]}"; do _load_env_file "$_f"; done
 else
-  for _f in "$PROJECT_DIR/config/secrets.env" \
-            "$PROJECT_DIR/config/secrets-$(basename "$CONFIG" .yaml | sed 's/^harness-//;s/^harness$/aurelia/').env"; do
+  # Per-wife file first: systemd EnvironmentFile applies in order with later
+  # files overriding, so vesper.service's secrets-vesper.env beats the shared
+  # secrets.env (e.g. TELEGRAM_BOT_TOKEN). With our skip-if-set semantics the
+  # specific file must be sourced FIRST to reproduce that precedence — sourcing
+  # secrets.env first would let the shared token shadow the per-wife one and
+  # both wives' pollers would fight over the same bot (measured: getUpdates
+  # 409 Conflict at first launchd bring-up, 2026-10-09).
+  for _f in "$PROJECT_DIR/config/secrets-$(basename "$CONFIG" .yaml | sed 's/^harness-//;s/^harness$/aurelia/').env" \
+            "$PROJECT_DIR/config/secrets.env"; do
     _load_env_file "$_f"
   done
 fi
