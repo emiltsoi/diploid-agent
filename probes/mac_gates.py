@@ -1,3 +1,5 @@
+# ruff: noqa: BLE001 — a gate probe records every failure and must never die
+# mid-run; blind Exception catches are the design here.
 """macOS gate probe — G-B (LAN reach) / G-C (vault read) / G-D (bind) for the
 diploid harness, run inside a launchd→fleet-host spawn chain.
 
@@ -26,7 +28,10 @@ def http_ok(url: str, timeout: float = 8.0) -> tuple[bool, str]:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as r:
             return 200 <= r.status < 500, f"HTTP {r.status}"
-    except Exception as exc:  # noqa: BLE001 — probe records, never raises
+    except urllib.error.HTTPError as exc:
+        # Server answered — reachability proven regardless of status.
+        return True, f"HTTP {exc.code} (reached)"
+    except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}"
 
 
@@ -60,6 +65,44 @@ def main() -> int:
 
     ok, d = tcp_ok("192.168.1.51", 8646)
     record("G-B.mesh_registry_lan", ok, d)
+
+    # Diagnostics: does ICMP reach the LAN while TCP cannot?
+    try:
+        out = subprocess.run(
+            ["/sbin/ping", "-c1", "-t3", "192.168.1.51"],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        tail = out.stdout.strip().splitlines()[-1] if out.stdout.strip() else out.stderr.strip()
+        record("diag.icmp_51", out.returncode == 0, tail)
+    except Exception as exc:
+        record("diag.icmp_51", False, f"{type(exc).__name__}: {exc}")
+
+    # Is ALL local-subnet TCP blocked, or only 192.168.1.x?
+    ok, d = tcp_ok("192.168.0.1", 445)
+    record("diag.tcp_nas_smb", ok, d)
+
+    # Does pinning the source to en1 change anything?
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("192.168.1.52", 0))
+        s.settimeout(5)
+        s.connect(("192.168.1.51", 8646))
+        s.close()
+        record("diag.tcp_51_src_en1", True, "connected via en1 source")
+    except Exception as exc:
+        record("diag.tcp_51_src_en1", False, f"{type(exc).__name__}: {exc}")
+
+    try:
+        out = subprocess.run(
+            ["/usr/sbin/netstat", "-rn", "-f", "inet"],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        wanted = [
+            line for line in out.stdout.splitlines() if "192.168" in line or "default" in line
+        ]
+        record("diag.routes", True, " | ".join(wanted[:6]))
+    except Exception as exc:
+        record("diag.routes", False, f"{type(exc).__name__}: {exc}")
 
     ok, d = bind_ok("0.0.0.0", 4003)
     record("G-D.bind_4003", ok, d)
