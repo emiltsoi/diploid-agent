@@ -475,3 +475,38 @@ def test_launchd_scheduler_failure_clears_drain_and_notifies(tmp_path: Path, mon
     assert _wait_for(lambda: not restart._state.restart_draining.is_set())
     assert notices and notices[0][0] == "chat-9"
     assert "did not fire" in notices[0][1]
+
+
+def test_foreign_unit_restart_releases_drain(tmp_path: Path, monkeypatch) -> None:
+    """A sister-unit restart must release our drain and never arm our watchdog.
+
+    Our process survives a cross-service restart, so a held drain plus the
+    'timer never fired' reaper would report a false failure ~65s after a
+    successful bounce.
+    """
+    restart = _unstub(_make_restart(_make_config(tmp_path), _Incidents(), []))
+    watchdog_calls: list[tuple] = []
+    restart._arm_restart_watchdog = lambda *a, **k: watchdog_calls.append(a)  # type: ignore[method-assign]
+    monkeypatch.setattr(restart_mod, "_service_backend", lambda: restart_mod._SystemdBackend())
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _FakeProc(0))
+
+    assert restart.schedule_draining_restart("sister.service", chat_id="chat-1", reason="she asked")
+    assert _wait_for(lambda: not restart._state.restart_draining.is_set())
+    assert restart._state.pending_restart is None
+    assert not watchdog_calls
+
+
+def test_self_unit_restart_keeps_drain_and_arms_watchdog(tmp_path: Path, monkeypatch) -> None:
+    """A self-restart keeps the drain armed for the real bounce + reaper."""
+    restart = _unstub(_make_restart(_make_config(tmp_path), _Incidents(), []))
+    watchdog_calls: list[tuple] = []
+    restart._arm_restart_watchdog = lambda *a, **k: watchdog_calls.append(a)  # type: ignore[method-assign]
+    monkeypatch.setattr(restart_mod, "_service_backend", lambda: restart_mod._SystemdBackend())
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _FakeProc(0))
+
+    assert restart.schedule_draining_restart(
+        "test-pilot.service", chat_id="chat-1", reason="maintenance"
+    )
+    assert _wait_for(lambda: bool(watchdog_calls))
+    assert restart._state.restart_draining.is_set()
+    assert restart._state.pending_restart is not None

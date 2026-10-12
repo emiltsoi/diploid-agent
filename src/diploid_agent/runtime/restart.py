@@ -252,6 +252,17 @@ class RuntimeRestart:
         self._memory_manager = memory_manager
         self._last_restart_memory_written: dict[str, float] = {}
 
+    def _is_self_unit(self, service: str) -> bool:
+        """True when the restart target is this persona's own unit.
+
+        A cross-service (sister) restart leaves our process alive: the drain
+        must be released once the deferred restart is scheduled, and the
+        "timer never fired" watchdog must not arm — there is no death of ours
+        to observe.
+        """
+        own = self._config.persona.name if self._config.persona else ""
+        return bool(own) and service == f"{own}.service"
+
     def _resolve_unit_target(self, service: str) -> str:
         """Map the logical unit name to the platform service target."""
         backend = _service_backend()
@@ -467,7 +478,8 @@ class RuntimeRestart:
             finally:
                 # Short residual delay so the final reply/outbox can deliver.
                 self._schedule_service_restart(service, delay=5.0, chat_id=chat_id, reason=reason)
-                self._arm_restart_watchdog(service, due_in=5.0, chat_id=chat_id)
+                if self._is_self_unit(service):
+                    self._arm_restart_watchdog(service, due_in=5.0, chat_id=chat_id)
 
         threading.Thread(target=_drain_then_restart, daemon=True, name="restart-drain").start()
         return True
@@ -637,6 +649,13 @@ class RuntimeRestart:
                 )
                 self._restart_failed(service, chat_id, detail)
                 return
+            if not self._is_self_unit(service):
+                # Cross-service restart: our process survives, so the drain has
+                # served its purpose (final reply delivered, target scheduled).
+                # Release it — there is no timer of ours to watch.
+                self._state.restart_draining.clear()
+                with self._lock:
+                    self._state.pending_restart = None
             if chat_id is not None:
                 logger.info(
                     "Scheduled graceful restart of %s (%s -> %s) in %ss (from chat %s)",
