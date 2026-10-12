@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -27,13 +29,189 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class _SystemdBackend:
+    """Linux: systemd user units via systemctl + a systemd-run transient timer."""
+
+    name = "systemd"
+
+    def resolve(self, service: str, unit_map: dict[str, str]) -> str:
+        return unit_map.get(service, service)
+
+    def exists(self, target: str) -> bool:
+        try:
+            proc = subprocess.run(
+                ["systemctl", "--user", "cat", target],
+                capture_output=True,
+                text=True,
+                timeout=10.0,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return True
+        if proc.returncode == 0:
+            return True
+        output = f"{proc.stdout}\n{proc.stderr}"
+        return "No files found" not in output and "not found" not in output.lower()
+
+    def schedule(self, target: str, delay: float) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [
+                "systemd-run",
+                "--user",
+                f"--on-active={delay}s",
+                "--timer-property=AccuracySec=1s",
+                "/usr/bin/systemctl",
+                "--user",
+                "restart",
+                target,
+            ],
+            start_new_session=True,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+
+
+class _LaunchdBackend:
+    """macOS: launchd gui-domain jobs.
+
+    launchd has no transient one-shot timer, so the deferred restart is a
+    detached ``sh -c 'sleep N; launchctl kickstart -k ...'`` — the subshell
+    outlives the harness the same way systemd-run's timer does.
+    """
+
+    name = "launchd"
+
+    def resolve(self, service: str, unit_map: dict[str, str]) -> str:
+        if service in unit_map:
+            return unit_map[service]
+        stem = service.removesuffix(".service")
+        return f"local.devin.agent.{stem}"
+
+    def _target(self, label: str) -> str:
+        if "/" in label:
+            return label  # already a domain target, e.g. gui/502/foo
+        uid = os.getuid() if hasattr(os, "getuid") else 501
+        return f"gui/{uid}/{label}"
+
+    def exists(self, label: str) -> bool:
+        try:
+            proc = subprocess.run(
+                ["launchctl", "print", self._target(label)],
+                capture_output=True,
+                text=True,
+                timeout=10.0,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return True
+        if proc.returncode == 0:
+            return True
+        output = f"{proc.stdout}\n{proc.stderr}".lower()
+        return (
+            "could not find" not in output
+            and "not found" not in output
+            and "bad request" not in output
+        )
+
+    def schedule(self, label: str, delay: float) -> subprocess.CompletedProcess:
+        target = self._target(label)
+        return subprocess.run(
+            [
+                "/bin/sh",
+                "-c",
+                (
+                    f"( sleep {delay}; launchctl kickstart -k {target} )"
+                    " </dev/null >/dev/null 2>&1 &"
+                ),
+            ],
+            start_new_session=True,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+
+
+class _WindowsBackend:
+    """Windows: services via sc.exe + a detached Restart-Service.
+
+    The deferred restart is a minimized PowerShell that sleeps, then restarts
+    the service — the closest analog to systemd-run's transient timer. Service
+    control needs the right privileges; failures surface like any backend's
+    (drain cleared, requester notified).
+    """
+
+    name = "windows-service"
+
+    def resolve(self, service: str, unit_map: dict[str, str]) -> str:
+        if service in unit_map:
+            return unit_map[service]
+        return service.removesuffix(".service")
+
+    def exists(self, service_name: str) -> bool:
+        try:
+            proc = subprocess.run(
+                ["sc.exe", "query", service_name],
+                capture_output=True,
+                text=True,
+                timeout=10.0,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return True
+        if proc.returncode == 0:
+            return True
+        output = f"{proc.stdout}\n{proc.stderr}".lower()
+        return "does not exist" not in output and "failed" not in output and "1060" not in output
+
+    def schedule(self, service_name: str, delay: float) -> subprocess.CompletedProcess:
+        inner = (
+            f"Start-Sleep -Seconds {max(1, int(delay))}; "
+            f"Restart-Service -Name '{service_name}' -Force"
+        )
+        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(
+            subprocess, "DETACHED_PROCESS", 0
+        )
+        return subprocess.run(
+            [
+                "cmd",
+                "/c",
+                "start",
+                "",
+                "/min",
+                "powershell",
+                "-NoProfile",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                inner,
+            ],
+            creationflags=creationflags,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+
+
+def _service_backend() -> _SystemdBackend | _LaunchdBackend | _WindowsBackend:
+    """Pick the service-manager backend for this platform."""
+    if sys.platform == "darwin":
+        return _LaunchdBackend()
+    if sys.platform == "win32":
+        return _WindowsBackend()
+    return _SystemdBackend()
+
+
 class RuntimeRestart:
     """Schedule and supervise graceful service restarts requested by the ACP child.
 
     The runtime handles two related but distinct lifecycle events: a *shutdown*
-    (agent process is terminating) and a *restart* (systemd should restart the
-    service unit).  This class owns the restart path so ``AgentRuntime`` does not
-    have to carry the scheduling, watchdog, and drain logic directly.
+    (agent process is terminating) and a *restart* (the service manager should
+    restart the unit).  This class owns the restart path so ``AgentRuntime``
+    does not have to carry the scheduling, watchdog, and drain logic directly.
     """
 
     def __init__(
@@ -74,27 +252,19 @@ class RuntimeRestart:
         self._memory_manager = memory_manager
         self._last_restart_memory_written: dict[str, float] = {}
 
-    def _systemd_unit_exists(self, service: str) -> bool:
-        """Best-effort check that a user unit exists before draining for it.
+    def _resolve_unit_target(self, service: str) -> str:
+        """Map the logical unit name to the platform service target."""
+        backend = _service_backend()
+        return backend.resolve(service, self._config.harness.restart_unit_map)
 
-        Returns True when the check cannot be made (no systemctl, no user bus)
-        so non-systemd environments are not blocked; only a definitive
-        "no such unit" answer refuses the restart.
+    def _service_unit_exists(self, service: str) -> bool:
+        """Best-effort check that the service target exists before draining.
+
+        Returns True when the check cannot be made (no service-manager tooling
+        on this platform) so unmanaged environments are not blocked; only a
+        definitive "no such unit" answer refuses the restart.
         """
-        try:
-            proc = subprocess.run(
-                ["systemctl", "--user", "cat", service],
-                capture_output=True,
-                text=True,
-                timeout=10.0,
-                check=False,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return True
-        if proc.returncode == 0:
-            return True
-        output = f"{proc.stdout}\n{proc.stderr}"
-        return "No files found" not in output and "not found" not in output.lower()
+        return _service_backend().exists(self._resolve_unit_target(service))
 
     def _record_restart_memory(self, chat_id: str, reason: str | None = None) -> None:
         """Record a brief ACP restart observation for memory_recall.
@@ -177,8 +347,8 @@ class RuntimeRestart:
         """Handle a service restart request from the ACP subprocess.
 
         Instead of letting the subprocess kill the harness directly, we schedule a
-        short-delayed ``systemd-run`` that restarts the service after the current
-        turn has a chance to finish and the final reply is delivered.
+        short-delayed service restart that fires after the current turn has a
+        chance to finish and the final reply is delivered.
 
         Returns an ack status string for the control-socket reply:
         ``scheduled``, ``cooldown``, or ``rejected: <why>``.
@@ -263,7 +433,7 @@ class RuntimeRestart:
         drain_cap: float = 120.0,
     ) -> bool:
         """Begin the restart drain: block new turns, wait for in-flight turns,
-        flush plugin state, then schedule the real systemd restart.
+        flush plugin state, then schedule the real service restart.
 
         Returns False (without setting the drain flag) when the named unit
         definitively does not exist. Otherwise returns immediately; the drain
@@ -296,7 +466,7 @@ class RuntimeRestart:
                 self._flush_plugins_for_restart()
             finally:
                 # Short residual delay so the final reply/outbox can deliver.
-                self._schedule_systemd_restart(service, delay=5.0, chat_id=chat_id, reason=reason)
+                self._schedule_service_restart(service, delay=5.0, chat_id=chat_id, reason=reason)
                 self._arm_restart_watchdog(service, due_in=5.0, chat_id=chat_id)
 
         threading.Thread(target=_drain_then_restart, daemon=True, name="restart-drain").start()
@@ -345,8 +515,8 @@ class RuntimeRestart:
     ) -> None:
         """A scheduled restart will not fire: reopen the gate, record, notify.
 
-        Called when ``systemd-run`` fails synchronously and by the watchdog
-        when the timer never fires — clears the drain so turns resume instead
+        Called when the backend scheduler fails synchronously and by the
+        watchdog when the timer never fires — clears the drain so turns resume
         of the service refusing work while still alive, and resets the
         cooldown so a retry is not blocked.
         """
@@ -438,43 +608,30 @@ class RuntimeRestart:
             except Exception:
                 logger.exception("Failed to flush plugins for %s before restart", chat_id)
 
-    def _schedule_systemd_restart(
+    def _schedule_service_restart(
         self,
         service: str,
         delay: float,
         chat_id: str | None,
         reason: str,
     ) -> None:
-        """Run a short-delayed systemd-run that restarts the named service."""
+        """Schedule the deferred restart through the platform service backend."""
 
         def _do_restart() -> None:
+            backend = _service_backend()
+            target = self._resolve_unit_target(service)
             try:
-                proc = subprocess.run(
-                    [
-                        "systemd-run",
-                        "--user",
-                        f"--on-active={delay}s",
-                        "--timer-property=AccuracySec=1s",
-                        "/usr/bin/systemctl",
-                        "--user",
-                        "restart",
-                        service,
-                    ],
-                    start_new_session=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=15,
-                    check=False,
-                )
+                proc = backend.schedule(target, delay)
             except Exception as exc:
                 logger.exception("Failed to schedule graceful restart of %s", service)
-                self._restart_failed(service, chat_id, f"systemd-run error: {exc}")
+                self._restart_failed(service, chat_id, f"{backend.name} scheduler error: {exc}")
                 return
             if proc.returncode != 0:
                 detail = (proc.stderr or proc.stdout or "").strip() or f"exit {proc.returncode}"
                 logger.error(
-                    "systemd-run scheduling restart of %s exited %s: %s",
-                    service,
+                    "%s scheduling restart of %s exited %s: %s",
+                    backend.name,
+                    target,
                     proc.returncode,
                     detail,
                 )
@@ -482,13 +639,21 @@ class RuntimeRestart:
                 return
             if chat_id is not None:
                 logger.info(
-                    "Scheduled graceful restart of %s in %ss (from chat %s)",
+                    "Scheduled graceful restart of %s (%s -> %s) in %ss (from chat %s)",
                     service,
+                    backend.name,
+                    target,
                     delay,
                     chat_id,
                 )
             else:
-                logger.info("Scheduled graceful restart of %s in %ss", service, delay)
+                logger.info(
+                    "Scheduled graceful restart of %s (%s -> %s) in %ss",
+                    service,
+                    backend.name,
+                    target,
+                    delay,
+                )
 
         # Run the scheduler in its own thread so the ACP control listener is not
         # blocked.

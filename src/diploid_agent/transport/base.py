@@ -73,7 +73,7 @@ class RuntimeAPI(abc.ABC):
         service: str | None = None,
         reason: str = "",
     ) -> Any:
-        """Schedule a graceful systemd restart of the named service.
+        """Schedule a graceful restart of the named service.
 
         If ``service`` is not provided, the current persona's `.service` unit
         is restarted.

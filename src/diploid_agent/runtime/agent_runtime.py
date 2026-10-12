@@ -523,8 +523,8 @@ class AgentRuntime(RuntimeAPI):
             logger.warning("Failed to notify chat %s of agent restart", chat_id, exc_info=exc)
 
     def _unit_exists(self, service: str) -> bool:
-        """Best-effort check that a user unit exists before draining for it."""
-        return self._restart._systemd_unit_exists(service)
+        """Best-effort check that the service target exists before draining."""
+        return self._restart._service_unit_exists(service)
 
     def schedule_draining_restart(
         self,
@@ -533,7 +533,7 @@ class AgentRuntime(RuntimeAPI):
         reason: str,
         drain_cap: float = 120.0,
     ) -> bool:
-        """Begin the restart drain and schedule the real systemd restart."""
+        """Begin the restart drain and schedule the real service restart."""
         return self._restart.schedule_draining_restart(
             service, chat_id, reason, drain_cap=drain_cap
         )
@@ -556,15 +556,15 @@ class AgentRuntime(RuntimeAPI):
         """Run shutdown/sleeping hooks on every chat so plugin state persists."""
         self._restart._flush_plugins_for_restart()
 
-    def _schedule_systemd_restart(
+    def _schedule_service_restart(
         self,
         service: str,
         delay: float,
         chat_id: str | None,
         reason: str,
     ) -> None:
-        """Run a short-delayed systemd-run that restarts the named service."""
-        self._restart._schedule_systemd_restart(service, delay, chat_id, reason)
+        """Schedule the deferred restart through the platform service backend."""
+        self._restart._schedule_service_restart(service, delay, chat_id, reason)
 
     def suppress_auto_continue(self, chat_id: str | None = None, seconds: float = 300.0) -> None:
         """Suppress auto-continue for a chat or globally for a number of seconds."""

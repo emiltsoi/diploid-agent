@@ -14,6 +14,7 @@ import threading
 import time
 from pathlib import Path
 
+import diploid_agent.runtime.restart as restart_mod
 from diploid_agent.config import (
     Config,
     DiploidConfig,
@@ -92,8 +93,9 @@ def _make_restart(
         memory_manager=None,  # type: ignore[arg-type]
         notify_fn=lambda chat_id, text: notices.append((chat_id, text)),
     )
-    # The real implementation spawns `systemd-run`; keep tests hermetic.
-    restart._schedule_systemd_restart = lambda *a, **k: None  # type: ignore[method-assign]
+    # The real implementation shells out to the platform service manager;
+    # keep tests hermetic.
+    restart._schedule_service_restart = lambda *a, **k: None  # type: ignore[method-assign]
     restart._arm_restart_watchdog = lambda *a, **k: None  # type: ignore[method-assign]
     return restart
 
@@ -176,8 +178,8 @@ def test_rejected_request_does_not_burn_cooldown(tmp_path: Path) -> None:
 
 def _unstub(restart: RuntimeRestart) -> RuntimeRestart:
     """Rebind the real scheduler/watchdog the fixture stubs out."""
-    restart._schedule_systemd_restart = (  # type: ignore[method-assign]
-        RuntimeRestart._schedule_systemd_restart.__get__(restart)
+    restart._schedule_service_restart = (  # type: ignore[method-assign]
+        RuntimeRestart._schedule_service_restart.__get__(restart)
     )
     restart._arm_restart_watchdog = (  # type: ignore[method-assign]
         RuntimeRestart._arm_restart_watchdog.__get__(restart)
@@ -201,6 +203,9 @@ def test_systemd_run_failure_clears_drain_and_notifies(tmp_path: Path, monkeypat
     restart = _unstub(_make_restart(_make_config(tmp_path), incidents, notices))
     restart._state.restart_draining.set()
     restart._state.last_service_restart_at = time.time()
+    monkeypatch.setattr(
+        restart_mod, "_service_backend", lambda: restart_mod._SystemdBackend()
+    )
 
     class _Proc:
         returncode = 1
@@ -209,7 +214,7 @@ def test_systemd_run_failure_clears_drain_and_notifies(tmp_path: Path, monkeypat
 
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Proc())
 
-    restart._schedule_systemd_restart(
+    restart._schedule_service_restart(
         "test-pilot.service", delay=0.1, chat_id="chat-9", reason="test"
     )
     assert _wait_for(lambda: not restart._state.restart_draining.is_set())
@@ -270,6 +275,9 @@ def test_systemd_run_success_keeps_drain(tmp_path: Path, monkeypatch) -> None:
     restart = _unstub(_make_restart(_make_config(tmp_path), incidents, notices))
     restart._state.restart_draining.set()
     restart._state.last_service_restart_at = time.time()
+    monkeypatch.setattr(
+        restart_mod, "_service_backend", lambda: restart_mod._SystemdBackend()
+    )
 
     class _Proc:
         returncode = 0
@@ -278,7 +286,7 @@ def test_systemd_run_success_keeps_drain(tmp_path: Path, monkeypatch) -> None:
 
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Proc())
 
-    restart._schedule_systemd_restart(
+    restart._schedule_service_restart(
         "test-pilot.service", delay=0.1, chat_id="chat-9", reason="test"
     )
     time.sleep(0.3)
@@ -304,3 +312,166 @@ def test_watchdog_reaper_notifies_requester(tmp_path: Path) -> None:
     assert "did not fire" in notices[0][1]
     assert incidents.records[0]["phase"] == "graceful_restart"
     assert incidents.records[0]["action"] == "drain_cleared"
+
+
+# --- Platform service backends -----------------------------------------------
+
+
+def test_service_backend_selected_by_platform(monkeypatch) -> None:
+    monkeypatch.setattr(restart_mod.sys, "platform", "darwin")
+    assert isinstance(restart_mod._service_backend(), restart_mod._LaunchdBackend)
+    monkeypatch.setattr(restart_mod.sys, "platform", "win32")
+    assert isinstance(restart_mod._service_backend(), restart_mod._WindowsBackend)
+    monkeypatch.setattr(restart_mod.sys, "platform", "linux")
+    assert isinstance(restart_mod._service_backend(), restart_mod._SystemdBackend)
+
+
+def test_systemd_resolve_is_passthrough() -> None:
+    backend = restart_mod._SystemdBackend()
+    assert backend.resolve("aurelia.service", {}) == "aurelia.service"
+    assert (
+        backend.resolve("aurelia.service", {"aurelia.service": "x.service"}) == "x.service"
+    )
+
+
+def test_launchd_resolve_convention_and_map() -> None:
+    backend = restart_mod._LaunchdBackend()
+    assert backend.resolve("aurelia.service", {}) == "local.devin.agent.aurelia"
+    assert backend.resolve("aurelia", {}) == "local.devin.agent.aurelia"
+    assert (
+        backend.resolve("aurelia.service", {"aurelia.service": "com.example.a"})
+        == "com.example.a"
+    )
+
+
+def test_windows_resolve_strips_service_suffix() -> None:
+    backend = restart_mod._WindowsBackend()
+    assert backend.resolve("aurelia.service", {}) == "aurelia"
+    assert backend.resolve("aurelia", {}) == "aurelia"
+    assert (
+        backend.resolve("aurelia.service", {"aurelia.service": "AureliaSvc"})
+        == "AureliaSvc"
+    )
+
+
+def test_launchd_schedule_defers_kickstart(monkeypatch) -> None:
+    captured: dict[str, list[str]] = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        return _Proc()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    restart_mod._LaunchdBackend().schedule("local.devin.agent.test-pilot", 5.0)
+    argv = captured["argv"]
+    assert argv[:2] == ["/bin/sh", "-c"]
+    assert "sleep 5.0" in argv[2]
+    assert "launchctl kickstart -k" in argv[2]
+    assert "local.devin.agent.test-pilot" in argv[2]
+    assert argv[2].rstrip().endswith("&")
+
+
+def test_windows_schedule_spawns_detached_restart(monkeypatch) -> None:
+    captured: dict[str, list[str]] = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        return _Proc()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    restart_mod._WindowsBackend().schedule("test-pilot", 5.0)
+    argv = captured["argv"]
+    assert argv[:3] == ["cmd", "/c", "start"]
+    inner = argv[-1]
+    assert "Start-Sleep" in inner
+    assert "Restart-Service" in inner
+    assert "test-pilot" in inner
+
+
+class _FakeProc:
+    def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def test_launchd_exists_checks(monkeypatch) -> None:
+    backend = restart_mod._LaunchdBackend()
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _FakeProc(0))
+    assert backend.exists("local.devin.agent.test-pilot") is True
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *a, **k: _FakeProc(113, stderr='Could not find service "x" in domain'),
+    )
+    assert backend.exists("nope") is False
+    monkeypatch.setattr(
+        subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("launchctl"))
+    )
+    assert backend.exists("anything") is True  # cannot check -> allow
+
+
+def test_windows_exists_checks(monkeypatch) -> None:
+    backend = restart_mod._WindowsBackend()
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _FakeProc(0))
+    assert backend.exists("test-pilot") is True
+    monkeypatch.setattr(
+        subprocess, "run", lambda *a, **k: _FakeProc(1, stderr="[SC] EnumQueryServicesStatus:OpenService FAILED 1060")
+    )
+    assert backend.exists("nope") is False
+    monkeypatch.setattr(
+        subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("sc.exe"))
+    )
+    assert backend.exists("anything") is True
+
+
+def test_resolve_unit_target_honours_map(tmp_path: Path, monkeypatch) -> None:
+    cfg = _make_config(tmp_path)
+    cfg.harness.restart_unit_map = {"test-pilot.service": "gui/999/custom.label"}
+    restart = _make_restart(cfg, _Incidents(), [])
+    monkeypatch.setattr(restart_mod, "_service_backend", lambda: restart_mod._LaunchdBackend())
+    assert restart._resolve_unit_target("test-pilot.service") == "gui/999/custom.label"
+
+
+def test_service_unit_exists_probes_platform_target(tmp_path: Path, monkeypatch) -> None:
+    """The exists check must probe the resolved target, not the logical name."""
+    seen: list[list[str]] = []
+    restart = _make_restart(_make_config(tmp_path), _Incidents(), [])
+    monkeypatch.setattr(restart_mod, "_service_backend", lambda: restart_mod._LaunchdBackend())
+
+    def fake_run(argv, **kwargs):
+        seen.append(argv)
+        return _FakeProc(0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert restart._service_unit_exists("test-pilot.service") is True
+    assert seen and seen[0][:2] == ["launchctl", "print"]
+    assert "local.devin.agent.test-pilot" in seen[0][2]
+
+
+def test_launchd_scheduler_failure_clears_drain_and_notifies(tmp_path: Path, monkeypatch) -> None:
+    """The launchd backend must drive the same failure path as systemd."""
+    incidents = _Incidents()
+    notices: list[tuple[str, str]] = []
+    restart = _unstub(_make_restart(_make_config(tmp_path), incidents, notices))
+    restart._state.restart_draining.set()
+    restart._state.last_service_restart_at = time.time()
+    monkeypatch.setattr(restart_mod, "_service_backend", lambda: restart_mod._LaunchdBackend())
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _FakeProc(1, stderr="kickstart failed"))
+
+    restart._schedule_service_restart(
+        "test-pilot.service", delay=0.1, chat_id="chat-9", reason="test"
+    )
+    assert _wait_for(lambda: not restart._state.restart_draining.is_set())
+    assert notices and notices[0][0] == "chat-9"
+    assert "did not fire" in notices[0][1]

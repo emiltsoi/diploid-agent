@@ -441,7 +441,7 @@ class RuntimeActions:
         if not self._restart.schedule_draining_restart(service, chat_id=chat_id, reason=reason):
             self._state.last_service_restart_at = 0.0
             return ChatResult(
-                reply=f"Could not restart {service}: no such systemd user unit.",
+                reply=f"Could not restart {service}: no such service unit.",
                 notice="Check the service name and try again.",
             )
 

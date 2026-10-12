@@ -708,6 +708,11 @@ class HarnessConfig(BaseModel):
     # ``restart_enabled`` toggle still gates it). Empty means "own unit
     # only" — the persona's ``<name>.service``.
     restart_allowed_units: list[str] = Field(default_factory=list)
+    # Logical unit name -> platform service target, for non-systemd service
+    # managers. Keys are the names in ``restart_allowed_units``. On launchd an
+    # unmapped ``x.service`` falls back to ``local.devin.agent.x``; on Windows
+    # to the bare service name ``x``; systemd uses the name as given.
+    restart_unit_map: dict[str, str] = Field(default_factory=dict)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     mesh: MeshConfig = Field(default_factory=MeshConfig)
     prompt_blocks: PromptBlocksConfig = Field(default_factory=PromptBlocksConfig)
