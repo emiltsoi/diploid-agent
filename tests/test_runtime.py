@@ -420,9 +420,7 @@ def test_graceful_service_restart_schedules_systemd_run(tmp_path: Path, monkeypa
     monkeypatch.setattr(runtime, "_unit_exists", lambda service: True)
     # Pin the systemd backend so the deferred scheduler is assertable on any
     # platform (macOS picks launchd, Windows the service backend).
-    monkeypatch.setattr(
-        restart_mod, "_service_backend", lambda: restart_mod._SystemdBackend()
-    )
+    monkeypatch.setattr(restart_mod, "_service_backend", lambda: restart_mod._SystemdBackend())
 
     result = runtime.graceful_service_restart("chat-1", "vesper.service", reason="test")
     assert "restarting" in result.reply.lower()
@@ -449,9 +447,7 @@ def test_graceful_restart_drains_active_turn_without_lock(tmp_path: Path, monkey
         return _Fake()
 
     monkeypatch.setattr("subprocess.Popen", fake_popen)
-    monkeypatch.setattr(
-        restart_mod, "_service_backend", lambda: restart_mod._SystemdBackend()
-    )
+    monkeypatch.setattr(restart_mod, "_service_backend", lambda: restart_mod._SystemdBackend())
 
     monkeypatch.setattr(runtime, "_unit_exists", lambda service: True)
 
@@ -499,9 +495,7 @@ def test_graceful_restart_cap_expires_with_active_turn(tmp_path: Path, monkeypat
         return _Fake()
 
     monkeypatch.setattr("subprocess.Popen", fake_popen)
-    monkeypatch.setattr(
-        restart_mod, "_service_backend", lambda: restart_mod._SystemdBackend()
-    )
+    monkeypatch.setattr(restart_mod, "_service_backend", lambda: restart_mod._SystemdBackend())
 
     monkeypatch.setattr(runtime, "_unit_exists", lambda service: True)
 

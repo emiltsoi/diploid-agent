@@ -124,9 +124,16 @@ def test_deep_control_dir_falls_back_to_hashed_tmp_path(monkeypatch) -> None:
     """A base deep enough to overflow sun_path lands at /tmp/diploid-ctl-<sha>."""
     # A nested base under the (possibly deep) system tempdir guarantees the
     # intended path exceeds 100 bytes on every platform.
-    base = Path(
-        control_mod.tempfile.mkdtemp(prefix="dpctl-deep-", dir=control_mod.tempfile.gettempdir())
-    ) / "nested" / "deeper" / "still-going"
+    base = (
+        Path(
+            control_mod.tempfile.mkdtemp(
+                prefix="dpctl-deep-", dir=control_mod.tempfile.gettempdir()
+            )
+        )
+        / "nested"
+        / "deeper"
+        / "still-going"
+    )
     base.mkdir(parents=True)
     monkeypatch.setenv("DIPLOID_CONTROL_DIR", str(base))
     name = _name()

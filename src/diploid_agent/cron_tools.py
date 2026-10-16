@@ -189,7 +189,9 @@ def ledger_lint(args: argparse.Namespace) -> int:
         try:
             age = int((time.time() - time.mktime(time.strptime(stamp, "%Y-%m-%d"))) / DAY_SECONDS)
             if age > args.stale_days:
-                findings.append(f"_last_settled {stamp} is {age}d old (threshold {args.stale_days}d)")
+                findings.append(
+                    f"_last_settled {stamp} is {age}d old (threshold {args.stale_days}d)"
+                )
             else:
                 info.append(f"_last_settled {stamp} ({age}d old)")
         except ValueError:
@@ -207,11 +209,15 @@ def ledger_lint(args: argparse.Namespace) -> int:
             if actual:
                 for claim in ahead_claims:
                     if int(claim) != int(actual):
-                        findings.append(f"`ahead {claim}` claimed, actual `ahead {actual}` in {repo.name}")
+                        findings.append(
+                            f"`ahead {claim}` claimed, actual `ahead {actual}` in {repo.name}"
+                        )
                     else:
                         info.append(f"`ahead {claim}` matches {repo.name}")
             else:
-                info.append(f"{len(ahead_claims)} ahead-claim(s); upstream count unresolvable in {repo.name}")
+                info.append(
+                    f"{len(ahead_claims)} ahead-claim(s); upstream count unresolvable in {repo.name}"
+                )
         else:
             info.append(f"{len(ahead_claims)} ahead-claim(s) found, no --repo given to verify")
 
@@ -251,8 +257,12 @@ def main(argv: list[str] | None = None) -> int:
     gd.add_argument("--max-diff-lines", type=int, default=80)
     gd.set_defaults(func=guarded_digest)
 
-    ll = sub.add_parser("ledger-lint", help="Diff a boot-ledger file's checkable claims against reality")
-    ll.add_argument("--file", required=True, help="Ledger row to lint (e.g. references/wives/<wife>.md)")
+    ll = sub.add_parser(
+        "ledger-lint", help="Diff a boot-ledger file's checkable claims against reality"
+    )
+    ll.add_argument(
+        "--file", required=True, help="Ledger row to lint (e.g. references/wives/<wife>.md)"
+    )
     ll.add_argument("--repo", help="Git repo used to verify `ahead N` claims")
     ll.add_argument("--stale-days", type=int, default=30, help="Age threshold for _last_settled")
     ll.add_argument("--probe", action="store_true", help="Ping IPv4 literals for reachability")

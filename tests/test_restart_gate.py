@@ -203,9 +203,7 @@ def test_systemd_run_failure_clears_drain_and_notifies(tmp_path: Path, monkeypat
     restart = _unstub(_make_restart(_make_config(tmp_path), incidents, notices))
     restart._state.restart_draining.set()
     restart._state.last_service_restart_at = time.time()
-    monkeypatch.setattr(
-        restart_mod, "_service_backend", lambda: restart_mod._SystemdBackend()
-    )
+    monkeypatch.setattr(restart_mod, "_service_backend", lambda: restart_mod._SystemdBackend())
 
     class _Proc:
         returncode = 1
@@ -275,9 +273,7 @@ def test_systemd_run_success_keeps_drain(tmp_path: Path, monkeypatch) -> None:
     restart = _unstub(_make_restart(_make_config(tmp_path), incidents, notices))
     restart._state.restart_draining.set()
     restart._state.last_service_restart_at = time.time()
-    monkeypatch.setattr(
-        restart_mod, "_service_backend", lambda: restart_mod._SystemdBackend()
-    )
+    monkeypatch.setattr(restart_mod, "_service_backend", lambda: restart_mod._SystemdBackend())
 
     class _Proc:
         returncode = 0
@@ -329,9 +325,7 @@ def test_service_backend_selected_by_platform(monkeypatch) -> None:
 def test_systemd_resolve_is_passthrough() -> None:
     backend = restart_mod._SystemdBackend()
     assert backend.resolve("aurelia.service", {}) == "aurelia.service"
-    assert (
-        backend.resolve("aurelia.service", {"aurelia.service": "x.service"}) == "x.service"
-    )
+    assert backend.resolve("aurelia.service", {"aurelia.service": "x.service"}) == "x.service"
 
 
 def test_launchd_resolve_convention_and_map() -> None:
@@ -339,8 +333,7 @@ def test_launchd_resolve_convention_and_map() -> None:
     assert backend.resolve("aurelia.service", {}) == "local.devin.agent.aurelia"
     assert backend.resolve("aurelia", {}) == "local.devin.agent.aurelia"
     assert (
-        backend.resolve("aurelia.service", {"aurelia.service": "com.example.a"})
-        == "com.example.a"
+        backend.resolve("aurelia.service", {"aurelia.service": "com.example.a"}) == "com.example.a"
     )
 
 
@@ -348,10 +341,7 @@ def test_windows_resolve_strips_service_suffix() -> None:
     backend = restart_mod._WindowsBackend()
     assert backend.resolve("aurelia.service", {}) == "aurelia"
     assert backend.resolve("aurelia", {}) == "aurelia"
-    assert (
-        backend.resolve("aurelia.service", {"aurelia.service": "AureliaSvc"})
-        == "AureliaSvc"
-    )
+    assert backend.resolve("aurelia.service", {"aurelia.service": "AureliaSvc"}) == "AureliaSvc"
 
 
 def test_launchd_schedule_defers_kickstart(monkeypatch) -> None:
@@ -426,7 +416,9 @@ def test_windows_exists_checks(monkeypatch) -> None:
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: _FakeProc(0))
     assert backend.exists("test-pilot") is True
     monkeypatch.setattr(
-        subprocess, "run", lambda *a, **k: _FakeProc(1, stderr="[SC] EnumQueryServicesStatus:OpenService FAILED 1060")
+        subprocess,
+        "run",
+        lambda *a, **k: _FakeProc(1, stderr="[SC] EnumQueryServicesStatus:OpenService FAILED 1060"),
     )
     assert backend.exists("nope") is False
     monkeypatch.setattr(

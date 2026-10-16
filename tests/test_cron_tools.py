@@ -141,7 +141,11 @@ def test_guarded_digest_reports(tmp_path: Path, capsys) -> None:
 
 def _lint_args(f: Path, repo=None, stale_days: int = 30, probe: bool = False) -> argparse.Namespace:
     return argparse.Namespace(
-        file=str(f), repo=str(repo) if repo else None, stale_days=stale_days, probe=probe, ping_timeout=2
+        file=str(f),
+        repo=str(repo) if repo else None,
+        stale_days=stale_days,
+        probe=probe,
+        ping_timeout=2,
     )
 
 
