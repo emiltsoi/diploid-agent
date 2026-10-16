@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import time
@@ -147,6 +148,88 @@ def guarded_digest(args: argparse.Namespace) -> int:
     return 0
 
 
+def _ping(host: str, timeout: int) -> bool | None:
+    """Reachability probe. Returns True/False, or None if ping never ran."""
+    wait_flag = "-t" if sys.platform == "darwin" else "-W"
+    try:
+        out = subprocess.run(
+            ["ping", "-c", "1", wait_flag, str(timeout), host],
+            capture_output=True,
+            timeout=timeout + 3,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return out.returncode == 0
+
+
+def ledger_lint(args: argparse.Namespace) -> int:
+    """Diff a boot-ledger file's checkable claims against reality.
+
+    Proof-of-detector for the open-items reconciliation plan: bounded input
+    (one ledger row), mechanical checks only. Findings are mismatches a
+    machine can prove — an aged ``_last_settled`` stamp, an ``ahead N``
+    claim that disagrees with git. Everything else lands as informational
+    context (stamp age, IP reachability) — a retired cite is legitimate
+    history, so the owner judges; the tool never calls prose a lie.
+    """
+    target = Path(args.file).expanduser()
+    try:
+        text = target.read_text()
+    except OSError:
+        print(f"ledger-lint: {target} unreadable", file=sys.stderr)
+        return 1
+
+    findings: list[str] = []
+    info: list[str] = []
+
+    stamp_match = re.search(r"_last_settled:\s*(\d{4}-\d{2}-\d{2})", text)
+    if stamp_match:
+        stamp = stamp_match.group(1)
+        try:
+            age = int((time.time() - time.mktime(time.strptime(stamp, "%Y-%m-%d"))) / DAY_SECONDS)
+            if age > args.stale_days:
+                findings.append(f"_last_settled {stamp} is {age}d old (threshold {args.stale_days}d)")
+            else:
+                info.append(f"_last_settled {stamp} ({age}d old)")
+        except ValueError:
+            findings.append(f"_last_settled unparsable: {stamp!r}")
+    else:
+        info.append("no _last_settled stamp found")
+
+    ahead_claims = re.findall(r"ahead\s+(\d+)", text)
+    repo = Path(args.repo).expanduser().resolve() if args.repo else None
+    if ahead_claims:
+        if repo and _git(repo, "rev-parse", "--is-inside-work-tree"):
+            actual = _git(repo, "rev-list", "--count", "@{u}..HEAD") or _git(
+                repo, "rev-list", "--count", "origin/HEAD..HEAD"
+            )
+            if actual:
+                for claim in ahead_claims:
+                    if int(claim) != int(actual):
+                        findings.append(f"`ahead {claim}` claimed, actual `ahead {actual}` in {repo.name}")
+                    else:
+                        info.append(f"`ahead {claim}` matches {repo.name}")
+            else:
+                info.append(f"{len(ahead_claims)} ahead-claim(s); upstream count unresolvable in {repo.name}")
+        else:
+            info.append(f"{len(ahead_claims)} ahead-claim(s) found, no --repo given to verify")
+
+    if args.probe:
+        for ip in sorted(set(re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", text))):
+            alive = _ping(ip, args.ping_timeout)
+            state = "reachable" if alive else ("unreachable" if alive is False else "unprobed")
+            info.append(f"{ip}: {state}")
+
+    print(f"ledger-lint: {target.name}")
+    print("== findings ==")
+    print("\n".join(f"- {f}" for f in findings) or "(clean)")
+    if info:
+        print("== info ==")
+        print("\n".join(f"- {i}" for i in info))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="diploid_agent.cron_tools")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -167,6 +250,14 @@ def main(argv: list[str] | None = None) -> int:
     gd.add_argument("--files", nargs="+", required=True, help="Guarded files to report on")
     gd.add_argument("--max-diff-lines", type=int, default=80)
     gd.set_defaults(func=guarded_digest)
+
+    ll = sub.add_parser("ledger-lint", help="Diff a boot-ledger file's checkable claims against reality")
+    ll.add_argument("--file", required=True, help="Ledger row to lint (e.g. references/wives/<wife>.md)")
+    ll.add_argument("--repo", help="Git repo used to verify `ahead N` claims")
+    ll.add_argument("--stale-days", type=int, default=30, help="Age threshold for _last_settled")
+    ll.add_argument("--probe", action="store_true", help="Ping IPv4 literals for reachability")
+    ll.add_argument("--ping-timeout", type=int, default=2)
+    ll.set_defaults(func=ledger_lint)
 
     args = parser.parse_args(argv)
     return int(args.func(args))
