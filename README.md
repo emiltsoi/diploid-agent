@@ -397,6 +397,21 @@ responsibility lives in a focused module:
   wrapper), and the `telegram_ingress.py` / `telegram_poll.py` legacy entry
   shims.
 
+## Development
+
+CI (`.github/workflows/ci.yml`) gates on three steps — run all three locally
+before pushing, not just tests:
+
+```sh
+.venv/bin/ruff check src tests          # lint
+.venv/bin/ruff format --check src tests # format — CI fails on this alone
+.venv/bin/python -m pytest tests -q     # suite
+```
+
+Lint-clean is not format-clean: on 2026-10-17 a pushed stack was `ruff check`-
+green and suite-green locally and still failed CI on the format step until a
+`ruff format` sweep landed (`ec03d23`).
+
 ## License
 
 [MIT](LICENSE)
