@@ -36,9 +36,13 @@ class MemoryBackend(abc.ABC):
         query: str,
         *,
         tags: list[str] | None = None,
+        kind: str | None = None,
         max_tokens: int = 1500,
     ) -> str:
-        """Return relevant context as a string, capped loosely."""
+        """Return relevant context as a string, capped loosely.
+
+        ``tags`` is a scoping hint; ``kind`` is the typed route — a canonical
+        class from ``MEMORY_KINDS`` that restricts recall to that class."""
 
     @abc.abstractmethod
     def stats(self) -> dict[str, Any]:
@@ -231,30 +235,47 @@ class FileMemoryBackend(MemoryBackend):
         text_lower = text.lower()
         return sum(1 for w in words if w in text_lower) / len(words)
 
+    @staticmethod
+    def _block_tags(block: str) -> set[str]:
+        """Tags parsed from a ``## <ts> (tag, tag)`` memory block header."""
+        if not block.strip():
+            return set()
+        head = block.lstrip("# ").splitlines()[0]
+        m = re.search(r"\(([^()]*)\)\s*$", head)
+        if not m:
+            return set()
+        return {t.strip() for t in m.group(1).split(",") if t.strip()}
+
     def recall(
         self,
         query: str,
         *,
         tags: list[str] | None = None,
+        kind: str | None = None,
         max_tokens: int = 1500,
     ) -> str:
         # max_tokens is a no-op for the file backend; we use the char cap
-        # set on construction.
+        # set on construction. `tags` stays a scoping hint (ignored here);
+        # `kind` hard-filters retained blocks by their header tags and skips
+        # the untagged transcript entirely.
         query = query or "relevant context"
 
         candidates: list[tuple[str, float]] = []
 
-        for entry in self.load_transcript():
-            role = entry.get("role", "unknown").capitalize()
-            text = f"{role}: {entry.get('content', '')}"
-            score = self._keyword_score(query, text)
-            if score > 0:
-                candidates.append((text, score))
+        if kind is None:
+            for entry in self.load_transcript():
+                role = entry.get("role", "unknown").capitalize()
+                text = f"{role}: {entry.get('content', '')}"
+                score = self._keyword_score(query, text)
+                if score > 0:
+                    candidates.append((text, score))
 
         memory_text = self.load_memory_text()
         if memory_text:
             for block in memory_text.split("\n## "):
                 if block.strip():
+                    if kind is not None and kind not in self._block_tags(block):
+                        continue
                     score = self._keyword_score(query, block)
                     if score > 0:
                         candidates.append(("Memory:\n" + block, score))
@@ -263,6 +284,8 @@ class FileMemoryBackend(MemoryBackend):
         if archive_text:
             for block in archive_text.split("\n## "):
                 if block.strip():
+                    if kind is not None and kind not in self._block_tags(block):
+                        continue
                     score = self._keyword_score(query, block) * 0.9
                     if score > 0:
                         candidates.append(("Memory (archive):\n" + block, score))
@@ -597,11 +620,12 @@ class HindsightMemoryBackend(MemoryBackend):
         query: str,
         *,
         tags: list[str] | None = None,
+        kind: str | None = None,
         max_tokens: int = 1500,
     ) -> str:
         if not self.health():
             if self._fallback:
-                return self._fallback.recall(query, tags=tags, max_tokens=max_tokens)
+                return self._fallback.recall(query, tags=tags, kind=kind, max_tokens=max_tokens)
             return ""
 
         body: dict[str, Any] = {
@@ -610,9 +634,16 @@ class HindsightMemoryBackend(MemoryBackend):
             "prefer_observations": self.prefer_observations,
             "types": ["world", "experience", "observation"],
         }
-        if tags:
-            body["tags"] = tags
-            body["tags_match"] = "any"
+        merged_tags = list(tags or [])
+        if kind:
+            merged_tags.append(kind)
+        if merged_tags:
+            body["tags"] = merged_tags
+            # `kind` is restrictive — every listed tag must match so the
+            # recall returns only that class. Servers without "all" support
+            # 4xx here and fall through to the file fallback, which honors
+            # kind natively.
+            body["tags_match"] = "all" if kind else "any"
         if self.recall_min_scores:
             body["min_scores"] = self.recall_min_scores
 
@@ -633,7 +664,7 @@ class HindsightMemoryBackend(MemoryBackend):
         except Exception as exc:  # noqa: BLE001
             logger.warning("Hindsight recall failed: %s", exc)
             if self._fallback:
-                return self._fallback.recall(query, tags=tags, max_tokens=max_tokens)
+                return self._fallback.recall(query, tags=tags, kind=kind, max_tokens=max_tokens)
             return ""
 
     def stats(self) -> dict[str, Any]:

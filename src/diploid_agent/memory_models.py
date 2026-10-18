@@ -8,6 +8,24 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+# Canonical memory classes for typed recall routing (`memory_recall kind=`).
+# The claim classes mirror ``MemoryConfig.auto_promote_tags``; ``state`` and
+# ``project`` cover the operational classes used in prompt conventions.
+# ``kind`` is deliberately a closed vocabulary — an unknown kind fails loudly
+# instead of silently recalling nothing.
+MEMORY_KINDS = frozenset(
+    {
+        "agreement",
+        "decision",
+        "fact",
+        "plan",
+        "preference",
+        "project",
+        "state",
+        "watchpoint",
+    }
+)
+
 
 @dataclass
 class MemoryItem:

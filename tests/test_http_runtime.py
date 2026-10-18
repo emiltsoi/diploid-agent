@@ -829,3 +829,41 @@ def test_timer_self_door_requires_toggle(tmp_path: Path) -> None:
         },
     )
     assert resp.status_code == 403
+
+
+def test_recall_kind_filters_to_class(client: TestClient) -> None:
+    client.post(
+        "/retain",
+        json={
+            "chat_id": "chat-1",
+            "content": "decided on Postgres for storage",
+            "tags": ["decision"],
+        },
+    )
+    client.post(
+        "/retain",
+        json={
+            "chat_id": "chat-1",
+            "content": "prefer tea over coffee",
+            "tags": ["preference"],
+        },
+    )
+    resp = client.post(
+        "/recall",
+        json={"chat_id": "chat-1", "query": "Postgres", "kind": "decision"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "Postgres" in body["reply"]
+    assert "tea" not in body["reply"]
+
+
+def test_recall_unknown_kind_is_rejected_loudly(client: TestClient) -> None:
+    resp = client.post(
+        "/recall",
+        json={"chat_id": "chat-1", "query": "anything", "kind": "decison"},
+    )
+    assert resp.status_code == 200
+    reply = resp.json()["reply"]
+    assert "Unknown memory kind 'decison'" in reply
+    assert "decision" in reply

@@ -86,6 +86,39 @@ def test_file_backend_recall_archive_no_match(tmp_path: Path) -> None:
     assert result == ""
 
 
+def test_file_backend_recall_kind_filters_to_class(tmp_path: Path) -> None:
+    backend = FileMemoryBackend(tmp_path, "chat-1")
+    backend.retain([MemoryItem(content="decided on Postgres for storage", tags=["decision"])])
+    backend.retain([MemoryItem(content="prefer tea over coffee", tags=["preference"])])
+    result = backend.recall("storage", kind="decision")
+    assert "Postgres" in result
+    result = backend.recall("tea", kind="preference")
+    assert "tea" in result
+    result = backend.recall("tea", kind="decision")
+    assert result == ""
+
+
+def test_file_backend_recall_kind_excludes_untagged_transcript(tmp_path: Path) -> None:
+    backend = FileMemoryBackend(tmp_path, "chat-1")
+    backend.append_transcript("let's use Postgres", "Postgres it is")
+    backend.retain([MemoryItem(content="decided on Postgres", tags=["decision"])])
+    result = backend.recall("Postgres", kind="decision")
+    assert "decided on Postgres" in result
+    assert "Postgres it is" not in result
+
+
+def test_file_backend_recall_kind_searches_archive(tmp_path: Path) -> None:
+    backend = FileMemoryBackend(tmp_path, "chat-1")
+    backend._archive_path.write_text(
+        "## 2026-09-01 (decision)\n\nold project used SQLite\n"
+        "## 2026-09-02 (preference)\n\nold project liked tea\n"
+    )
+    result = backend.recall("SQLite", kind="decision")
+    assert "SQLite" in result
+    result = backend.recall("SQLite", kind="preference")
+    assert result == ""
+
+
 def test_file_backend_file_store_returns_self(tmp_path: Path) -> None:
     backend = FileMemoryBackend(tmp_path, "chat-1")
     assert backend.file_store() is backend
@@ -126,6 +159,52 @@ def test_hindsight_spool_when_unhealthy(tmp_path: Path) -> None:
     lines = (tmp_path / "spool.jsonl").read_text().splitlines()
     assert len(lines) == 1
     assert "fact" in lines[0]
+
+
+def test_hindsight_recall_kind_sends_match_all(tmp_path: Path, monkeypatch) -> None:
+    backend = HindsightMemoryBackend(
+        base_url="http://127.0.0.1:1",
+        bank="test",
+        chat_id="chat-1",
+        sessions_root=tmp_path,
+        spool_path=tmp_path / "spool.jsonl",
+    )
+    monkeypatch.setattr(backend, "health", lambda: True)
+    posted: list[dict] = []
+
+    class OKResp:
+        status_code = 200
+
+        def json(self) -> dict:
+            return {"results": [{"text": "a decision"}]}
+
+    monkeypatch.setattr(
+        backend._client, "post", lambda url, **kw: posted.append(kw["json"]) or OKResp()
+    )
+    backend.recall("storage", tags=["chat:chat-1"], kind="decision")
+    assert posted[0]["tags"] == ["chat:chat-1", "decision"]
+    assert posted[0]["tags_match"] == "all"
+
+    posted.clear()
+    backend.recall("storage", tags=["chat:chat-1"])
+    assert posted[0]["tags"] == ["chat:chat-1"]
+    assert posted[0]["tags_match"] == "any"
+
+
+def test_hindsight_recall_kind_falls_back_with_kind(tmp_path: Path) -> None:
+    backend = HindsightMemoryBackend(
+        base_url="http://127.0.0.1:65535",
+        bank="test",
+        chat_id="chat-1",
+        sessions_root=tmp_path,
+        spool_path=tmp_path / "spool.jsonl",
+    )
+    fb = backend._fallback
+    fb.retain([MemoryItem(content="decided on Postgres", tags=["decision"])])
+    fb.retain([MemoryItem(content="prefer tea", tags=["preference"])])
+    result = backend.recall("Postgres", kind="decision")
+    assert "Postgres" in result
+    assert "tea" not in result
 
 
 def test_hindsight_spool_flush_checks_success_and_keeps_invalid_lines(

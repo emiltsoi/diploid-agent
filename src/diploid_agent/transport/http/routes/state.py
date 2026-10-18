@@ -64,6 +64,7 @@ def register_state(
             chat_id=req.chat_id,
             query=req.query,
             tags=req.tags,
+            kind=req.kind,
             max_tokens=req.max_tokens,
             catch=False,
         )

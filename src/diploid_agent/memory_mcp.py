@@ -21,6 +21,8 @@ from typing import Any
 
 import httpx
 
+from diploid_agent.memory_models import MEMORY_KINDS
+
 DEFAULT_PROTOCOL_VERSION = "2024-11-05"
 
 
@@ -85,6 +87,13 @@ class MemoryMcpServer:
                     "properties": {
                         "query": {"type": "string"},
                         "tags": {"type": "array", "items": {"type": "string"}},
+                        "kind": {
+                            "type": "string",
+                            "enum": sorted(MEMORY_KINDS),
+                            "description": (
+                                "Typed route: restrict recall to a canonical memory class."
+                            ),
+                        },
                         "max_tokens": {"type": "integer"},
                     },
                     "required": ["query"],
@@ -161,6 +170,8 @@ class MemoryMcpServer:
                 "query": arguments.get("query", ""),
                 "tags": arguments.get("tags", []),
             }
+            if "kind" in arguments:
+                body["kind"] = arguments["kind"]
             if "max_tokens" in arguments:
                 body["max_tokens"] = int(arguments["max_tokens"])
             result = self._request("POST", "/recall", body)

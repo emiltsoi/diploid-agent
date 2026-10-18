@@ -191,6 +191,7 @@ class RecallRequest(BaseModel):
     chat_id: str
     query: str
     tags: list[str] = Field(default_factory=list)
+    kind: str | None = None
     max_tokens: int | None = None
 
 

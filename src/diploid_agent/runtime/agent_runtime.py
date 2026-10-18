@@ -959,10 +959,13 @@ class AgentRuntime(RuntimeAPI):
         chat_id: str,
         query: str,
         tags: list[str] | None = None,
+        kind: str | None = None,
         max_tokens: int | None = None,
     ) -> ChatResult:
         """Recall relevant memories for a query."""
-        return self._actions.recall(chat_id, query=query, tags=tags, max_tokens=max_tokens)
+        return self._actions.recall(
+            chat_id, query=query, tags=tags, kind=kind, max_tokens=max_tokens
+        )
 
     def retain(
         self,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import date, datetime
 from pathlib import Path
 
 from diploid_agent.cron_tools import count_appends, main
@@ -171,7 +172,8 @@ def test_ledger_lint_aged_settled_flags(tmp_path: Path, capsys) -> None:
     assert ledger_lint(_lint_args(led, stale_days=30)) == 0
     out = capsys.readouterr().out
     assert "findings" in out
-    assert "is 45d old" in out or "is 46d old" in out
+    days = (datetime.now().astimezone().date() - date(2026, 9, 1)).days
+    assert f"is {days}d old" in out
 
 
 def test_ledger_lint_ahead_drift_flags(tmp_path: Path, capsys, monkeypatch) -> None:

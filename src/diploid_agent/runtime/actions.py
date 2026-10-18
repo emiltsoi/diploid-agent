@@ -10,6 +10,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from diploid_agent.memory_models import MEMORY_KINDS
 from diploid_agent.models import ChatResult, WakeEvent
 from diploid_agent.plan.models import Plan, Task, TaskStatus
 from diploid_agent.plugins.contexts import PromoteContext, RetainContext
@@ -317,13 +318,21 @@ class RuntimeActions:
         chat_id: str,
         query: str,
         tags: list[str] | None = None,
+        kind: str | None = None,
         max_tokens: int | None = None,
     ) -> ChatResult:
         """Recall relevant memories for a query."""
+        if kind is not None and kind not in MEMORY_KINDS:
+            return ChatResult(
+                reply=(
+                    f"Unknown memory kind '{kind}'. Valid kinds: {', '.join(sorted(MEMORY_KINDS))}."
+                )
+            )
         max_tokens = max_tokens or self.config.harness.memory.hindsight.max_recall_tokens
         reply = self._memory_manager(chat_id).backend.recall(
             query,
             tags=tags,
+            kind=kind,
             max_tokens=max_tokens,
         )
         return ChatResult(reply=reply or "No relevant memory found.")

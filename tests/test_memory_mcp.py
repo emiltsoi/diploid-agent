@@ -166,3 +166,44 @@ def test_memory_mcp_omits_api_key_when_unset(tmp_path: Path, monkeypatch) -> Non
     )
     assert route.called
     assert "X-API-Key" not in route.calls[0].request.headers
+
+
+@respx.mock
+def test_memory_mcp_recall_passes_kind(tmp_path: Path, monkeypatch) -> None:
+    route = respx.post("http://127.0.0.1:4003/recall").mock(
+        return_value=Response(200, json={"reply": "ok"})
+    )
+    responses = _exchange(
+        monkeypatch,
+        [
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "memory_recall",
+                    "arguments": {"query": "x", "kind": "decision"},
+                },
+            },
+        ],
+    )
+    assert not responses[1]["result"]["isError"]
+    assert route.called
+    sent = json.loads(route.calls[0].request.content)
+    assert sent["kind"] == "decision"
+
+
+def test_memory_mcp_recall_kind_schema_is_closed(tmp_path: Path, monkeypatch) -> None:
+    responses = _exchange(
+        monkeypatch,
+        [
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+        ],
+    )
+    recall = next(t for t in responses[1]["result"]["tools"] if t["name"] == "memory_recall")
+    kinds = recall["inputSchema"]["properties"]["kind"]["enum"]
+    assert "decision" in kinds
+    assert "watchpoint" in kinds
+    assert len(kinds) == len(set(kinds))
