@@ -61,8 +61,8 @@ def _stub_block(
         f"- last durable intent: {intent or '(none recorded)'}\n"
         f"- last side effect: {side_effect or '(none recorded)'}\n"
         f"- message arriving at the fold: {arriving or '(none)'}\n"
-        "- durable record: chat_MEMORY.md + persona MEMORY.md; "
-        "live thread: chat_transcript.jsonl tail\n"
+        "- durable record: chat_MEMORY.md + persona MEMORY.md "
+        "+ chat_open_items.jsonl; live thread: chat_transcript.jsonl tail\n"
         f"{_MARKER_CLOSE}\n"
     )
 

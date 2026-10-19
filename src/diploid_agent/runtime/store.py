@@ -30,6 +30,7 @@ _CHAT_DURABLE_FILES = {
     "chat_MEMORY.md",
     "chat_PROMOTED.md",
     "chat_self_state.md",
+    "chat_open_items.jsonl",
     "chat_body_state.json",
     "hindsight-pending-retain.jsonl",
 }

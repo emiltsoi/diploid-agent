@@ -945,3 +945,29 @@ def test_dispatch_failed_wake_continues_and_updates_status(tmp_path: Path) -> No
     assert "failed" in result.reply.lower() or "subagent" in result.reply.lower()
 
     runtime.shutdown()
+
+
+def test_open_items_ledger_is_durable_across_session_copy(tmp_path: Path) -> None:
+    """chat_open_items.jsonl is a durable file: copy_session_dir neither
+    deletes it from the live chat dir nor copies it into archives — the
+    claims ledger persists in place across folds, like chat_MEMORY.md."""
+    store = ChatSessionStore(
+        sessions_root=tmp_path / "sessions",
+        store_path=tmp_path / "sessions.jsonl",
+        lock=threading.RLock(),
+        config=_make_config(tmp_path),
+        plugins_fn=lambda: type("P", (), {"durable_files": staticmethod(list)})(),
+        context_builder_fn=lambda: None,
+    )
+    active = tmp_path / "sessions" / "chat-1"
+    archive = tmp_path / "sessions" / "chat-1" / ".archive" / "1"
+    active.mkdir(parents=True)
+    ledger = active / "chat_open_items.jsonl"
+    ledger.write_text('{"_schema": "open_items/v1"}\n')
+    (active / "transient.tmp").write_text("transient")
+
+    store.copy_session_dir(active, archive)
+
+    assert ledger.exists()  # left in place
+    assert not (archive / "chat_open_items.jsonl").exists()  # not copied out
+    assert (archive / "transient.tmp").exists()  # non-durable files do copy
