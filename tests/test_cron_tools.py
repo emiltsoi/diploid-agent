@@ -239,3 +239,173 @@ def test_ledger_lint_cli_dispatch(tmp_path: Path) -> None:
     led.write_text("no stamps here\n")
     rc = main(["ledger-lint", "--file", str(led)])
     assert rc == 0
+
+
+def _oi_args(f: Path, stale_days: int = 14) -> argparse.Namespace:
+    return argparse.Namespace(file=str(f), stale_days=stale_days)
+
+
+def _oi_write(f: Path, *rows: dict) -> None:
+    f.write_text("".join(json.dumps(r) + "\n" for r in ({"_schema": "open_items/v1"}, *rows)))
+
+
+def test_open_items_lint_clean_ledger(tmp_path: Path, capsys) -> None:
+    from diploid_agent.cron_tools import open_items_lint
+
+    led = tmp_path / "chat_open_items.jsonl"
+    _oi_write(
+        led,
+        {"id": "oi-a", "claim": "ship the lint", "since": "2026-10-19", "status": "open"},
+        {
+            "id": "oi-b",
+            "claim": "land the producer",
+            "since": "2026-10-18",
+            "status": "done",
+            "checked_by": "pytest roundtrip",
+        },
+    )
+    assert open_items_lint(_oi_args(led)) == 0
+    out = capsys.readouterr().out
+    assert "(clean)" in out
+    assert "checked_by 'pytest roundtrip'" in out
+
+
+def test_open_items_lint_discharge_without_check_flags(tmp_path: Path, capsys) -> None:
+    """The close-check's mechanical tier: a discharged row must name its check."""
+    from diploid_agent.cron_tools import open_items_lint
+
+    led = tmp_path / "chat_open_items.jsonl"
+    _oi_write(
+        led,
+        {"id": "oi-bare", "claim": "did the thing", "since": "2026-10-19", "status": "done"},
+    )
+    assert open_items_lint(_oi_args(led)) == 0
+    out = capsys.readouterr().out
+    assert "oi-bare" in out
+    assert "without checked_by" in out
+
+
+def test_open_items_lint_schema_row_required(tmp_path: Path, capsys) -> None:
+    from diploid_agent.cron_tools import open_items_lint
+
+    led = tmp_path / "chat_open_items.jsonl"
+    led.write_text(
+        json.dumps({"id": "oi-x", "claim": "c", "since": "2026-10-19", "status": "open"}) + "\n"
+    )
+    assert open_items_lint(_oi_args(led)) == 0
+    assert "schema row missing" in capsys.readouterr().out
+
+
+def test_open_items_lint_malformed_and_missing_fields(tmp_path: Path, capsys) -> None:
+    from diploid_agent.cron_tools import open_items_lint
+
+    led = tmp_path / "chat_open_items.jsonl"
+    led.write_text(
+        '{"_schema": "open_items/v1"}\nnot json\n[1, 2]\n{"id": "oi-thin", "claim": "half a row"}\n'
+    )
+    assert open_items_lint(_oi_args(led)) == 0
+    out = capsys.readouterr().out
+    assert "unparseable JSON" in out
+    assert "not a JSON object" in out
+    assert "oi-thin: missing fields" in out
+
+
+def test_open_items_lint_duplicate_id_flags(tmp_path: Path, capsys) -> None:
+    from diploid_agent.cron_tools import open_items_lint
+
+    led = tmp_path / "chat_open_items.jsonl"
+    row = {"id": "oi-dup", "claim": "c", "since": "2026-10-19", "status": "open"}
+    _oi_write(led, row, dict(row))
+    assert open_items_lint(_oi_args(led)) == 0
+    assert "oi-dup: duplicate id" in capsys.readouterr().out
+
+
+def test_open_items_lint_bad_and_future_since(tmp_path: Path, capsys) -> None:
+    from diploid_agent.cron_tools import open_items_lint
+
+    led = tmp_path / "chat_open_items.jsonl"
+    _oi_write(
+        led,
+        {"id": "oi-bad", "claim": "c", "since": "not-a-date", "status": "open"},
+        {"id": "oi-future", "claim": "c", "since": "2999-01-01", "status": "open"},
+    )
+    assert open_items_lint(_oi_args(led)) == 0
+    out = capsys.readouterr().out
+    assert "oi-bad: unparsable since" in out
+    assert "oi-future: since 2999-01-01 is in the future" in out
+
+
+def test_open_items_lint_aged_open_is_info(tmp_path: Path, capsys) -> None:
+    from diploid_agent.cron_tools import open_items_lint
+
+    led = tmp_path / "chat_open_items.jsonl"
+    _oi_write(led, {"id": "oi-old", "claim": "c", "since": "2026-09-01", "status": "open"})
+    assert open_items_lint(_oi_args(led, stale_days=14)) == 0
+    out = capsys.readouterr().out
+    assert "(clean)" in out
+    assert "oi-old: open" in out and "aging claim" in out
+
+
+def test_open_items_lint_evidence_path(tmp_path: Path, capsys) -> None:
+    """Evidence is only linted when it looks like a path; a missing path is a
+    finding on a discharge, info on an open row."""
+    from diploid_agent.cron_tools import open_items_lint
+
+    led = tmp_path / "chat_open_items.jsonl"
+    _oi_write(
+        led,
+        {
+            "id": "oi-ev-done",
+            "claim": "c",
+            "since": "2026-10-19",
+            "status": "done",
+            "checked_by": "read-back",
+            "evidence": "./ghost.md",
+        },
+        {
+            "id": "oi-ev-open",
+            "claim": "c",
+            "since": "2026-10-19",
+            "status": "open",
+            "evidence": "./ghost2.md",
+        },
+        {
+            "id": "oi-ev-ref",
+            "claim": "c",
+            "since": "2026-10-19",
+            "status": "done",
+            "checked_by": "read-back",
+            "evidence": "885f32b",
+        },
+    )
+    assert open_items_lint(_oi_args(led)) == 0
+    out = capsys.readouterr().out
+    findings = out.split("== info ==")[0]
+    assert "oi-ev-done: evidence path missing" in findings
+    assert "oi-ev-open: evidence path missing" in out
+    assert "oi-ev-ref" not in findings
+
+
+def test_open_items_lint_unrecognized_status_is_info(tmp_path: Path, capsys) -> None:
+    from diploid_agent.cron_tools import open_items_lint
+
+    led = tmp_path / "chat_open_items.jsonl"
+    _oi_write(led, {"id": "oi-x", "claim": "c", "since": "2026-10-19", "status": "blocked"})
+    assert open_items_lint(_oi_args(led)) == 0
+    out = capsys.readouterr().out
+    assert "(clean)" in out
+    assert "unrecognized status 'blocked'" in out
+
+
+def test_open_items_lint_missing_file(tmp_path: Path, capsys) -> None:
+    from diploid_agent.cron_tools import open_items_lint
+
+    assert open_items_lint(_oi_args(tmp_path / "nope.jsonl")) == 1
+    assert "unreadable" in capsys.readouterr().err
+
+
+def test_open_items_lint_cli_dispatch(tmp_path: Path) -> None:
+    led = tmp_path / "chat_open_items.jsonl"
+    _oi_write(led)
+    rc = main(["open-items-lint", "--file", str(led)])
+    assert rc == 0

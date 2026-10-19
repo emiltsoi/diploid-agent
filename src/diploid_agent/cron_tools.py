@@ -236,6 +236,134 @@ def ledger_lint(args: argparse.Namespace) -> int:
     return 0
 
 
+# Statuses that assert the debt is settled. Per the verification-close-check
+# convention, a discharge is a done-claim and must name its check — a row in
+# one of these states without `checked_by` is a mechanical lint finding, not
+# a prose complaint.
+DISCHARGED_STATUSES = {"done", "discharged", "closed", "resolved", "complete", "completed"}
+
+# Platform-command literals that flag the stale-claim class (vesper's
+# `systemctl` plan surviving into a launchd world). Reported as info, never
+# a finding — a cross-seat claim can be true on the far side.
+_FOREIGN_LITERALS = {
+    "darwin": re.compile(r"\b(systemctl|systemd|apt-get)\b"),
+    "linux": re.compile(r"\b(launchctl|launchd)\b"),
+}
+
+
+def _looks_pathy(value: str) -> bool:
+    return value.startswith(("/", "~", ".")) or "/" in value
+
+
+def open_items_lint(args: argparse.Namespace) -> int:
+    """Diff a `chat_open_items.jsonl` claims ledger against checkable reality.
+
+    Phase 3 of the open-items reconciliation plan: the producer projects the
+    `## open-items` section into this file; this lint eats it. Findings are
+    mechanical — malformed rows, duplicate ids, bad dates, a discharge with
+    no `checked_by` (the close-check's first enforced surface), a done-row's
+    evidence path that exists nowhere. Ages, foreign-platform literals, and
+    unrecognized statuses land as info — the tool never calls prose a lie.
+    """
+    target = Path(args.file).expanduser()
+    try:
+        lines = target.read_text().splitlines()
+    except OSError:
+        print(f"open-items-lint: {target} unreadable", file=sys.stderr)
+        return 1
+
+    findings: list[str] = []
+    info: list[str] = []
+
+    rows: list[tuple[int, Any]] = []
+    for i, line in enumerate(lines, 1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            findings.append(f"line {i}: unparseable JSON")
+            continue
+        if not isinstance(row, dict):
+            findings.append(f"line {i}: not a JSON object")
+            continue
+        rows.append((i, row))
+
+    if rows and rows[0][1].get("_schema") != "open_items/v1":
+        findings.append('schema row missing or wrong — expected {"_schema": "open_items/v1"} first')
+    elif not rows:
+        findings.append("empty ledger — no schema row")
+
+    seen_ids: set[str] = set()
+    foreign = _FOREIGN_LITERALS.get(sys.platform)
+    for lineno, row in rows:
+        if "_schema" in row:
+            continue
+        label = row.get("id") or f"line {lineno}"
+        missing = [f for f in ("id", "claim", "since", "status") if f not in row]
+        if missing:
+            findings.append(f"{label}: missing fields {missing}")
+            continue
+
+        row_id = str(row["id"])
+        if row_id in seen_ids:
+            findings.append(f"{row_id}: duplicate id")
+        seen_ids.add(row_id)
+
+        status = str(row["status"])
+        discharged = status in DISCHARGED_STATUSES
+
+        since = str(row["since"])
+        try:
+            age = int((time.time() - time.mktime(time.strptime(since, "%Y-%m-%d"))) / DAY_SECONDS)
+        except ValueError:
+            findings.append(f"{row_id}: unparsable since: {since!r}")
+        else:
+            if age < 0:
+                findings.append(f"{row_id}: since {since} is in the future")
+            elif status == "open" and age > args.stale_days:
+                info.append(f"{row_id}: open {age}d (>{args.stale_days}d) — aging claim")
+
+        if discharged:
+            if not str(row.get("checked_by", "")).strip():
+                findings.append(
+                    f"{row_id}: status {status!r} without checked_by — a discharge must name its check"
+                )
+            else:
+                info.append(f"{row_id}: discharged, checked_by {row['checked_by']!r}")
+        elif status != "open":
+            info.append(
+                f"{row_id}: unrecognized status {status!r} — not linted as open or discharged"
+            )
+
+        evidence = str(row.get("evidence", "")).strip()
+        if evidence and _looks_pathy(evidence):
+            ev_path = Path(evidence).expanduser()
+            exists = ev_path.exists() or (target.parent / evidence).exists()
+            if not exists:
+                msg = f"{row_id}: evidence path missing: {evidence!r}"
+                if discharged:
+                    findings.append(msg)
+                else:
+                    info.append(msg)
+
+        if foreign is not None:
+            lit = foreign.search(str(row["claim"]))
+            if lit:
+                info.append(
+                    f"{row_id}: claim mentions {lit.group(1)!r} — foreign-platform literal "
+                    f"(host is {sys.platform}); owner judges"
+                )
+
+    print(f"open-items-lint: {target.name}")
+    print("== findings ==")
+    print("\n".join(f"- {f}" for f in findings) or "(clean)")
+    if info:
+        print("== info ==")
+        print("\n".join(f"- {i}" for i in info))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="diploid_agent.cron_tools")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -268,6 +396,13 @@ def main(argv: list[str] | None = None) -> int:
     ll.add_argument("--probe", action="store_true", help="Ping IPv4 literals for reachability")
     ll.add_argument("--ping-timeout", type=int, default=2)
     ll.set_defaults(func=ledger_lint)
+
+    oi = sub.add_parser(
+        "open-items-lint", help="Diff a chat_open_items.jsonl claims ledger against reality"
+    )
+    oi.add_argument("--file", required=True, help="Ledger to lint (chat_open_items.jsonl)")
+    oi.add_argument("--stale-days", type=int, default=14, help="Age threshold for open claims")
+    oi.set_defaults(func=open_items_lint)
 
     args = parser.parse_args(argv)
     return int(args.func(args))
