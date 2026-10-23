@@ -7,6 +7,7 @@ agnostic and the diff stays small.
 
 Windows coverage:
 - ``fcntl.flock`` (advisory file locks)      → ``msvcrt.locking`` byte-range lock
+- ``fcntl.lockf`` (byte-range locks)         → ``msvcrt.locking`` at range
 - ``os.kill(pid, 0)`` liveness probe         → ``OpenProcess`` + exit code
 - ``os.killpg`` process-group kill           → ``taskkill /T /F`` process tree
 - ``os.getuid``                              → absent (caller must tolerate -1)
@@ -29,9 +30,16 @@ import tempfile
 from pathlib import Path
 
 IS_WINDOWS = sys.platform == "win32"
+IS_DARWIN = sys.platform == "darwin"
 
 _WIN_ILLEGAL_CHARS = '<>:"|?*'
-IS_DARWIN = sys.platform == "darwin"
+# NTFS rejects these basenames outright, case-insensitive and with or
+# without an extension ("con.txt" is as illegal as "con").
+_WIN_RESERVED_NAMES = (
+    {"CON", "NUL", "AUX", "PRN"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
 
 __all__ = [
     "IS_DARWIN",
@@ -48,7 +56,7 @@ __all__ = [
 
 
 # --------------------------------------------------------------------------
-# fcntl.flock
+# fcntl.flock / lockf
 # --------------------------------------------------------------------------
 if IS_WINDOWS:
     import msvcrt
@@ -60,8 +68,15 @@ if IS_WINDOWS:
     # unchanged: every locker targets the same byte.
     _LOCK_OFFSET = 0x7FFF0000
 
-    def _flock(fd: int, operation: int) -> None:
-        """Approximate fcntl.flock with msvcrt.locking.
+    _fcntl_flags = {
+        "LOCK_SH": 1,
+        "LOCK_EX": 2,
+        "LOCK_NB": 4,
+        "LOCK_UN": 8,
+    }
+
+    def _locking_op(operation: int) -> int:
+        """Map LOCK_* flags to the msvcrt.locking mode.
 
         LOCK_EX/LOCK_SH both map to an exclusive lock (msvcrt has no shared
         mode); LOCK_NB chooses the non-blocking variant, which raises
@@ -71,20 +86,37 @@ if IS_WINDOWS:
         practice.
         """
         if operation & _fcntl_flags["LOCK_UN"]:
-            op = msvcrt.LK_UNLCK
-        elif operation & _fcntl_flags["LOCK_NB"]:
-            op = msvcrt.LK_NBLCK
-        else:
-            op = msvcrt.LK_LOCK
-        os.lseek(fd, _LOCK_OFFSET, os.SEEK_SET)
-        msvcrt.locking(fd, op, 1)
+            return msvcrt.LK_UNLCK
+        if operation & _fcntl_flags["LOCK_NB"]:
+            return msvcrt.LK_NBLCK
+        return msvcrt.LK_LOCK
 
-    _fcntl_flags = {
-        "LOCK_SH": 1,
-        "LOCK_EX": 2,
-        "LOCK_NB": 4,
-        "LOCK_UN": 8,
-    }
+    def _flock(fd: int, operation: int) -> None:
+        """Approximate fcntl.flock with msvcrt.locking."""
+        # msvcrt.locking acts at the current file position; POSIX flock does
+        # not move it. Save and restore so a caller who forgets to re-seek
+        # does not write at the dedicated lock byte.
+        pos = os.lseek(fd, 0, os.SEEK_CUR)
+        try:
+            os.lseek(fd, _LOCK_OFFSET, os.SEEK_SET)
+            msvcrt.locking(fd, _locking_op(operation), 1)
+        finally:
+            os.lseek(fd, pos, os.SEEK_SET)
+
+    def _lockf(fd: int, operation: int, length: int, start: int, whence: int) -> None:
+        """POSIX lockf: byte-range lock. ``length == 0`` (lock to EOF) has no
+        msvcrt.locking equivalent and raises instead of silently locking the
+        wrong region."""
+        if not length:
+            raise NotImplementedError(
+                "fcntl.lockf(length=0) lock-to-EOF has no Windows equivalent"
+            )
+        pos = os.lseek(fd, 0, os.SEEK_CUR)
+        try:
+            os.lseek(fd, start, whence)
+            msvcrt.locking(fd, _locking_op(operation), length)
+        finally:
+            os.lseek(fd, pos, os.SEEK_SET)
 
     class _FcntlModule:
         LOCK_SH = _fcntl_flags["LOCK_SH"]
@@ -97,8 +129,14 @@ if IS_WINDOWS:
             _flock(fd, operation)
 
         @staticmethod
-        def lockf(fd: int, operation: int, *args) -> None:
-            _flock(fd, operation)
+        def lockf(
+            fd: int,
+            operation: int,
+            length: int = 0,
+            start: int = 0,
+            whence: int = os.SEEK_SET,
+        ) -> None:
+            _lockf(fd, operation, length, start, whence)
 
     fcntl = _FcntlModule()
 else:
@@ -190,7 +228,7 @@ def safe_dir_name(name: str) -> str:
     POSIX keeps the historic ``/``→``_`` mapping so existing session dirs
     keep their names. Windows additionally strips NTFS-illegal characters —
     ``:`` alone makes ``mesh:hermes`` an ADS-syntax path — plus trailing
-    dots/spaces, which Explorer and most APIs reject.
+    dots/spaces and reserved device basenames (``CON``, ``COM3``, …).
     """
     safe = name.replace("/", "_")
     if IS_WINDOWS:
@@ -200,6 +238,8 @@ def safe_dir_name(name: str) -> str:
             )
             or "_"
         )
+        if safe.split(".", 1)[0].upper() in _WIN_RESERVED_NAMES:
+            safe = "_" + safe
     return safe
 
 
