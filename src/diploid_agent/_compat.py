@@ -108,9 +108,7 @@ if IS_WINDOWS:
         msvcrt.locking equivalent and raises instead of silently locking the
         wrong region."""
         if not length:
-            raise NotImplementedError(
-                "fcntl.lockf(length=0) lock-to-EOF has no Windows equivalent"
-            )
+            raise NotImplementedError("fcntl.lockf(length=0) lock-to-EOF has no Windows equivalent")
         pos = os.lseek(fd, 0, os.SEEK_CUR)
         try:
             os.lseek(fd, start, whence)

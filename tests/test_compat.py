@@ -42,7 +42,7 @@ def test_safe_dir_name_posix_mapping() -> None:
 def test_safe_dir_name_windows_illegal_chars() -> None:
     assert safe_dir_name("mesh:hermes") == "mesh_hermes"
     assert safe_dir_name("a<b>c") == "a_b_c"
-    assert safe_dir_name('q|x?y') == "q_x_y"
+    assert safe_dir_name("q|x?y") == "q_x_y"
     # trailing dots/spaces are rejected by Explorer and most APIs
     assert safe_dir_name("room.") == "room"
     assert safe_dir_name("room. ") == "room"
@@ -55,7 +55,10 @@ def test_safe_dir_name_windows_reserved_names() -> None:
     for reserved in ("con", "CON", "nul", "aux", "prn", "com1", "COM9", "lpt3"):
         result = safe_dir_name(reserved)
         assert result.upper().split(".", 1)[0] not in {
-            "CON", "NUL", "AUX", "PRN",
+            "CON",
+            "NUL",
+            "AUX",
+            "PRN",
             *(f"COM{i}" for i in range(1, 10)),
             *(f"LPT{i}" for i in range(1, 10)),
         }, f"{reserved!r} mapped to reserved name {result!r}"
