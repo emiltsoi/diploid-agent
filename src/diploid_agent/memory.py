@@ -154,7 +154,7 @@ class MemoryManager:
                 "total": 0,
                 "exceeded": False,
             }
-        total = len(path.read_text()) if path.exists() else 0
+        total = len(path.read_text(encoding="utf-8")) if path.exists() else 0
         limit = self.memory_config.max_chat_memory_chars
         return {"path": path, "limit": limit, "total": total, "exceeded": total > limit}
 
@@ -215,7 +215,7 @@ class MemoryManager:
         if not path.exists():
             return []
         entries: list[dict[str, Any]] = []
-        for line in path.read_text().splitlines():
+        for line in path.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 try:
                     entries.append(json.loads(line))
@@ -236,7 +236,7 @@ class MemoryManager:
         path = self._transcript_path
         path.parent.mkdir(parents=True, exist_ok=True)
         assistant_content = reply if reply else (notice or "")
-        with open(path, "a") as f:
+        with open(path, "a", encoding="utf-8") as f:
             if system_note:
                 f.write(json.dumps({"role": "system", "content": system_note}) + "\n")
             f.write(json.dumps({"role": "user", "content": user_message}) + "\n")

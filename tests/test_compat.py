@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -205,3 +207,29 @@ def test_getuid_returns_int() -> None:
 
 def test_short_temp_dir_exists() -> None:
     assert short_temp_dir().is_dir()
+
+
+# --------------------------------------------------------------------------
+# control-channel degradation (no AF_UNIX)
+# --------------------------------------------------------------------------
+def test_control_listener_degrades_without_af_unix(monkeypatch, caplog) -> None:
+    """Hosts without socket.AF_UNIX (some Windows builds) must not reach
+    _bind/_probe_socket: ``Path()`` == ``Path(".")`` whose ``exists()`` is
+    true, and the probe would die on ``socket.AF_UNIX`` AttributeError.
+    Regression test for the boot-log AttributeError on win32."""
+    import logging
+
+    from diploid_agent.acp_client.control import ControlListener
+
+    monkeypatch.delattr(socket, "AF_UNIX", raising=False)
+    listener = ControlListener(
+        service_name="test-degraded.service",
+        on_service_restart=lambda service, reason: None,
+        control_timeout=30.0,
+        watchdog_timeout=30.0,
+    )
+    with caplog.at_level(logging.ERROR):
+        listener.ensure_listening()  # must be a no-op, no bind attempt
+    listener.close()
+    assert listener.socket_path == Path()
+    assert not any("Failed to bind" in r.message for r in caplog.records)

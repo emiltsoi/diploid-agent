@@ -42,7 +42,7 @@ def load_message_registry(path: Path) -> dict[int, dict[str, Any]]:
     if not path.exists():
         return {}
     entries: dict[int, dict[str, Any]] = {}
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         try:
@@ -100,7 +100,7 @@ class ChatSessionStore:
     def load_store(self) -> None:
         if not self.store_path.exists():
             return
-        for line in self.store_path.read_text().splitlines():
+        for line in self.store_path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
             try:
@@ -114,7 +114,7 @@ class ChatSessionStore:
     def append_record(self, record: SessionRecord) -> None:
         with self._lock:
             self.store_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.store_path, "a") as f:
+            with open(self.store_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record.to_dict(), default=str) + "\n")
 
     def compact_store(self) -> None:
@@ -125,7 +125,7 @@ class ChatSessionStore:
                 for record in state.sessions.values():
                     lines.append(json.dumps(record.to_dict(), default=str) + "\n")
             tmp_path = self.store_path.with_suffix(".jsonl.new")
-            tmp_path.write_text("".join(lines))
+            tmp_path.write_text("".join(lines), encoding="utf-8")
             atomic_replace(tmp_path, self.store_path)
 
     # ---------------------------------------------------------------- session dirs

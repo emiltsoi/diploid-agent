@@ -49,7 +49,7 @@ class WakeQueue:
         if not self._path.exists():
             return
         try:
-            text = self._path.read_text()
+            text = self._path.read_text(encoding="utf-8")
         except OSError:
             logger.warning("Could not read wake queue at %s", self._path)
             return
@@ -67,14 +67,14 @@ class WakeQueue:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         lines = [json.dumps(asdict(e), default=str) + "\n" for e in self._in_memory.values()]
         tmp = self._path.with_suffix(self._path.suffix + ".new")
-        tmp.write_text("".join(lines))
+        tmp.write_text("".join(lines), encoding="utf-8")
         atomic_replace(tmp, self._path)
 
     @contextmanager
     def _transaction(self):
         """Acquire the cross-process lock, re-read the file, yield, then save."""
         self._lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._lock, open(self._lock_path, "a+") as lock_file:
+        with self._lock, open(self._lock_path, "a+", encoding="utf-8") as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             try:
                 self._load()
