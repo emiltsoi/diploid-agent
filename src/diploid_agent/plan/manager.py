@@ -57,7 +57,7 @@ class PlanManager:
         if not self._path.exists():
             return
         try:
-            text = self._path.read_text()
+            text = self._path.read_text(encoding="utf-8")
         except OSError:
             logger.warning("Could not read plan store at %s", self._path)
             return
@@ -75,14 +75,14 @@ class PlanManager:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         lines = [json.dumps(plan.to_dict(), default=str) + "\n" for plan in self._plans.values()]
         tmp = self._path.with_suffix(self._path.suffix + ".new")
-        tmp.write_text("".join(lines))
+        tmp.write_text("".join(lines), encoding="utf-8")
         atomic_replace(tmp, self._path)
 
     @contextmanager
     def _transaction(self):
         """Acquire the cross-process lock, re-read, yield, then save."""
         self._lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._lock, open(self._lock_path, "a+") as lock_file:
+        with self._lock, open(self._lock_path, "a+", encoding="utf-8") as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             try:
                 self._load()

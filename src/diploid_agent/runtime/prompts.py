@@ -295,7 +295,7 @@ class RuntimePrompts:
         if not path or not path.exists():
             return None
 
-        total = len(path.read_text())
+        total = len(path.read_text(encoding="utf-8"))
         previous = record.chat_memory_exceeded
         exceeded = total > cap
         record.chat_memory_exceeded = exceeded
@@ -340,7 +340,7 @@ class RuntimePrompts:
         if not path.exists():
             return None
 
-        total = len(path.read_text())
+        total = len(path.read_text(encoding="utf-8"))
         previous = record.persona_memory_exceeded
         exceeded = total > cap
         record.persona_memory_exceeded = exceeded

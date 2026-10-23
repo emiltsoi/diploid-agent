@@ -267,7 +267,7 @@ class ShortTermMemory:
         if older:
             path = self._summary_path(older)
             if path.exists():
-                summary = path.read_text()
+                summary = path.read_text(encoding="utf-8")
             else:
                 # Fall back to the most recent summary in the cache directory.
                 cache_dir = path.parent
@@ -278,7 +278,7 @@ class ShortTermMemory:
                         reverse=True,
                     )
                     for p in paths:
-                        summary = p.read_text()
+                        summary = p.read_text(encoding="utf-8")
                         if summary:
                             break
 
@@ -304,7 +304,7 @@ class ShortTermMemory:
         """Return a cached summary of the older short-term entries, or generate one."""
         path = self._summary_path(entries)
         if path.exists():
-            return path.read_text()
+            return path.read_text(encoding="utf-8")
 
         lines = []
         for entry in entries:
@@ -330,5 +330,5 @@ class ShortTermMemory:
             summary = _trim_to_section(text, self._config.max_short_term_chars)
 
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(summary)
+        path.write_text(summary, encoding="utf-8")
         return summary

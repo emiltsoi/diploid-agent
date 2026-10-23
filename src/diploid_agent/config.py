@@ -761,7 +761,7 @@ class Config(BaseModel):
         config_path: Path,
         secrets_path: Path | None = None,
     ) -> Config:
-        with open(config_path, "r") as f:
+        with open(config_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
 
         if secrets_path is None:
@@ -804,7 +804,7 @@ def _load_dotenv(path: Path) -> dict[str, str]:
     result: dict[str, str] = {}
     if not path.exists():
         return result
-    for raw in path.read_text().splitlines():
+    for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue

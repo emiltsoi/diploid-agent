@@ -104,7 +104,7 @@ class DispatchStore:
         if self._path is None or not self._path.exists():
             return
         with self._lock:
-            for line in self._path.read_text().splitlines():
+            for line in self._path.read_text(encoding="utf-8").splitlines():
                 if not line.strip():
                     continue
                 try:
@@ -144,7 +144,7 @@ class DispatchStore:
             for dispatch in self._dispatches.values()
         ]
         tmp_path = self._path.with_suffix(self._path.suffix + ".new")
-        tmp_path.write_text("".join(lines))
+        tmp_path.write_text("".join(lines), encoding="utf-8")
         atomic_replace(tmp_path, self._path)
 
     def add(

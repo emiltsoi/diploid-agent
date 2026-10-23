@@ -187,14 +187,14 @@ class FileMemoryBackend(MemoryBackend):
 
     def append_transcript(self, user_message: str, assistant_reply: str) -> None:
         self._session_dir.mkdir(parents=True, exist_ok=True)
-        with open(self._transcript_path, "a") as f:
+        with open(self._transcript_path, "a", encoding="utf-8") as f:
             f.write(json.dumps({"role": "user", "content": user_message}) + "\n")
             f.write(json.dumps({"role": "assistant", "content": assistant_reply}) + "\n")
 
     def append_system_note(self, text: str) -> None:
         """Append a single system/mesh note to the transcript."""
         self._session_dir.mkdir(parents=True, exist_ok=True)
-        with open(self._transcript_path, "a") as f:
+        with open(self._transcript_path, "a", encoding="utf-8") as f:
             f.write(json.dumps({"role": "system", "content": text}) + "\n")
 
     def retain(self, items: list[MemoryItem]) -> None:
@@ -210,14 +210,14 @@ class FileMemoryBackend(MemoryBackend):
             tag_str = ", ".join(item.tags)
             blocks.append(f"## {ts} ({tag_str})\n\n{item.content}\n")
         if blocks:
-            with open(self.memory_path, "a") as f:
+            with open(self.memory_path, "a", encoding="utf-8") as f:
                 f.write("\n".join(blocks) + "\n")
 
     def load_memory_text(self) -> str:
         path = self.memory_path
         if not path.exists():
             return ""
-        return path.read_text()
+        return path.read_text(encoding="utf-8")
 
     def _load_memory_text(self) -> str:
         """Alias for ``load_memory_text`` kept for existing callers."""
@@ -227,7 +227,7 @@ class FileMemoryBackend(MemoryBackend):
         path = self._archive_path
         if not path.exists():
             return ""
-        return path.read_text()
+        return path.read_text(encoding="utf-8")
 
     def _keyword_score(self, query: str, text: str) -> float:
         words = [w.lower() for w in re.findall(r"\w+", query) if len(w) > 2]
@@ -429,7 +429,7 @@ class HindsightMemoryBackend(MemoryBackend):
             # slow Hindsight.
             return
         try:
-            with self._spool_lock, open(self._spool_path, "r+") as f:
+            with self._spool_lock, open(self._spool_path, "r+", encoding="utf-8") as f:
                 lines = f.readlines()
             if not lines:
                 return
@@ -481,7 +481,7 @@ class HindsightMemoryBackend(MemoryBackend):
                 # _flush_lock serializes passes and _spool() only appends, so
                 # the snapshot indices still address the same lines; anything
                 # appended mid-flush sits past them and is preserved.
-                with self._spool_lock, open(self._spool_path, "r+") as f:
+                with self._spool_lock, open(self._spool_path, "r+", encoding="utf-8") as f:
                     current = f.readlines()
                     remaining = [line for i, line in enumerate(current) if i not in flushed]
                     f.seek(0)
@@ -491,7 +491,7 @@ class HindsightMemoryBackend(MemoryBackend):
             self._flush_lock.release()
 
     def _spool(self, items: list[MemoryItem]) -> None:
-        with self._spool_lock, open(self._spool_path, "a") as f:
+        with self._spool_lock, open(self._spool_path, "a", encoding="utf-8") as f:
             f.writelines(json.dumps(item.to_hindsight()) + "\n" for item in items)
 
     def _dead_letter(self, item: dict[str, Any], *, reason: str) -> None:
@@ -501,7 +501,7 @@ class HindsightMemoryBackend(MemoryBackend):
             "reason": reason,
             "item": item,
         }
-        with self._dead_letter_lock, open(self._dead_letter_path, "a") as f:
+        with self._dead_letter_lock, open(self._dead_letter_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, default=str) + "\n")
 
     @staticmethod
