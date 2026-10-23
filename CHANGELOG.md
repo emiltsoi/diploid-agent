@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.15 — 2026-10-23
+
+### Added
+
+- **Native Windows support** through a single `_compat` shim seam
+  (5f3201a): every Unix-only API — `fcntl` locking, `AF_UNIX`,
+  `pid_alive`, `safe_dir_name`, atomic replace, credentials
+  discovery — sits behind one import so call sites stay
+  platform-agnostic. `msvcrt.locking` locks a dedicated byte at
+  `0x7FFF0000` so readers of lock-file payloads never block,
+  `lockf(length=0)` raises loudly instead of silently locking the
+  wrong region, and `test_compat.py` covers the contract POSIX-side
+  (16a6165, d2addf6).
+
+### Fixed
+
+- **Telegram command args** now normalize smart-typography dashes
+  (en/em/non-breaking/minus) at the start of each token to `--`
+  (257be30). Mobile clients were turning `/model --in-place` into
+  `—in-place`, an unrecognized flag that silently merged into the
+  model name. Only the leading dash-run is remapped, so prose dashes
+  in free-text args survive.
+
 ## 0.6.14 — 2026-10-22
 
 ### Added
