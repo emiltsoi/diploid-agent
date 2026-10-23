@@ -11,6 +11,7 @@ import re
 import time
 from pathlib import Path
 
+from diploid_agent._compat import safe_dir_name
 from diploid_agent.config import Config
 from diploid_agent.dispatch import Dispatch, DispatchStatus
 from diploid_agent.models import PartialTurn, SessionRecord
@@ -170,7 +171,7 @@ class PromptAnchors:
 
     def _subagent_result_path(self, chat_id: str, dispatch_id: str) -> Path:
         """Return the absolute path where a subagent full result should live."""
-        safe = chat_id.replace("/", "_")
+        safe = safe_dir_name(chat_id)
         return (
             Path(self.config.harness.sessions_root).expanduser()
             / safe

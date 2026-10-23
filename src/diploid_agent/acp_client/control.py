@@ -17,6 +17,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from diploid_agent._compat import IS_WINDOWS, getuid, short_temp_dir
 from diploid_agent.acp_client.errors import AcpTransportError
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,22 @@ class ControlListener:
         self._on_service_restart = on_service_restart
         self._control_timeout = control_timeout
         self._watchdog_timeout = watchdog_timeout
+        if not hasattr(socket, "AF_UNIX"):
+            # Control channel requires Unix sockets (Windows before 17063 or
+            # other POSIX-less hosts): degrade to no-listener rather than
+            # failing the transport — restarts just won't be intercepted.
+            logger.warning(
+                "AF_UNIX unavailable on this platform; ACP control channel disabled",
+            )
+            self._control_listener_running = False
+            self._control_socket = None
+            self._control_socket_dir = Path()
+            self._control_socket_path = Path()
+            self._bound_stat = None
+            self._token = ""
+            self._token_adopted = False
+            self._control_listener_thread = None
+            return
         safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", service_name or "unknown.service")
         # DIPLOID_CONTROL_DIR scopes the per-service socket namespace (test
         # isolation: parallel runs get separate dirs). The /tmp default keeps
@@ -95,7 +112,7 @@ class ControlListener:
             # overflows it. Fall back to a deterministic short path so
             # children still rendezvous on the same service name + base.
             digest = hashlib.sha256(os.fsencode(socket_path)).hexdigest()[:16]
-            base = Path("/tmp")
+            base = short_temp_dir()
             dirname = f"diploid-ctl-{digest}"
             socket_path = base / dirname / "control.sock"
         self._control_socket_dir = base / dirname
@@ -236,11 +253,12 @@ class ControlListener:
         except OSError as exc:
             raise ControlSocketInUseError(self._control_socket_path) from exc
 
-        if st.st_uid != os.getuid():
+        uid = getuid()
+        if uid >= 0 and st.st_uid != uid:
             raise ControlSocketInUseError(self._control_socket_path)
 
         current_mode = stat.S_IMODE(st.st_mode)
-        if current_mode != _CONTROL_DIR_MODE:
+        if not IS_WINDOWS and current_mode != _CONTROL_DIR_MODE:
             try:
                 os.chmod(path, _CONTROL_DIR_MODE)
             except OSError as exc:

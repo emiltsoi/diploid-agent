@@ -1,6 +1,8 @@
 """Tests for the Telegram long-polling ingress."""
 
 import json
+import os
+import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -3469,7 +3471,8 @@ def test_safe_filename_strips_path_components() -> None:
     from diploid_agent.transport.telegram.poller import _safe_filename
 
     assert _safe_filename("../../etc/passwd", fallback="f") == "passwd"
-    assert _safe_filename("..\\win\\evil.exe", fallback="f") == "win_evil.exe"
+    expected = "evil.exe" if sys.platform == "win32" else "win_evil.exe"
+    assert _safe_filename("..\\win\\evil.exe", fallback="f") == expected
     assert _safe_filename(".../..", fallback="f") == "f"
     assert _safe_filename("normal-name_v2.jpg", fallback="f") == "normal-name_v2.jpg"
 
@@ -3606,6 +3609,21 @@ def test_extract_say_block() -> None:
     assert extract_say_block("```say\n\n```") == ("```say\n\n```", None)
 
 
+def _cat_cmd() -> str:
+    """A `cat`-equivalent tts command on platforms without a POSIX `cat`."""
+    if sys.platform == "win32":
+        # Forward slashes: shlex.split would eat backslashes in the exe path.
+        return (
+            sys.executable.replace("\\", "/")
+            + ' -c "import sys;sys.stdout.buffer.write(open(sys.argv[1],'
+            + chr(39)
+            + "rb"
+            + chr(39)
+            + ').read())"'
+        )
+    return "cat"
+
+
 def test_say_block_sends_voice_via_command_provider(tmp_path: Path) -> None:
     ogg = tmp_path / "voice.ogg"
     ogg.write_bytes(b"OggS" + b"\x00" * 64)
@@ -3614,7 +3632,9 @@ def test_say_block_sends_voice_via_command_provider(tmp_path: Path) -> None:
         harness_url="http://localhost",
         state_dir=tmp_path / ".poller-placeholders",
         tts_provider="command",
-        tts_command=f"cat {ogg}",
+        # as_posix: the command template goes through shlex.split, which
+        # would eat the backslashes in a Windows path.
+        tts_command=f"{_cat_cmd()} {ogg.as_posix()}",
     )
     calls: list[tuple[str, dict, dict]] = []
 
@@ -3642,7 +3662,7 @@ def test_say_block_non_ogg_uses_sendaudio(tmp_path: Path) -> None:
         harness_url="http://localhost",
         state_dir=tmp_path / ".poller-placeholders",
         tts_provider="command",
-        tts_command=f"cat {wav}",
+        tts_command=f"{_cat_cmd()} {wav.as_posix()}",
     )
     calls: list[str] = []
     poller._api = lambda method, **kw: (
@@ -4011,7 +4031,7 @@ def test_piper_voice_cache_idle_eviction(tmp_path: Path, monkeypatch: Any) -> No
         out = voice_mod._synthesize_piper("hi", "/new.onnx", tmp_path)
         assert out is not None
         assert "/stale.onnx" not in voice_mod._voice_cache
-        assert loads == ["/new.onnx"]
+        assert loads == [os.path.normpath("/new.onnx")]
     finally:
         voice_mod._voice_cache.clear()
 

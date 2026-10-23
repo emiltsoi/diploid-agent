@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
-import os
 import time
 from typing import Any
 
@@ -322,7 +321,10 @@ def test_call_fails_fast_when_reader_dead() -> None:
 
 def test_kill_process_group_latches_terminated(monkeypatch: Any) -> None:
     transport = _make_transport()
-    monkeypatch.setattr(os, "killpg", lambda *args: None)
+    monkeypatch.setattr(
+        "diploid_agent.acp_client.transport.kill_process_tree",
+        lambda *args: None,
+    )
     transport._kill_process_group(FakeProcess())
     assert transport._terminated is True
 

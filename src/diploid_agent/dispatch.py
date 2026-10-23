@@ -11,6 +11,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+from diploid_agent._compat import atomic_replace
+
 
 class DispatchStatus(Enum):
     PENDING = "pending"
@@ -143,7 +145,7 @@ class DispatchStore:
         ]
         tmp_path = self._path.with_suffix(self._path.suffix + ".new")
         tmp_path.write_text("".join(lines))
-        tmp_path.replace(self._path)
+        atomic_replace(tmp_path, self._path)
 
     def add(
         self,

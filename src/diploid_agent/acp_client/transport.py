@@ -8,13 +8,13 @@ import json
 import logging
 import os
 import queue
-import signal
 import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from diploid_agent._compat import kill_process_tree, subprocess_session_kwargs
 from diploid_agent.acp_client.callbacks import AcpCallbackPump
 from diploid_agent.acp_client.control import ControlSocketInUseError
 from diploid_agent.acp_client.errors import (
@@ -510,8 +510,8 @@ class AcpTransport:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
-            start_new_session=True,
             limit=self._stream_limit,
+            **subprocess_session_kwargs(),
         )
 
         lifecycle_log = getattr(self._client, "_lifecycle_log", None)
@@ -820,7 +820,7 @@ class AcpTransport:
         self._terminated = True
         try:
             proc.kill()
-            os.killpg(proc.pid, signal.SIGKILL)
+            kill_process_tree(proc.pid)
         except (ProcessLookupError, OSError):
             # Already gone or process group no longer valid.
             pass

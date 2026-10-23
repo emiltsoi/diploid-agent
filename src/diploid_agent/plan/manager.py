@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import json
 import logging
 import threading
@@ -12,6 +11,7 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
 
+from diploid_agent._compat import atomic_replace, fcntl
 from diploid_agent.plan.models import Plan, PlanStatus, Task, TaskStatus
 
 logger = logging.getLogger(__name__)
@@ -76,7 +76,7 @@ class PlanManager:
         lines = [json.dumps(plan.to_dict(), default=str) + "\n" for plan in self._plans.values()]
         tmp = self._path.with_suffix(self._path.suffix + ".new")
         tmp.write_text("".join(lines))
-        tmp.replace(self._path)
+        atomic_replace(tmp, self._path)
 
     @contextmanager
     def _transaction(self):

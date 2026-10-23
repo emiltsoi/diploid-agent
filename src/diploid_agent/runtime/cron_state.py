@@ -6,7 +6,6 @@ dedicated ``.lock`` file, read-modify-atomic-replace transactions.
 
 from __future__ import annotations
 
-import fcntl
 import json
 import logging
 import threading
@@ -15,6 +14,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from pydantic import BaseModel, Field
+
+from diploid_agent._compat import atomic_replace, fcntl
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ class CronStateStore:
         lines = [state.model_dump_json() + "\n" for state in self._in_memory.values()]
         tmp = self._path.with_suffix(self._path.suffix + ".new")
         tmp.write_text("".join(lines))
-        tmp.replace(self._path)
+        atomic_replace(tmp, self._path)
 
     @contextmanager
     def _transaction(self, save: bool = True):

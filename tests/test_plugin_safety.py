@@ -6,7 +6,8 @@ from diploid_agent.config import Config, DiploidConfig, HarnessConfig, PersonaCo
 from diploid_agent.runtime.agent_runtime import AgentRuntime
 
 
-def test_startup_disables_broken_plugin(tmp_path: Path) -> None:
+def test_startup_disables_broken_plugin(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("WINDSURF_API_KEY", "test-key")
     config = Config(
         diploid=DiploidConfig(bin="/bin/echo", model="swe-1-7"),
         persona=PersonaConfig(name="test", profile_root=tmp_path / "persona"),

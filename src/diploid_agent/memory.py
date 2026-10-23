@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from diploid_agent._compat import safe_dir_name
 from diploid_agent.memory_backends import (
     FileMemoryBackend,
     HindsightMemoryBackend,
@@ -136,7 +137,7 @@ class MemoryManager:
 
     @property
     def _transcript_path(self) -> Path:
-        safe = self.chat_id.replace("/", "_")
+        safe = safe_dir_name(self.chat_id)
         return self.sessions_root / safe / "chat_transcript.jsonl"
 
     def chat_memory_status(self) -> dict[str, Any]:
@@ -452,7 +453,7 @@ class MemoryManager:
         )
 
         try:
-            cwd = self.sessions_root / self.chat_id.replace("/", "_") / ".summarize"
+            cwd = self.sessions_root / safe_dir_name(self.chat_id) / ".summarize"
             request = summary_request(prompt, cwd, model, self.memory_config)
             result = self.devin_client.prompt(request)
             reply = result.reply

@@ -12,6 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from diploid_agent._compat import safe_dir_name
 from diploid_agent.memory_backends import MemoryBackend, _trim_to_section
 
 
@@ -44,7 +45,7 @@ class PromotedMemory:
     @property
     def promoted_path(self) -> Path:
         """Path to the user-curated promoted memory file for this chat."""
-        safe = self._chat_id.replace("/", "_")
+        safe = safe_dir_name(self._chat_id)
         return self._sessions_root / safe / "chat_PROMOTED.md"
 
     @property

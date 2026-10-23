@@ -14,6 +14,7 @@ from typing import Any
 
 import httpx
 
+from diploid_agent._compat import safe_dir_name
 from diploid_agent.memory_models import MemoryItem
 
 logger = logging.getLogger(__name__)
@@ -121,7 +122,7 @@ class FileMemoryBackend(MemoryBackend):
 
     @property
     def _session_dir(self) -> Path:
-        safe = self.chat_id.replace("/", "_")
+        safe = safe_dir_name(self.chat_id)
         return self.sessions_root / safe
 
     @property
@@ -363,7 +364,7 @@ class HindsightMemoryBackend(MemoryBackend):
             headers=self._auth_headers(),
         )
 
-        safe = self.chat_id.replace("/", "_")
+        safe = safe_dir_name(self.chat_id)
         session_dir = Path(sessions_root).expanduser() / safe
         session_dir.mkdir(parents=True, exist_ok=True)
         self._spool_path = spool_path or session_dir / "hindsight-pending-retain.jsonl"

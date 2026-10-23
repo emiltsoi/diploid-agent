@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from diploid_agent._compat import safe_dir_name
 from diploid_agent.config import Config
 from diploid_agent.persona_composer import _trim_to_section
 from diploid_agent.plugins.contexts import UserMessageContext
@@ -44,7 +45,7 @@ class ReplyQuoteFormatter:
         return self.trim_reply_quote_to(quote, limit)
 
     def _telegram_message_registry_path(self, chat_id: str) -> Path:
-        safe = chat_id.replace("/", "_")
+        safe = safe_dir_name(chat_id)
         return (
             Path(self.config.harness.sessions_root).expanduser() / safe / "telegram_messages.jsonl"
         )

@@ -49,7 +49,8 @@ def test_validate_contract_rejects_builtin_module(tmp_path: Path) -> None:
     assert any("must expose a 'Plugin' class" in e for e in errors)
 
 
-def test_runtime_health_reports_plugin_health(tmp_path: Path) -> None:
+def test_runtime_health_reports_plugin_health(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("WINDSURF_API_KEY", "test-key")
     config = _make_config(
         tmp_path,
         [PluginConfig(name="continuity", enabled=True, module="diploid_plugins.continuity")],
