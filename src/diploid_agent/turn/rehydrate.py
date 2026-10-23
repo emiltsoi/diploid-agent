@@ -38,7 +38,7 @@ class TurnRehydrate(TurnComponent):
         chat_dir = self.runtime.chat_dir(chat_id)
         for name in ("chat_interrupted_turn.json", "chat_active_turn.json"):
             try:
-                data = json.loads((chat_dir / name).read_text())
+                data = json.loads((chat_dir / name).read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
             if not isinstance(data, dict):

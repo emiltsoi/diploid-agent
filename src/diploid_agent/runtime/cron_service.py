@@ -190,7 +190,7 @@ class CronService:
                 watch.error = None
                 continue
             try:
-                raw = yaml.safe_load(watch.path.read_text()) or {}
+                raw = yaml.safe_load(watch.path.read_text(encoding="utf-8")) or {}
                 parsed = [CronJobSpec.model_validate(j) for j in raw.get("jobs", [])]
             except Exception as exc:  # noqa: BLE001
                 # Keep the last-good job set for this file.
@@ -608,7 +608,7 @@ class CronService:
         assert trig is not None
         body_path = self._sessions_root / safe_dir_name(resolved.chat_id) / _BODY_STATE_FILENAME
         try:
-            data = json.loads(body_path.read_text())
+            data = json.loads(body_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             data = {}
         current = data.get(trig.field) if isinstance(data, dict) else None
@@ -617,7 +617,7 @@ class CronService:
             # fallback) live beside the chat dirs — one body, one record.
             persona_path = self._sessions_root / _PERSONA_BODY_STATE_FILENAME
             try:
-                pdata = json.loads(persona_path.read_text())
+                pdata = json.loads(persona_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 pdata = {}
             current = pdata.get(trig.field) if isinstance(pdata, dict) else None
@@ -938,7 +938,7 @@ class CronService:
                 },
                 default=str,
             )
-            with (out_dir / f"{resolved.spec.id}.log").open("a") as fh:
+            with (out_dir / f"{resolved.spec.id}.log").open("a", encoding="utf-8") as fh:
                 fh.write(log_line + "\n")
             (out_dir / f"{resolved.spec.id}.last").write_text(
                 json.dumps(
@@ -953,7 +953,8 @@ class CronService:
                         "summary": state.last_summary,
                     },
                     default=str,
-                )
+                ),
+                encoding="utf-8",
             )
         except OSError:
             logger.warning("Cron job %s: could not write result files", resolved.spec.id)
@@ -1057,7 +1058,8 @@ class CronService:
                 json.dumps(
                     {"warnings": self._warnings, "updated_at": time.time()},
                     default=str,
-                )
+                ),
+                encoding="utf-8",
             )
         except OSError:
             pass

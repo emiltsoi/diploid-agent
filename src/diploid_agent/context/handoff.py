@@ -42,7 +42,7 @@ def _last_turn_snapshot(chat_dir: Path) -> dict:
     the exact case this stub exists for."""
     for name in ("chat_interrupted_turn.json", "chat_active_turn.json"):
         try:
-            data = json.loads((chat_dir / name).read_text())
+            data = json.loads((chat_dir / name).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
         if isinstance(data, dict):
