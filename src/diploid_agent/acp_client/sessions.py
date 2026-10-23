@@ -29,6 +29,7 @@ from typing import Any
 
 from diploid_agent.acp_client.errors import (
     AcpError,
+    AcpModelError,
     AcpSessionStaleError,
     _acp_error_from_response,
 )
@@ -338,11 +339,30 @@ class AcpSessionOps:
             {"sessionId": session_id, "configId": "mode", "value": self._client.acp_mode},
             timeout=call_timeout,
         )
-        await self._client._call(
-            "session/set_config_option",
-            {"sessionId": session_id, "configId": "model", "value": use_model},
-            timeout=call_timeout,
-        )
+        try:
+            await self._client._call(
+                "session/set_config_option",
+                {"sessionId": session_id, "configId": "model", "value": use_model},
+                timeout=call_timeout,
+            )
+        except AcpModelError:
+            # The launch flag (`devin acp --model`) already selects the model
+            # for new sessions, and the child's advertised picker list is a
+            # curated subset of the account catalog — a model the flag accepts
+            # can be missing from configOptions (e.g. swe-2-max on 3000.11.x).
+            # A rejection must not brick session start.
+            logger.warning(
+                "Model %r rejected by session/set_config_option; keeping "
+                "launch-flag model for session %s",
+                use_model,
+                session_id,
+            )
+            if self._client._lifecycle_log is not None:
+                self._client._lifecycle_log.write(
+                    "session.model.set_rejected",
+                    session_id=session_id,
+                    model=use_model,
+                )
         self._state._session_models[session_id] = use_model
 
     async def _set_session_model(

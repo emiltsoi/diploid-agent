@@ -333,6 +333,67 @@ def test_acp_error_classifier_detects_stale_session() -> None:
     assert not isinstance(exc, AcpModelError)
 
 
+def test_acp_error_classifier_detects_invalid_model_value() -> None:
+    """A -32602 'Invalid value' for config option 'model' is AcpModelError.
+
+    Observed on `devin acp` 3000.11.x when switching to a model absent from
+    the child's advertised picker list (e.g. swe-2-max)."""
+    error = {
+        "code": -32602,
+        "message": "Invalid params",
+        "data": "Invalid value 'swe-2-max' for config option 'model'",
+    }
+    exc = _acp_error_from_response("session/set_config_option", error)
+    assert isinstance(exc, AcpModelError)
+
+
+def test_apply_session_config_tolerates_model_rejection(monkeypatch) -> None:
+    """A model the child can't express must not brick session start — the
+    launch flag already selected it, so the session carries on."""
+    client = AcpClient(agent_bin="/bin/true", api_key="test-key")
+    client._loop = asyncio.new_event_loop()
+    calls: list[tuple[str, Any]] = []
+
+    async def fake_call(method: str, params: Any, timeout: float | None = None) -> Any:
+        calls.append((method, params))
+        if method == "session/set_config_option" and params.get("configId") == "model":
+            raise AcpModelError(
+                method,
+                {
+                    "code": -32602,
+                    "message": "Invalid params",
+                    "data": "Invalid value 'swe-2-max' for config option 'model'",
+                },
+            )
+        return {}
+
+    monkeypatch.setattr(client, "_call", fake_call)
+
+    client._loop.run_until_complete(client._sessions._apply_session_config("s-1", "swe-2-max"))
+
+    mode_calls = [
+        c for c in calls if c[0] == "session/set_config_option" and c[1].get("configId") == "mode"
+    ]
+    assert len(mode_calls) == 1
+    assert client._state._session_models["s-1"] == "swe-2-max"
+
+
+def test_apply_session_config_propagates_other_errors(monkeypatch) -> None:
+    """Non-model rejections still fail loudly."""
+    client = AcpClient(agent_bin="/bin/true", api_key="test-key")
+    client._loop = asyncio.new_event_loop()
+
+    async def fake_call(method: str, params: Any, timeout: float | None = None) -> Any:
+        if method == "session/set_config_option" and params.get("configId") == "model":
+            raise AcpError(method, {"code": -32602, "message": "Invalid params"})
+        return {}
+
+    monkeypatch.setattr(client, "_call", fake_call)
+
+    with pytest.raises(AcpError):
+        client._loop.run_until_complete(client._sessions._apply_session_config("s-1", "glm-5.2"))
+
+
 def test_acp_error_classifier_detects_mcp_error() -> None:
     """An invalid mcpServers -32602 error is classified as AcpMcpError."""
     error = {

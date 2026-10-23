@@ -62,6 +62,8 @@ def _acp_error_from_response(method: str, error: dict[str, Any]) -> AcpError:
     if code == -32602:
         if "mcp" in combined or "mcpservers" in combined:
             return AcpMcpError(method, error)
+        if "config option 'model'" in combined:
+            return AcpModelError(method, error)
         return AcpError(method, error)
 
     if code == -32002:
