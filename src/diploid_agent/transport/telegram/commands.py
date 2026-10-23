@@ -117,6 +117,27 @@ _SUB_COMMANDS: dict[str, tuple[str, dict[str, tuple[str, int, tuple[Any, ...], b
 # rejecting the whole sync.
 _BOT_COMMAND_RE = re.compile(r"[a-z0-9_]{1,32}")
 
+# Smart-typography dashes that mobile clients substitute for ASCII hyphens —
+# e.g. ``/model —in-place swe-2-max`` (em dash) where the user typed ``--``.
+# Only a leading run of each whitespace-token is remapped so prose dashes in
+# free-text args (``/state`` event payloads, config values) survive intact.
+# All leading typo-dashes map to ``--``: this surface has no single-dash
+# flags, so a dashed token is always a mistyped long flag.
+_TYPO_DASHES = "–—‑−"
+_TYPO_DASH_MAP = str.maketrans({c: "--" for c in _TYPO_DASHES})
+
+
+def _normalize_flag_dashes(arg: str) -> str:
+    tokens = arg.split(" ")
+    for i, token in enumerate(tokens):
+        lead = 0
+        while lead < len(token) and token[lead] in _TYPO_DASHES:
+            lead += 1
+        if lead:
+            tokens[i] = token[:lead].translate(_TYPO_DASH_MAP) + token[lead:]
+    return " ".join(tokens)
+
+
 _BOT_MENU: tuple[tuple[str, str], ...] = (
     ("status", "model, session, cwd, context usage"),
     ("metrics", "token usage and latency"),
@@ -725,6 +746,7 @@ class TelegramCommandMixin:
 
     def _handle_command(self, chat_input: ChatInput, command: str, arg: str) -> bool:
         """Dispatch a ``/`` command. Returns True when the input was a command."""
+        arg = _normalize_flag_dashes(arg)
         chat_id = chat_input.chat_id
         if command in _SIMPLE_COMMANDS:
             reply = getattr(self, _SIMPLE_COMMANDS[command])(chat_id)

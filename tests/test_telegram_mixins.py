@@ -6,7 +6,10 @@ import json
 from pathlib import Path
 
 from diploid_agent.models import ChatResult
-from diploid_agent.transport.telegram.commands import TelegramCommandMixin
+from diploid_agent.transport.telegram.commands import (
+    TelegramCommandMixin,
+    _normalize_flag_dashes,
+)
 from diploid_agent.transport.telegram.models import ChatInput
 from diploid_agent.transport.telegram.sender import TelegramSenderMixin
 from diploid_agent.transport.telegram.state import TelegramStateMixin
@@ -205,6 +208,33 @@ def test_model_command_unknown_flag_shows_usage() -> None:
     assert commands._handle_command(ci, "/model", "--bogus glm-5.2") is True
     assert handler.calls == []
     assert sent_texts == ["Usage: /model [--in-place] <name>"]
+
+
+def test_model_command_em_dash_in_place() -> None:
+    """`/model —in-place <name>` — mobile clients turn ``--`` into an em dash."""
+    commands, handler, _ = _commands_recording()
+    ci = _chat_input("/model —in-place glm-5.2")
+    assert commands._handle_command(ci, "/model", "—in-place glm-5.2") is True
+    call = handler.calls[-1]
+    assert call["model"] == "glm-5.2"
+    assert call["in_place"] is True
+
+
+def test_model_command_en_dash_in_place() -> None:
+    commands, handler, _ = _commands_recording()
+    ci = _chat_input("/model –in-place glm-5.2")
+    assert commands._handle_command(ci, "/model", "–in-place glm-5.2") is True
+    call = handler.calls[-1]
+    assert call["model"] == "glm-5.2"
+    assert call["in_place"] is True
+
+
+def test_normalize_flag_dashes_leading_only() -> None:
+    """Only the leading dash-run of each token is remapped — prose survives."""
+    assert _normalize_flag_dashes("value=a—b —flag") == "value=a—b --flag"
+    assert _normalize_flag_dashes("—x") == "--x"
+    assert _normalize_flag_dashes("‑y") == "--y"
+    assert _normalize_flag_dashes("plain") == "plain"
 
 
 def test_model_command_no_args_shows_usage() -> None:
