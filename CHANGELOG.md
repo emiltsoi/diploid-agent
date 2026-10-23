@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.6.14 — 2026-10-22
+
+### Added
+
+- **macOS port**: the agent now runs native on darwin — launchd plists
+  plus the G-A/B/C/D crossing gate probe (1e92014), the first two
+  crossing fixes with launchd env sourcing (7e41bc4), and probe
+  diagnostics that isolated the launchd-context LAN-TCP block
+  (1b720fc). Graceful restart works on macOS and Windows through their
+  service backends (0104b64), and cross-service restarts drain the
+  release before re-entering (1c21a98).
+- **Claims-ledger cron tools**: `ledger-lint` detects stale boot-ledger
+  rows (39fa76b) and `open-items-lint` reconciles the durable-debts
+  ledger against the world (242fb13); `chat_open_items.jsonl` makes the
+  ledger durable so it survives the fold (481109c).
+- **Typed recall routing**: `memory_recall` accepts a `kind` parameter
+  restricting recall to a class (885f32b).
+- **Declared-intensity pipeline** in shared personas AGENTS — every
+  multi-step plan declares tier, gates, and bar at entry (4f1a7ed).
+
+### Fixed
+
+- **Per-wife `secrets.env` sourced before the shared one** in
+  harness-run — wife-specific values were being shadowed (4940e2f).
+- **`ENOTSOCK` probe results classified as stale** in acp-control
+  (8813118).
+- **Test socket bases pinned under `/tmp`** with `sun_path` fallback
+  coverage — macOS `/var/folders` TMPDIR blew past the AF_UNIX limit
+  (dec63b3).
+
+### Docs
+
+- **README Development section** documents the three-gate local verify
+  ritual — ruff check, ruff format --check, pytest (cab66f7). Plus two
+  ruff format sweeps (c73b378, ec03d23).
+
+
 ## 0.6.13 — 2026-09-27
 
 ### Added
