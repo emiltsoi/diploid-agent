@@ -82,7 +82,8 @@ class ControlListener:
         self._on_service_restart = on_service_restart
         self._control_timeout = control_timeout
         self._watchdog_timeout = watchdog_timeout
-        if not hasattr(socket, "AF_UNIX"):
+        self._control_disabled = not hasattr(socket, "AF_UNIX")
+        if self._control_disabled:
             # Control channel requires Unix sockets (Windows before 17063 or
             # other POSIX-less hosts): degrade to no-listener rather than
             # failing the transport — restarts just won't be intercepted.
@@ -162,7 +163,7 @@ class ControlListener:
 
     def _start(self) -> None:
         """Create and bind the control socket, then start the listener thread."""
-        if self._on_service_restart is None:
+        if self._on_service_restart is None or self._control_disabled:
             return
         if self._control_listener_thread is not None and self._control_listener_thread.is_alive():
             return
