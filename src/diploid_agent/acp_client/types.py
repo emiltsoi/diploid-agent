@@ -23,6 +23,11 @@ class AcpPromptResult:
 
     reply: str
     session_id: str | None = None
+    # The model the session is actually serving after this call — the
+    # requested model when the child accepted it, or the session's
+    # configOptions currentValue when the set was rejected. None on paths
+    # that never resolved one (e.g. a prompt that never started).
+    model: str | None = None
     stop_reason: str | None = None
     usage: dict[str, Any] | None = None
     cancelled: bool = False

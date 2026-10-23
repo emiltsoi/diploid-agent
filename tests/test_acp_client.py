@@ -348,8 +348,10 @@ def test_acp_error_classifier_detects_invalid_model_value() -> None:
 
 
 def test_apply_session_config_tolerates_model_rejection(monkeypatch) -> None:
-    """A model the child can't express must not brick session start — the
-    launch flag already selected it, so the session carries on."""
+    """A model the child can't express must not brick session start.
+
+    Without a session result to read the effective model from, the requested
+    id is kept as the best-known value."""
     client = AcpClient(agent_bin="/bin/true", api_key="test-key")
     client._loop = asyncio.new_event_loop()
     calls: list[tuple[str, Any]] = []
@@ -369,13 +371,59 @@ def test_apply_session_config_tolerates_model_rejection(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_call", fake_call)
 
-    client._loop.run_until_complete(client._sessions._apply_session_config("s-1", "swe-2-max"))
+    applied = client._loop.run_until_complete(
+        client._sessions._apply_session_config("s-1", "swe-2-max")
+    )
 
     mode_calls = [
         c for c in calls if c[0] == "session/set_config_option" and c[1].get("configId") == "mode"
     ]
     assert len(mode_calls) == 1
+    assert applied == "swe-2-max"
     assert client._state._session_models["s-1"] == "swe-2-max"
+
+
+def test_apply_session_config_records_effective_model_on_rejection(monkeypatch) -> None:
+    """A rejected model set leaves the session on its configOptions
+    currentValue — record that, not the rejected id.
+
+    On `devin acp` 3000.11.x the launch flag is silently ignored for
+    unpicklable models: a `--model swe-2-max` child reports sessions with
+    `currentValue: swe-2-high`."""
+    client = AcpClient(agent_bin="/bin/true", api_key="test-key")
+    client._loop = asyncio.new_event_loop()
+
+    async def fake_call(method: str, params: Any, timeout: float | None = None) -> Any:
+        if method == "session/set_config_option" and params.get("configId") == "model":
+            raise AcpModelError(
+                method,
+                {
+                    "code": -32602,
+                    "message": "Invalid params",
+                    "data": "Invalid value 'swe-2-max' for config option 'model'",
+                },
+            )
+        return {}
+
+    monkeypatch.setattr(client, "_call", fake_call)
+
+    session_result = {
+        "sessionId": "s-1",
+        "configOptions": [
+            {"id": "mode", "currentValue": "bypass", "options": []},
+            {
+                "id": "model",
+                "currentValue": "swe-2-high",
+                "options": [{"value": "swe-2-high"}, {"value": "swe-1-6"}],
+            },
+        ],
+    }
+    applied = client._loop.run_until_complete(
+        client._sessions._apply_session_config("s-1", "swe-2-max", session_result=session_result)
+    )
+
+    assert applied == "swe-2-high"
+    assert client._state._session_models["s-1"] == "swe-2-high"
 
 
 def test_apply_session_config_propagates_other_errors(monkeypatch) -> None:

@@ -256,6 +256,9 @@ class TurnSession(TurnComponent):
             or set(self.runtime._mcp_skills._active_skill_names(chat_id)),
         )
         reply = result.reply
+        # The child may have rejected the requested model and kept its own —
+        # record what the session actually serves, not what was asked for.
+        use_model = result.model or use_model
 
         new_record = self.runtime._prompts._create_record(
             chat_id,
@@ -571,7 +574,7 @@ class TurnSession(TurnComponent):
                 source.persona_memory_exceeded = memory_flags.get("persona_memory_exceeded", False)
                 source.enabled_mcp_servers = source_mcp_names
                 source.enabled_skills = sorted(source_skill_names)
-                source.model = use_model
+                source.model = result.model or use_model
         else:
             # ACP resume succeeded; send a follow-up on the resumed session.
             user_message = "Continue the conversation as your true self."
@@ -790,6 +793,7 @@ class TurnSession(TurnComponent):
                 skill_names=start_ctx.skill_names or source_skill_names,
             )
             reply = result.reply
+            use_model = result.model or use_model
 
         new_record = self.runtime._prompts._create_record(
             chat_id,

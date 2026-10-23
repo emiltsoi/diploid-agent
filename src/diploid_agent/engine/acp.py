@@ -110,6 +110,7 @@ class AcpEngine(AgentEngine):
         return TurnResult(
             reply=result.reply,
             session_id=result.session_id,
+            model=result.model,
             stop_reason=result.stop_reason,
             usage=result.usage,
             cancelled=result.cancelled,

@@ -30,6 +30,9 @@ class TurnResult:
 
     reply: str
     session_id: str | None = None
+    # The model the session actually serves — may differ from the requested
+    # model when the engine rejected the switch and kept its current model.
+    model: str | None = None
     stop_reason: str | None = None
     usage: dict[str, Any] | None = None
     cancelled: bool = False

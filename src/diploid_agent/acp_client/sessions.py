@@ -274,7 +274,10 @@ class AcpSessionOps:
             ctx["failure_detail"]["phase"] = "config"
             phase_start = time.perf_counter()
             await self._client._apply_session_config(
-                session_id, use_model, timeout=min(call_timeout, _remaining())
+                session_id,
+                use_model,
+                timeout=min(call_timeout, _remaining()),
+                session_result=resume_result if isinstance(resume_result, dict) else None,
             )
             detail["config_ms"] = round((time.perf_counter() - phase_start) * 1000, 2)
             detail["method"] = resume_method
@@ -313,7 +316,7 @@ class AcpSessionOps:
             log_fields={"session_id": session_id, "model": use_model},
             detail=detail,
         ):
-            await self._client._call(
+            load_result = await self._client._call(
                 "session/load",
                 {
                     "sessionId": session_id,
@@ -322,7 +325,12 @@ class AcpSessionOps:
                 },
                 timeout=call_timeout,
             )
-            await self._client._apply_session_config(session_id, use_model, timeout=call_timeout)
+            await self._client._apply_session_config(
+                session_id,
+                use_model,
+                timeout=call_timeout,
+                session_result=load_result if isinstance(load_result, dict) else None,
+            )
         return session_id
 
     async def _apply_session_config(
@@ -331,14 +339,27 @@ class AcpSessionOps:
         use_model: str,
         *,
         timeout: float | None = None,
-    ) -> None:
-        """Set mode and model on a freshly created or resumed session."""
+        session_result: dict[str, Any] | None = None,
+    ) -> str:
+        """Set mode and model on a freshly created or resumed session.
+
+        Returns the model the session is actually running. That is
+        ``use_model`` when the child accepts the set; on rejection it is the
+        session's ``configOptions`` ``currentValue`` when known — a rejected
+        ``set_config_option`` leaves the session on whatever it already had,
+        which on ``devin acp`` 3000.11.x is the server-side fallback, *not*
+        the launch flag (a ``--model swe-2-max`` child reports sessions on
+        ``swe-2-high``). Stamping the effective model keeps
+        ``_session_models`` — and the session records built from it —
+        truthful instead of claiming a model that was never applied.
+        """
         call_timeout = timeout or self._client._control.call_timeout()
         await self._client._call(
             "session/set_config_option",
             {"sessionId": session_id, "configId": "mode", "value": self._client.acp_mode},
             timeout=call_timeout,
         )
+        effective = use_model
         try:
             await self._client._call(
                 "session/set_config_option",
@@ -346,24 +367,27 @@ class AcpSessionOps:
                 timeout=call_timeout,
             )
         except AcpModelError:
-            # The launch flag (`devin acp --model`) already selects the model
-            # for new sessions, and the child's advertised picker list is a
-            # curated subset of the account catalog — a model the flag accepts
-            # can be missing from configOptions (e.g. swe-2-max on 3000.11.x).
-            # A rejection must not brick session start.
+            # The child's advertised picker list is a curated subset of the
+            # account catalog — a model the launch flag accepts can be missing
+            # from configOptions (e.g. swe-2-max on 3000.11.x). A rejection
+            # must not brick session start.
+            effective = self._extract_model_current(session_result or {}) or use_model
             logger.warning(
-                "Model %r rejected by session/set_config_option; keeping "
-                "launch-flag model for session %s",
+                "Model %r rejected by session/set_config_option; session %s "
+                "keeps its current model %r",
                 use_model,
                 session_id,
+                effective,
             )
             if self._client._lifecycle_log is not None:
                 self._client._lifecycle_log.write(
                     "session.model.set_rejected",
                     session_id=session_id,
                     model=use_model,
+                    detail={"effective_model": effective},
                 )
-        self._state._session_models[session_id] = use_model
+        self._state._session_models[session_id] = effective
+        return effective
 
     async def _set_session_model(
         self,
@@ -446,9 +470,11 @@ class AcpSessionOps:
         self._warn_if_model_unavailable(use_model)
 
         # Honor the requested mode and model for this session.
-        await self._client._apply_session_config(session_id, use_model, timeout=session_new_timeout)
+        effective = await self._client._apply_session_config(
+            session_id, use_model, timeout=session_new_timeout, session_result=session
+        )
 
-        return await self._client._prompt(
+        result = await self._client._prompt(
             session_id,
             prompt_text,
             soft_timeout=soft_timeout,
@@ -456,6 +482,8 @@ class AcpSessionOps:
             on_chunk=on_chunk,
             on_update=on_update,
         )
+        result.model = effective
+        return result
 
     async def _send_message(
         self,
@@ -473,9 +501,26 @@ class AcpSessionOps:
         # no-op model changes can re-render the session's system prefix and
         # destabilize the ACP subprocess.
         if self._state._session_models.get(session_id) != use_model:
-            await self._client._set_session_model(session_id, use_model)
+            try:
+                await self._client._set_session_model(session_id, use_model)
+            except AcpModelError:
+                # The recorded model left the child's curated picker since it
+                # was stored — the turn must not die for an unpinnable model.
+                # The session keeps whatever model it already runs.
+                logger.warning(
+                    "Model %r rejected by session/set_config_option on follow-up; "
+                    "session %s keeps its current model",
+                    use_model,
+                    session_id,
+                )
+                if self._client._lifecycle_log is not None:
+                    self._client._lifecycle_log.write(
+                        "session.model.set_rejected",
+                        session_id=session_id,
+                        model=use_model,
+                    )
 
-        return await self._client._prompt(
+        result = await self._client._prompt(
             session_id,
             prompt_text,
             soft_timeout=soft_timeout,
@@ -483,6 +528,8 @@ class AcpSessionOps:
             on_chunk=on_chunk,
             on_update=on_update,
         )
+        result.model = self._state._session_models.get(session_id) or use_model
+        return result
 
     async def _list_models(self) -> list[str]:
         """Create a throwaway session to discover the advertised model list."""
@@ -502,6 +549,20 @@ class AcpSessionOps:
             if opt.get("id") == "model":
                 return [o["value"] for o in opt.get("options", [])]
         return []
+
+    @staticmethod
+    def _extract_model_current(session_result: dict[str, Any]) -> str | None:
+        """Return the session's effective model from ``configOptions``.
+
+        ``session/new``, ``session/resume`` and ``session/load`` results
+        carry a ``currentValue`` per option — after a rejected model set it
+        is the model the session actually kept.
+        """
+        for opt in session_result.get("configOptions", []):
+            if opt.get("id") == "model":
+                value = opt.get("currentValue")
+                return str(value) if value else None
+        return None
 
     def _warn_if_model_unavailable(self, use_model: str) -> None:
         """Warn when the configured model is not in the ACP child's live list.

@@ -737,9 +737,12 @@ class AcpClient:
         use_model: str,
         *,
         timeout: float | None = None,
-    ) -> None:
-        """Set mode and model on a freshly created or resumed session."""
-        await self._sessions._apply_session_config(session_id, use_model, timeout=timeout)
+        session_result: dict[str, Any] | None = None,
+    ) -> str:
+        """Set mode and model on a session; returns the effective model."""
+        return await self._sessions._apply_session_config(
+            session_id, use_model, timeout=timeout, session_result=session_result
+        )
 
     async def _set_session_model(
         self,

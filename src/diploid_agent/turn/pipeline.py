@@ -339,7 +339,10 @@ class TurnPipeline(TurnComponent):
         is_new = outcome.is_new
         record_is_new = is_new or force_new_session
         session_id = outcome.session_id
-        use_model = outcome.use_model
+        # Stamp the model the session actually serves — a rejected
+        # set_config_option leaves the session on its previous model, and
+        # result.model carries that effective value back from the engine.
+        use_model = result.model or outcome.use_model
         memory_flags = outcome.memory_flags
         rehydrate_notice = outcome.rehydrate_notice
 
