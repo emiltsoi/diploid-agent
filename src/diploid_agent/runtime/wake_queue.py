@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import json
 import logging
 import threading
@@ -12,6 +11,7 @@ from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 
+from diploid_agent._compat import atomic_replace, fcntl
 from diploid_agent.models import WakeEvent
 
 logger = logging.getLogger(__name__)
@@ -68,7 +68,7 @@ class WakeQueue:
         lines = [json.dumps(asdict(e), default=str) + "\n" for e in self._in_memory.values()]
         tmp = self._path.with_suffix(self._path.suffix + ".new")
         tmp.write_text("".join(lines))
-        tmp.replace(self._path)
+        atomic_replace(tmp, self._path)
 
     @contextmanager
     def _transaction(self):

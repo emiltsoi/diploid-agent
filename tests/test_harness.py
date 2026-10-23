@@ -6,6 +6,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from diploid_agent.acp_client import AcpModelError, AcpPromptResult, AcpSessionStaleError
 from diploid_agent.config import (
     Config,
@@ -272,6 +274,7 @@ def test_rehydration_injects_rehydration_notice_in_prompt(monkeypatch, tmp_path:
 
 def test_persistent_memory_recalls_on_memory_seeking_question(monkeypatch, tmp_path: Path) -> None:
     """The persistent_memory plugin injects a recall result for memory-seeking turns."""
+    pytest.importorskip("diploid_plugins", reason="optional plugins extra not installed")
     fixture_root = Path(__file__).parent / "fixtures" / "test-pilot"
     config = Config(
         diploid=DiploidConfig(bin="/bin/echo", model="swe-1-7"),

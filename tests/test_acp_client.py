@@ -5,6 +5,7 @@ import concurrent.futures
 import json
 import os
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -60,7 +61,8 @@ def test_resolve_agent_bin_prefers_path_arg(monkeypatch, tmp_path: Path) -> None
 
 
 def test_resolve_agent_bin_falls_back_to_path(monkeypatch, tmp_path: Path) -> None:
-    agent_bin = tmp_path / "devin"
+    # Windows resolves executables via PATHEXT — an extensionless file is not found.
+    agent_bin = tmp_path / ("devin.exe" if sys.platform == "win32" else "devin")
     agent_bin.write_text("#!/bin/sh\n")
     agent_bin.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path))
@@ -97,8 +99,11 @@ def test_acp_client_falls_back_to_env(monkeypatch) -> None:
 def test_acp_client_raises_when_no_key(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.delenv("WINDSURF_API_KEY", raising=False)
     monkeypatch.delenv("ACP_API_KEY", raising=False)
+    # APPDATA feeds the Windows credentials path — isolate it the same way
+    # Path.home() is isolated for the XDG path.
+    monkeypatch.delenv("APPDATA", raising=False)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    agent_bin = tmp_path / "devin"
+    agent_bin = tmp_path / ("devin.exe" if sys.platform == "win32" else "devin")
     agent_bin.write_text("#!/bin/sh\n")
     with pytest.raises(RuntimeError, match="No api_key provided"):
         AcpClient(agent_bin=str(agent_bin))
@@ -527,6 +532,10 @@ def test_watchdog_kills_stuck_process() -> None:
     assert client._initialized is False
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="fake systemctl is a POSIX shell script; Windows has no systemctl to intercept",
+)
 def test_sandbox_systemctl_wrapper_routes_to_harness(monkeypatch, tmp_path: Path) -> None:
     """The fake systemctl wrapper should send restart requests to the harness socket."""
     monkeypatch.setenv("WINDSURF_API_KEY", "test-key")

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from diploid_agent._compat import short_temp_dir
 from diploid_agent.config import EngineConfig
 
 _orig_engine_init = EngineConfig.__init__
@@ -42,7 +43,7 @@ def _isolated_control_dir(monkeypatch):
     ``/var/folders/...`` — deep enough on its own to overflow sun_path and
     trip the hashed-path fallback.
     """
-    base = Path(tempfile.mkdtemp(prefix="dpctl-t-", dir="/tmp"))
+    base = Path(tempfile.mkdtemp(prefix="dpctl-t-", dir=short_temp_dir()))
     monkeypatch.setenv("DIPLOID_CONTROL_DIR", str(base))
     yield
     shutil.rmtree(base, ignore_errors=True)

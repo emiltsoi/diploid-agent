@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import threading
 import time
 from collections.abc import Callable
@@ -13,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypeVar
 import yaml
 from pydantic import BaseModel
 
+from diploid_agent._compat import atomic_replace
 from diploid_agent.config import (
     ConfigPersistenceError,
     NotificationsConfig,
@@ -300,7 +300,7 @@ class RuntimeConfigManager:
                 tmp_path.write_text(
                     yaml.safe_dump(overrides, sort_keys=False, default_flow_style=False)
                 )
-                os.replace(tmp_path, self._runtime_overrides_path)
+                atomic_replace(tmp_path, self._runtime_overrides_path)
                 return True
             except OSError:
                 logger.exception(

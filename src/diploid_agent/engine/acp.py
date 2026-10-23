@@ -31,13 +31,17 @@ def _load_credentials() -> str | None:
     """Return the Windsurf API key from the ACP binary credentials file."""
     # Devin CLI writes its credentials here; other ACP-compatible binaries may
     # use WINDSURF_API_KEY or ACP_API_KEY instead.
-    creds_path = Path.home() / ".local" / "share" / "devin" / "credentials.toml"
-    if creds_path.exists():
-        try:
-            data = tomllib.loads(creds_path.read_text())
-            return data.get("windsurf_api_key")
-        except (OSError, tomllib.TOMLDecodeError) as exc:
-            logger.warning("Failed to read credentials from %s: %s", creds_path, exc)
+    from diploid_agent.acp_client.utils import _devin_credentials_paths, _extract_windsurf_key
+
+    for creds_path in _devin_credentials_paths():
+        if creds_path.exists():
+            try:
+                data = tomllib.loads(creds_path.read_text())
+            except (OSError, tomllib.TOMLDecodeError) as exc:
+                logger.warning("Failed to read credentials from %s: %s", creds_path, exc)
+                continue
+            if key := _extract_windsurf_key(data):
+                return key
     return None
 
 

@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from diploid_agent._compat import safe_dir_name
 from diploid_agent.config import (
     AuthorshipConfig,
     Config,
@@ -605,7 +606,7 @@ class CronService:
         it still fires once the window elapses if the condition holds."""
         trig = resolved.spec.trigger
         assert trig is not None
-        body_path = self._sessions_root / resolved.chat_id.replace("/", "_") / _BODY_STATE_FILENAME
+        body_path = self._sessions_root / safe_dir_name(resolved.chat_id) / _BODY_STATE_FILENAME
         try:
             data = json.loads(body_path.read_text())
         except (OSError, json.JSONDecodeError):
@@ -661,7 +662,7 @@ class CronService:
         operator's ``trigger_allowed_roots`` opens extra roots (e.g. a
         shared common-room mount) to both kinds of job.
         """
-        session_root = (self._sessions_root / resolved.chat_id.replace("/", "_")).resolve()
+        session_root = (self._sessions_root / safe_dir_name(resolved.chat_id)).resolve()
         roots = [session_root]
         if resolved.persona_dir is not None:
             roots.insert(0, resolved.persona_dir.resolve())
@@ -911,7 +912,7 @@ class CronService:
     # ------------------------------------------------------------- delivery
 
     def _results_dir(self, chat_id: str) -> Path:
-        safe = chat_id.replace("/", "_")
+        safe = safe_dir_name(chat_id)
         return self._sessions_root / safe / self._config.harness.cron.results_dirname
 
     def _deliver(self, resolved: _ResolvedJob, state: CronJobState, task: Task) -> None:

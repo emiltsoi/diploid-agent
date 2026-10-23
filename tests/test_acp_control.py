@@ -23,6 +23,12 @@ from pathlib import Path
 import pytest
 
 import diploid_agent.acp_client.control as control_mod
+from diploid_agent._compat import short_temp_dir
+
+pytestmark = pytest.mark.skipif(
+    not hasattr(socket, "AF_UNIX"),
+    reason="control channel needs AF_UNIX; absent on this platform",
+)
 from diploid_agent.acp_client.control import (
     ControlListener,
     ControlSocketInUseError,
@@ -78,7 +84,7 @@ def test_control_dir_defaults_to_tempdir(monkeypatch) -> None:
         intended = Path(control_mod.tempfile.gettempdir()) / f"diploid-ctl-{name}" / "control.sock"
         if len(os.fsencode(intended)) > 100:
             # Deep tempdir (macOS /var/folders/...) — the hashed /tmp fallback.
-            assert listener.socket_path.parent.parent == Path("/tmp")
+            assert listener.socket_path.parent.parent == short_temp_dir()
         else:
             assert listener.socket_path.parent.parent == Path(control_mod.tempfile.gettempdir())
             assert listener.socket_path.parent.name == f"diploid-ctl-{name}"
@@ -90,7 +96,7 @@ def test_control_dir_env_scopes_socket_base(monkeypatch) -> None:
     """DIPLOID_CONTROL_DIR relocates the per-service socket namespace."""
     # AF_UNIX sun_path is ~107 chars — the base must stay shallow. Pin under
     # /tmp: macOS mkdtemp honours the deep per-user TMPDIR.
-    base = Path(control_mod.tempfile.mkdtemp(prefix="dpctl-a-", dir="/tmp"))
+    base = Path(control_mod.tempfile.mkdtemp(prefix="dpctl-a-", dir=short_temp_dir()))
     monkeypatch.setenv("DIPLOID_CONTROL_DIR", str(base))
     name = _name()
     listener = _listener(name, [])
@@ -108,7 +114,7 @@ def test_control_dir_isolates_same_service_name(monkeypatch) -> None:
     name = _name()
     paths: list[Path] = []
     for worker in ("w1", "w2"):
-        base = Path(control_mod.tempfile.mkdtemp(prefix=f"dpctl-{worker}-", dir="/tmp"))
+        base = Path(control_mod.tempfile.mkdtemp(prefix=f"dpctl-{worker}-", dir=short_temp_dir()))
         monkeypatch.setenv("DIPLOID_CONTROL_DIR", str(base))
         listener = _listener(name, [])
         try:
@@ -143,7 +149,7 @@ def test_deep_control_dir_falls_back_to_hashed_tmp_path(monkeypatch) -> None:
     listener = _listener(name, [])
     try:
         digest = hashlib.sha256(os.fsencode(intended)).hexdigest()[:16]
-        assert listener.socket_path == Path("/tmp") / f"diploid-ctl-{digest}" / "control.sock"
+        assert listener.socket_path == short_temp_dir() / f"diploid-ctl-{digest}" / "control.sock"
         assert listener.socket_path.exists()
         assert listener.env()["DIPLOID_CONTROL_SOCKET"] == str(listener.socket_path)
         # Deterministic: close + re-listen rendezvous on the same fallback path.

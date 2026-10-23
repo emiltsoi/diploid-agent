@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import json
 import logging
 import os
@@ -11,6 +10,8 @@ import sys
 import threading
 import time
 from pathlib import Path
+
+from diploid_agent._compat import IS_WINDOWS, fcntl, pid_alive, safe_dir_name
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ class InstanceManager:
         self._stop_heartbeat = threading.Event()
 
     def _lock_path(self, chat_id: str) -> Path:
-        chat_dir = self._sessions_root / chat_id.replace("/", "_")
+        chat_dir = self._sessions_root / safe_dir_name(chat_id)
         return chat_dir / "instance.lock"
 
     def _read_lock(self, chat_id: str) -> dict | None:
@@ -81,6 +82,8 @@ class InstanceManager:
         os.write(fd, encoded)
 
     def _pid_alive(self, pid: int) -> bool:
+        if IS_WINDOWS:
+            return pid_alive(pid)
         try:
             os.kill(pid, 0)
         except (OSError, ProcessLookupError):

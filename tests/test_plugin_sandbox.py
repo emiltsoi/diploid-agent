@@ -41,7 +41,8 @@ def _make_config(tmp_path):
     )
 
 
-def test_plugin_sandbox_valid_module(tmp_path):
+def test_plugin_sandbox_valid_module(tmp_path, monkeypatch):
+    monkeypatch.setenv("WINDSURF_API_KEY", "test-key")
     runtime = AgentRuntime(_make_config(tmp_path))
     runtime.engine = FakeEngine()
     client = TestClient(create_app(_make_config(tmp_path), runtime))
@@ -51,7 +52,8 @@ def test_plugin_sandbox_valid_module(tmp_path):
     assert data["ok"] is True
 
 
-def test_plugin_sandbox_invalid_module(tmp_path):
+def test_plugin_sandbox_invalid_module(tmp_path, monkeypatch):
+    monkeypatch.setenv("WINDSURF_API_KEY", "test-key")
     runtime = AgentRuntime(_make_config(tmp_path))
     runtime.engine = FakeEngine()
     client = TestClient(create_app(_make_config(tmp_path), runtime))

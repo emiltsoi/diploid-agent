@@ -18,6 +18,8 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from diploid_agent._compat import safe_dir_name
+
 logger = logging.getLogger(__name__)
 
 _MARKER_OPEN = "<!-- harness-handoff -->"
@@ -30,7 +32,7 @@ def handoff_stub_path(sessions_root: Path, chat_id: str) -> Path:
     """The per-chat self-state file. The name matches ``_CHAT_DURABLE_FILES``;
     a persona that renames its self-state slot is out of the stub's reach —
     the stub writes the convention, not every override."""
-    return Path(sessions_root).expanduser() / chat_id.replace("/", "_") / "chat_self_state.md"
+    return Path(sessions_root).expanduser() / safe_dir_name(chat_id) / "chat_self_state.md"
 
 
 def _last_turn_snapshot(chat_dir: Path) -> dict:

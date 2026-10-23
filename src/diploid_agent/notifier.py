@@ -12,6 +12,8 @@ from typing import Any, Literal
 
 import httpx
 
+from diploid_agent._compat import atomic_replace
+
 logger = logging.getLogger(__name__)
 
 # editMessageText descriptions that mean the board message is gone and a
@@ -300,7 +302,7 @@ class TelegramNotifier(Notifier):
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(path.suffix + ".new")
             tmp.write_text(json.dumps({"message_id": message_id}))
-            tmp.replace(path)
+            atomic_replace(tmp, path)
         except OSError:
             logger.warning("Could not persist task board id for chat %s", chat_id)
 

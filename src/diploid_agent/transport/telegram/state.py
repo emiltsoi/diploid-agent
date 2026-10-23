@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from diploid_agent._compat import safe_dir_name
 from diploid_agent.transport.interactive import (
     AskBlock,
     build_keyboard_remove,
@@ -31,7 +32,7 @@ logger = logging.getLogger("telegram_poll")
 class TelegramStateMixin:
     def _chat_dir(self, chat_id: int) -> Path:
         """Return the per-chat session directory, mirroring the harness layout."""
-        safe = str(chat_id).replace("/", "_")
+        safe = safe_dir_name(str(chat_id))
         return self.state_dir.parent / safe
 
     def _message_registry_path(self, chat_id: int) -> Path:

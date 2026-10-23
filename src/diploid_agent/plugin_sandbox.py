@@ -13,6 +13,7 @@ import traceback
 from pathlib import Path
 from typing import Any
 
+from diploid_agent._compat import safe_dir_name
 from diploid_agent.config import PluginConfig
 from diploid_agent.engine.base import TurnRequest, TurnResult
 from diploid_agent.models import SessionRecord
@@ -154,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
 
     sessions_root = Path(args.sessions_root) if args.sessions_root else Path(tempfile.mkdtemp())
     sessions_root.mkdir(parents=True, exist_ok=True)
-    chat_dir = sessions_root / args.chat_id.replace("/", "_")
+    chat_dir = sessions_root / safe_dir_name(args.chat_id)
     chat_dir.mkdir(parents=True, exist_ok=True)
 
     try:

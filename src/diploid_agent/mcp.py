@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from diploid_agent._compat import safe_dir_name
 from diploid_agent.config import Config, McpServerConfig
 
 
@@ -18,7 +19,7 @@ class _PlaceholderFormatter:
     harness_url: str = ""
 
     def _safe_chat_dir(self) -> str:
-        return str(self.sessions_root / self.chat_id.replace("/", "_"))
+        return str(self.sessions_root / safe_dir_name(self.chat_id))
 
     def format(self, text: str) -> str:
         out: list[str] = []

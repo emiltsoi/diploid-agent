@@ -17,6 +17,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from diploid_agent._compat import safe_dir_name
 from diploid_agent.engine import TurnRequest
 from diploid_agent.memory_backends import _trim_to_section
 
@@ -59,7 +60,7 @@ class ShortTermMemory:
 
     @property
     def _cache_dir(self) -> Path:
-        safe = self._chat_id.replace("/", "_")
+        safe = safe_dir_name(self._chat_id)
         return self._sessions_root / safe / ".cache"
 
     def migrate_cache(self) -> None:
@@ -319,7 +320,7 @@ class ShortTermMemory:
         )
 
         try:
-            safe = self._chat_id.replace("/", "_")
+            safe = safe_dir_name(self._chat_id)
             cwd = self._sessions_root / safe / ".summarize"
             request = summary_request(prompt, cwd, model, self._config)
             result = self._devin_client.prompt(request)

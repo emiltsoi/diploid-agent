@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from diploid_agent._compat import atomic_replace, safe_dir_name
 from diploid_agent.models import ChatState, SessionRecord
 
 if TYPE_CHECKING:
@@ -125,12 +126,12 @@ class ChatSessionStore:
                     lines.append(json.dumps(record.to_dict(), default=str) + "\n")
             tmp_path = self.store_path.with_suffix(".jsonl.new")
             tmp_path.write_text("".join(lines))
-            tmp_path.replace(self.store_path)
+            atomic_replace(tmp_path, self.store_path)
 
     # ---------------------------------------------------------------- session dirs
 
     def chat_dir(self, chat_id: str) -> Path:
-        safe = chat_id.replace("/", "_")
+        safe = safe_dir_name(chat_id)
         return self.sessions_root / safe
 
     def telegram_message_registry_path(self, chat_id: str) -> Path:
@@ -165,6 +166,10 @@ class ChatSessionStore:
         for item in source.iterdir():
             if item.name in durable or item.name == ".archive":
                 continue
+            if item.suffix == ".lock":
+                # Mutex files are runtime state, not session data. Skipping
+                # also matters on Windows: a held lock can't be copied.
+                continue
             dest = target / item.name
             if item.is_dir():
                 if dest.exists():
@@ -188,6 +193,10 @@ class ChatSessionStore:
         durable = self.durable_file_names()
         for item in active_dir.iterdir():
             if item.name in durable or item.name in (".archive", ".snapshots"):
+                continue
+            if item.suffix == ".lock":
+                # Leave mutex files: unlinking a held lock breaks exclusion
+                # for the next opener (POSIX) and simply fails (Windows).
                 continue
             if item.is_dir():
                 shutil.rmtree(item)

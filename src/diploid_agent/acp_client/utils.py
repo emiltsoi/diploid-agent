@@ -11,18 +11,39 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def _devin_credentials_paths() -> list[Path]:
+    """Candidate locations for the Devin CLI credentials file."""
+    paths = [Path.home() / ".local" / "share" / "devin" / "credentials.toml"]
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        paths.append(Path(appdata) / "devin" / "credentials.toml")
+    return paths
+
+
+def _extract_windsurf_key(data: dict) -> str | None:
+    """Pull the API key out of whichever credentials.toml schema is present."""
+    if key := data.get("windsurf_api_key"):
+        return key
+    payload = data.get("payload")
+    if isinstance(payload, dict):
+        return payload.get("windsurf_api_key") or payload.get("api_key")
+    return data.get("api_key")
+
+
 def _load_windsurf_api_key() -> str | None:
     """Return the Windsurf API key from env or the Devin CLI credentials file."""
     if os.environ.get("WINDSURF_API_KEY"):
         return os.environ["WINDSURF_API_KEY"]
 
-    creds_path = Path.home() / ".local" / "share" / "devin" / "credentials.toml"
-    if creds_path.exists():
-        try:
-            data = tomllib.loads(creds_path.read_text())
-            return data.get("windsurf_api_key")
-        except (OSError, tomllib.TOMLDecodeError) as exc:
-            logger.warning("Failed to read Devin credentials from %s: %s", creds_path, exc)
+    for creds_path in _devin_credentials_paths():
+        if creds_path.exists():
+            try:
+                data = tomllib.loads(creds_path.read_text())
+            except (OSError, tomllib.TOMLDecodeError) as exc:
+                logger.warning("Failed to read Devin credentials from %s: %s", creds_path, exc)
+                continue
+            if key := _extract_windsurf_key(data):
+                return key
     return None
 
 

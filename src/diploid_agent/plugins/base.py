@@ -6,6 +6,7 @@ import abc
 from dataclasses import dataclass
 from typing import Any
 
+from diploid_agent._compat import safe_dir_name
 from diploid_agent.config import McpServerConfig, PluginConfig
 from diploid_agent.dispatch import Dispatch
 from diploid_agent.memory import MemoryItem
@@ -129,7 +130,7 @@ class StatePlugin(abc.ABC):
         """Return the chat-specific state file path, or None if no state_file."""
         if not self.state_file:
             return None
-        chat_dir = self.sessions_root / self.chat_id.replace("/", "_")
+        chat_dir = self.sessions_root / safe_dir_name(self.chat_id)
         return chat_dir / self.state_file
 
     def mcp_server(self) -> McpServerConfig | None:

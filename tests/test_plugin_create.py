@@ -45,7 +45,8 @@ def _make_config(tmp_path: Path) -> Config:
     )
 
 
-def test_plugin_create_scaffolds_and_sandboxes(tmp_path: Path):
+def test_plugin_create_scaffolds_and_sandboxes(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("WINDSURF_API_KEY", "test-key")
     runtime = AgentRuntime(_make_config(tmp_path))
     runtime.engine = FakeEngine()
 
@@ -60,7 +61,8 @@ def test_plugin_create_scaffolds_and_sandboxes(tmp_path: Path):
     assert "class Plugin(StatePlugin):" in text
 
 
-def test_plugin_create_rejects_existing(tmp_path: Path):
+def test_plugin_create_rejects_existing(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("WINDSURF_API_KEY", "test-key")
     runtime = AgentRuntime(_make_config(tmp_path))
     runtime.engine = FakeEngine()
 
@@ -69,7 +71,8 @@ def test_plugin_create_rejects_existing(tmp_path: Path):
         runtime.plugin_create(name="duplicate")
 
 
-def test_plugin_create_rejects_unsafe_name(tmp_path: Path):
+def test_plugin_create_rejects_unsafe_name(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("WINDSURF_API_KEY", "test-key")
     runtime = AgentRuntime(_make_config(tmp_path))
     runtime.engine = FakeEngine()
 

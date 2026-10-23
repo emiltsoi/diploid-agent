@@ -850,7 +850,7 @@ def test_build_dispatch_continuation_running_fallback_path(tmp_path: Path) -> No
     )
     text = builder.build_dispatch_continuation(dispatch)
     assert "- **status:** running" in text
-    assert "subagent-results/subagent-dispatch-abc123.md" in text
+    assert str(Path("subagent-results") / "subagent-dispatch-abc123.md") in text
 
 
 def test_build_follow_up_reinjects_full_soul_on_rehydrated(tmp_path: Path) -> None:
@@ -1034,7 +1034,7 @@ def test_pressure_handoff_grants_turn_and_writes_stub(tmp_path: Path) -> None:
     assert "handoff turn" in pctx.prompt
     stub = tmp_path / "sessions" / "chat-1" / "chat_self_state.md"
     assert stub.exists()
-    text = stub.read_text()
+    text = stub.read_text(encoding="utf-8")
     assert "## next-self" in text
     assert "<!-- harness-handoff -->" in text
     assert "check the rollout" in text
@@ -1054,7 +1054,7 @@ def test_pressure_fold_writes_stub_without_handoff_turn(tmp_path: Path) -> None:
     assert pctx.force_new_session
     stub = tmp_path / "sessions" / "chat-1" / "chat_self_state.md"
     assert stub.exists()
-    assert "<!-- harness-handoff -->" in stub.read_text()
+    assert "<!-- harness-handoff -->" in stub.read_text(encoding="utf-8")
 
 
 def test_pressure_handoff_stub_disabled_writes_nothing(tmp_path: Path) -> None:
@@ -1078,7 +1078,7 @@ def test_pressure_stub_does_not_shadow_model_handoff(tmp_path: Path) -> None:
     stub.write_text(original)
 
     builder.build_follow_up("chat-1", "hi", record=_pressure_record(tmp_path))
-    assert stub.read_text() == original
+    assert stub.read_text(encoding="utf-8") == original
 
 
 def test_build_follow_up_pressure_handoff_one_shot(tmp_path: Path) -> None:
