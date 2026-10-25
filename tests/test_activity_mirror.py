@@ -15,13 +15,13 @@ class _Recorder:
         self.sent.append((chat_id, text))
 
 
-def _outbox(mirror: int | None, notifier: _Recorder) -> RuntimeOutbox:
+def _outbox(mirror: int | None, notifier: _Recorder, *, outbox_delivery: bool = False) -> RuntimeOutbox:
     config = SimpleNamespace(
         harness=SimpleNamespace(
             notifications=SimpleNamespace(
                 enabled=True,
                 webhook_url=None,
-                outbox_delivery=False,
+                outbox_delivery=outbox_delivery,
                 mesh_telegram_float=False,
                 mirror_chat_id=mirror,
             ),
@@ -64,3 +64,20 @@ def test_async_delivery_path_also_mirrors() -> None:
     ob = _outbox(7945905361, rec)
     ob._deliver_chat_result("mesh:vesper", ChatResult(reply="wake reply"))
     assert ("7945905361", "[mesh:vesper] wake reply") in rec.sent
+
+
+def test_outbox_delivery_path_mirrors_exactly_once() -> None:
+    """notify=True + outbox_delivery: _deliver_chat_result mirrors internally;
+    the process() gate skips the second emit — the queue holds exactly one
+    mirror for the observer chat."""
+    rec = _Recorder()
+    ob = _outbox(7945905361, rec, outbox_delivery=True)
+    ob._deliver_chat_result("mesh:vesper", ChatResult(reply="wake reply"))
+    popped = [
+        (cid, r.reply)
+        for cid, r in iter(lambda: ob.outbox_pop(return_chat_id=True), None)
+    ]
+    assert popped == [
+        ("7945905361", "[mesh:vesper] wake reply"),
+        ("mesh:vesper", "wake reply"),
+    ]
