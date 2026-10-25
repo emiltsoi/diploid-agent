@@ -51,6 +51,7 @@ __all__ = [
     "pid_alive",
     "safe_dir_name",
     "short_temp_dir",
+    "subprocess_hidden_kwargs",
     "subprocess_session_kwargs",
 ]
 
@@ -180,15 +181,33 @@ def kill_process_tree(pid: int, sig: int | None = None) -> None:
     terminate() first and use this as the hammer.
     """
     if IS_WINDOWS:
-        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, check=False)
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True,
+            check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
         return
     os.killpg(pid, sig if sig is not None else signal.SIGKILL)
+
+
+def subprocess_hidden_kwargs() -> dict:
+    """Kwargs that keep a spawned child from popping a console window.
+
+    On Windows the harness runs under ``pythonw.exe`` -- a console-subsystem
+    child (``devin.exe``, ``git``, ``ping``, a shell task) spawned from a
+    windowless parent gets a fresh console *window* unless ``CREATE_NO_WINDOW``
+    is passed. POSIX has no such notion; the kwargs are empty there.
+    """
+    if IS_WINDOWS:
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+    return {}
 
 
 def subprocess_session_kwargs() -> dict:
     """Kwargs that put a spawned child in its own killable process group."""
     if IS_WINDOWS:
-        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW}
     return {"start_new_session": True}
 
 

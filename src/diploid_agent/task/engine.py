@@ -12,6 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from diploid_agent._compat import subprocess_hidden_kwargs
 from diploid_agent.config import Config, TaskConfig
 from diploid_agent.engine import AcpEngine, AgentEngine, TurnRequest
 from diploid_agent.engine.factory import build_engine
@@ -222,6 +223,7 @@ class TaskEngine:
                 text=True,
                 timeout=timeout,
                 check=False,
+                **subprocess_hidden_kwargs(),
             )
             return proc.stdout, proc.stderr, proc.returncode, None
         except subprocess.TimeoutExpired:

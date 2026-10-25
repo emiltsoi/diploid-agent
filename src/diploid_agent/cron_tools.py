@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from diploid_agent._compat import subprocess_hidden_kwargs
+
 SEEN_KEY = "_seen"
 DAY_SECONDS = 86400.0
 
@@ -105,6 +107,7 @@ def _git(repo: Path, *argv: str) -> str:
             text=True,
             timeout=15,
             check=False,
+            **subprocess_hidden_kwargs(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return ""
@@ -157,6 +160,7 @@ def _ping(host: str, timeout: int) -> bool | None:
             capture_output=True,
             timeout=timeout + 3,
             check=False,
+            **subprocess_hidden_kwargs(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
