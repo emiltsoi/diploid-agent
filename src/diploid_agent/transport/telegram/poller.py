@@ -144,6 +144,7 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
         tts_model_path: str = "",
         tts_command: str = "",
         tts_max_chars: int = 800,
+        allowed_chats: list[int] | None = None,
     ):
         self.token = token
         self.metrics = metrics
@@ -173,6 +174,7 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
             tts_model_path=tts_model_path,
             tts_command=tts_command,
             tts_max_chars=tts_max_chars,
+            allowed_chats=allowed_chats or [],
         )
         self.state_dir = state_dir or Path("sessions") / ".poller-placeholders"
         # Attachments land in <sessions_root>/<chat_id>/<dirname>/, inside the
@@ -621,6 +623,13 @@ class TelegramPoller(TelegramCommandMixin, TelegramSenderMixin, TelegramStateMix
 
         chat_input = self._parse_update(update)
         if chat_input is None:
+            return
+
+        allowed = self._live_telegram_config.allowed_chats
+        if allowed and chat_input.chat_id not in allowed:
+            # Bot handles are discoverable — silently consume updates from
+            # chats that are not ours rather than handing strangers a turn.
+            logger.info("Ignoring update from non-allowed chat %s", chat_input.chat_id)
             return
 
         chat_input = self._maybe_answer_pending_question(chat_input)
