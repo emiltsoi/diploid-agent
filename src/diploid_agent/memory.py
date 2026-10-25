@@ -25,6 +25,7 @@ from diploid_agent.memory_models import MemoryItem, RecallResult
 from diploid_agent.memory_promoted import PromotedMemory
 from diploid_agent.memory_retention import TurnRetainBuffer
 from diploid_agent.memory_short_term import ShortTermMemory, summary_request
+from diploid_agent.sanitize import sanitize_surrogates
 
 logger = logging.getLogger(__name__)
 
@@ -238,9 +239,17 @@ class MemoryManager:
         assistant_content = reply if reply else (notice or "")
         with open(path, "a", encoding="utf-8") as f:
             if system_note:
-                f.write(json.dumps({"role": "system", "content": system_note}) + "\n")
-            f.write(json.dumps({"role": "user", "content": user_message}) + "\n")
-            f.write(json.dumps({"role": "assistant", "content": assistant_content}) + "\n")
+                f.write(
+                    json.dumps({"role": "system", "content": sanitize_surrogates(system_note)})
+                    + "\n"
+                )
+            f.write(
+                json.dumps({"role": "user", "content": sanitize_surrogates(user_message)}) + "\n"
+            )
+            f.write(
+                json.dumps({"role": "assistant", "content": sanitize_surrogates(assistant_content)})
+                + "\n"
+            )
 
     def append_mesh_note(self, text: str) -> None:
         """Append a mesh/system note to the current chat's transcript."""

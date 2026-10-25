@@ -27,6 +27,7 @@ from diploid_agent.acp_client.errors import (
     _acp_error_from_response,
 )
 from diploid_agent.acp_client.state import _StateAttr
+from diploid_agent.sanitize import sanitize_json_value
 
 logger = logging.getLogger(__name__)
 
@@ -757,7 +758,9 @@ class AcpTransport:
 
     async def _send(self, msg: dict[str, Any], timeout: float | None = None) -> None:
         self._check_accepting("acp.send")
-        data = (json.dumps(msg, ensure_ascii=False) + "\n").encode()
+        # A lone surrogate anywhere in the payload would raise UnicodeEncodeError
+        # here and wedge the whole turn — scrub to U+FFFD at the wire boundary.
+        data = (json.dumps(sanitize_json_value(msg), ensure_ascii=False) + "\n").encode()
         logger.debug("ACP SEND: %s", data.decode().strip()[:200])
         self._proc.stdin.write(data)
         try:
