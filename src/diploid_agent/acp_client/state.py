@@ -62,7 +62,13 @@ class AcpClientState:
     # Buffered per session so the harness can reconcile external driver
     # activity (e.g. a GUI client that drove the same session) instead of
     # dropping the replay on the floor. Drained by ``drain_session_replay``.
+    # Limitation: foreign traffic while a diploid prompt IS active lands in
+    # ``prompt.updates`` instead — reconcile covers custody between resumes,
+    # not concurrent custody within one live prompt.
     _session_replay: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    # Sessions that have already logged a replay-buffer overflow (cleared on
+    # drain so a later refill warns again).
+    _replay_warned: set[str] = field(default_factory=set)
     _session_models: dict[str, str] = field(default_factory=dict)
     _pending_cancels: set[str] = field(default_factory=set)
     _model_options: list[str] | None = None

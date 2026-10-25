@@ -164,3 +164,43 @@ def test_reconcile_no_replay_returns_none() -> None:
     runtime = _FakeRuntime(_FakeBackend(), [])
     recon = TurnReconcile(_FakeController(runtime))
     assert recon.reconcile_after_resume("iris:devin", "s", _record()) is None
+
+
+class _FakeLifecycle:
+    def __init__(self):
+        self.events = []
+
+    def write(self, event, **kw):
+        self.events.append((event, kw))
+
+
+def test_reconcile_logs_unaccounted_prefix() -> None:
+    """Duplicate user text ("continue"-style) must not silently drop a foreign
+    turn sandwiched before it — the divergence has to surface."""
+    backend = _FakeBackend(
+        entries=[
+            {"role": "user", "content": "continue"},
+            {"role": "assistant", "content": "a1"},
+        ]
+    )
+    updates = [
+        _update("user_message_chunk", "continue"),
+        _update("agent_message_chunk", "a1"),
+        _update("user_message_chunk", "foreign turn"),
+        _update("agent_message_chunk", "foreign reply"),
+        _update("user_message_chunk", "continue"),
+        _update("agent_message_chunk", "a2"),
+    ]
+    runtime = _FakeRuntime(backend, updates)
+    runtime.lifecycle_log = _FakeLifecycle()
+    recon = TurnReconcile(_FakeController(runtime))
+
+    report = recon.reconcile_after_resume("iris:devin", "liberating-sulfur", _record())
+
+    # Tail-alignment matches the second "continue" — nothing after it is
+    # external, but the skipped prefix turn must be logged.
+    assert report is not None
+    diverged = [e for e in runtime.lifecycle_log.events if e[0] == "reconcile.diverged"]
+    assert len(diverged) == 1
+    assert diverged[0][1]["detail"]["reason"] == "unaccounted_prefix"
+    assert diverged[0][1]["detail"]["skipped_users"] == ["foreign turn"]

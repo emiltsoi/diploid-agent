@@ -108,6 +108,15 @@ class AcpCallbackPump:
                     buf = self._state._session_replay.setdefault(session_id, [])
                     if len(buf) < _REPLAY_CAP:
                         buf.append(update)
+                    elif session_id not in self._state._replay_warned:
+                        # Overflow drops the newest updates — the tail that
+                        # carries external turns. Warn once per fill.
+                        self._state._replay_warned.add(session_id)
+                        logger.warning(
+                            "Replay buffer full for session %s (%d updates); dropping newest",
+                            session_id,
+                            _REPLAY_CAP,
+                        )
                 logger.debug("Buffered replayed update for session %s", session_id)
                 return
 

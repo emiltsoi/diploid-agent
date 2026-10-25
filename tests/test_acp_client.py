@@ -1097,3 +1097,36 @@ def test_route_update_buffers_replay_when_no_prompt() -> None:
     assert replayed[0]["sessionUpdate"] == "user_message_chunk"
     # Drain clears the buffer.
     assert client.drain_session_replay("s-1") == []
+
+
+def test_replay_overflow_warns_once_and_rewarns(caplog) -> None:
+    """At _REPLAY_CAP the newest updates are dropped — warn once per fill,
+    and clear the warned flag on drain so a later refill warns again."""
+    import logging
+
+    from diploid_agent.acp_client.callbacks import _REPLAY_CAP
+
+    client = AcpClient(agent_bin="/bin/true", api_key="test-key")
+    client._loop = asyncio.new_event_loop()
+
+    def _push(n: int) -> None:
+        for _ in range(n):
+            client._route_update(
+                {
+                    "method": "session/update",
+                    "params": {
+                        "sessionId": "s-cap",
+                        "update": {"sessionUpdate": "user_message_chunk"},
+                    },
+                }
+            )
+
+    with caplog.at_level(logging.WARNING):
+        _push(_REPLAY_CAP + 5)
+    assert sum("Replay buffer full" in r.message for r in caplog.records) == 1
+
+    caplog.clear()
+    client.drain_session_replay("s-cap")
+    with caplog.at_level(logging.WARNING):
+        _push(_REPLAY_CAP + 1)
+    assert sum("Replay buffer full" in r.message for r in caplog.records) == 1

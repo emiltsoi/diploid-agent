@@ -175,6 +175,15 @@ class TurnPipeline(TurnComponent):
                                     {"message": (f"session resync failed for {chat_id}: {exc}")},
                                 ) from exc
                             raise
+                        if resumed_id:
+                            # session/load replays history into _session_replay;
+                            # rehydrate's reconcile is the adopting consumer.
+                            # Discarding here is safe — the next resume replays
+                            # full history again — and keeps this replay from
+                            # contaminating a later drain on the same session.
+                            self.runtime.call_engine_unlocked(
+                                self.runtime.engine.drain_session_replay, resumed_id
+                            )
                         if self.runtime.lifecycle_log is not None:
                             self.runtime.lifecycle_log.write(
                                 "session.resync",

@@ -132,10 +132,39 @@ class TurnReconcile(TurnComponent):
                     break
         if start >= 0:
             external = replayed[start + 1 :]
+            # Duplicate user text can align the tail on a later occurrence and
+            # silently skip foreign turns sandwiched before it — surface any
+            # prefix turns the transcript has never seen.
+            known_set = set(known_users)
+            unaccounted = [t.user[:120] for t in replayed[:start] if t.user not in known_set]
+            if unaccounted:
+                self._log_divergence(
+                    chat_id,
+                    session_id,
+                    "unaccounted_prefix",
+                    {"skipped_users": unaccounted, "aligned_at": start},
+                )
         elif len(replayed) > len(known_users):
+            # Tail unmatched — count-delta fallback. The replay and transcript
+            # disagree on where our history ends; note it even though the
+            # slice may still be right.
+            self._log_divergence(
+                chat_id,
+                session_id,
+                "tail_unmatched_fallback",
+                {"replayed": len(replayed), "known_users": len(known_users)},
+            )
             external = replayed[len(known_users) :]
         else:
-            return ReconcileReport(external_turns=[], aligned=start >= 0 or not known_users)
+            # Replay shows fewer/equal turns than the transcript and the tail
+            # didn't match — the divergence this feature exists to detect.
+            self._log_divergence(
+                chat_id,
+                session_id,
+                "tail_unmatched",
+                {"replayed": len(replayed), "known_users": len(known_users)},
+            )
+            return ReconcileReport(external_turns=[], aligned=not known_users)
 
         if not external:
             return ReconcileReport()
@@ -163,3 +192,16 @@ class TurnReconcile(TurnComponent):
             logger.exception("on_external_turns hook failed for %s", chat_id)
 
         return ReconcileReport(external_turns=external, aligned=start >= 0)
+
+    def _log_divergence(
+        self, chat_id: str, session_id: str, reason: str, detail: dict[str, Any]
+    ) -> None:
+        detail = {"reason": reason, **detail}
+        logger.warning("session replay divergence for %s (%s): %s", session_id, reason, detail)
+        if self.runtime.lifecycle_log is not None:
+            self.runtime.lifecycle_log.write(
+                "reconcile.diverged",
+                chat_id=chat_id,
+                session_id=session_id,
+                detail=detail,
+            )

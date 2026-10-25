@@ -361,6 +361,7 @@ class AcpClient:
         (e.g. a GUI front-end) since the record was last written.
         """
         with self._state._lock:
+            self._state._replay_warned.discard(session_id)
             return self._state._session_replay.pop(session_id, [])
 
     def resume_session(
