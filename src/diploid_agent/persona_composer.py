@@ -60,12 +60,12 @@ def compose_persona(config: PersonaConfig) -> PersonaPrompt:
     for filename in DEFAULT_IDENTITY_FILES:
         path = root / filename
         if path.exists():
-            parts.append(f"## {path.stem}\n\n{path.read_text()}")
+            parts.append(f"## {path.stem}\n\n{path.read_text(encoding='utf-8')}")
 
     fleet_root = config.fleet_root or root.parent
     shared = (fleet_root / "shared" / "AGENTS.md") if fleet_root else None
     if shared and shared.exists():
-        parts.append(f"## Fleet shared AGENTS\n\n{shared.read_text()}")
+        parts.append(f"## Fleet shared AGENTS\n\n{shared.read_text(encoding='utf-8')}")
 
     if not parts:
         raise FileNotFoundError(f"No persona files found under {root} for persona '{config.name}'")

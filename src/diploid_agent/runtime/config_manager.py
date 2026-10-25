@@ -213,7 +213,7 @@ class RuntimeConfigManager:
         if not self._runtime_overrides_path.exists():
             return
         try:
-            data = yaml.safe_load(self._runtime_overrides_path.read_text()) or {}
+            data = yaml.safe_load(self._runtime_overrides_path.read_text(encoding="utf-8")) or {}
         except (OSError, ValueError, yaml.YAMLError):
             logger.exception(
                 "Failed to load runtime overrides from %s", self._runtime_overrides_path
@@ -298,7 +298,8 @@ class RuntimeConfigManager:
                 }
                 tmp_path = self._runtime_overrides_path.with_suffix(".yaml.tmp")
                 tmp_path.write_text(
-                    yaml.safe_dump(overrides, sort_keys=False, default_flow_style=False)
+                    yaml.safe_dump(overrides, sort_keys=False, default_flow_style=False),
+                    encoding="utf-8",
                 )
                 atomic_replace(tmp_path, self._runtime_overrides_path)
                 return True

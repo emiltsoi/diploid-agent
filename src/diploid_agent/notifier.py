@@ -287,7 +287,7 @@ class TelegramNotifier(Notifier):
         if path is None or not path.exists():
             return None
         try:
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
             message_id = int(data["message_id"])
         except (OSError, ValueError, KeyError, TypeError):
             return None
@@ -301,7 +301,7 @@ class TelegramNotifier(Notifier):
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(path.suffix + ".new")
-            tmp.write_text(json.dumps({"message_id": message_id}))
+            tmp.write_text(json.dumps({"message_id": message_id}), encoding="utf-8")
             atomic_replace(tmp, path)
         except OSError:
             logger.warning("Could not persist task board id for chat %s", chat_id)

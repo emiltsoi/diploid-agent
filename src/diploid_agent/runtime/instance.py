@@ -54,7 +54,7 @@ class InstanceManager:
         if not path.exists():
             return None
         try:
-            return json.loads(path.read_text())
+            return json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return None
 
@@ -107,7 +107,7 @@ class InstanceManager:
                         pass
                 # Fall back to kill-only liveness.
                 return True
-            for line in status_path.read_text().splitlines():
+            for line in status_path.read_text(encoding="utf-8").splitlines():
                 if line.startswith("State:"):
                     return line.split()[1] != "Z"
         except (OSError, ValueError, IndexError):

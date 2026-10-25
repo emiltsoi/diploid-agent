@@ -29,7 +29,7 @@ def _load_state(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return {}
     return data if isinstance(data, dict) else {}
@@ -53,7 +53,7 @@ def count_appends(args: argparse.Namespace) -> int:
     state_path = Path(args.state).expanduser()
     bucket = args.bucket
     try:
-        lines = target.read_text().splitlines()
+        lines = target.read_text(encoding="utf-8").splitlines()
         line_count = len(lines)
     except OSError:
         print(f"count-appends: {target} unreadable", file=sys.stderr)
@@ -85,7 +85,7 @@ def count_appends(args: argparse.Namespace) -> int:
         del days[d]
 
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps(state, indent=2, sort_keys=True))
+    state_path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
 
     total = int(day.get(bucket, 0))
     status = f"{bucket}: +{appended} appended, {total}/{args.budget} today"
@@ -175,7 +175,7 @@ def ledger_lint(args: argparse.Namespace) -> int:
     """
     target = Path(args.file).expanduser()
     try:
-        text = target.read_text()
+        text = target.read_text(encoding="utf-8")
     except OSError:
         print(f"ledger-lint: {target} unreadable", file=sys.stderr)
         return 1
@@ -267,7 +267,7 @@ def open_items_lint(args: argparse.Namespace) -> int:
     """
     target = Path(args.file).expanduser()
     try:
-        lines = target.read_text().splitlines()
+        lines = target.read_text(encoding="utf-8").splitlines()
     except OSError:
         print(f"open-items-lint: {target} unreadable", file=sys.stderr)
         return 1

@@ -63,7 +63,7 @@ class PromotedMemory:
         truncated = False
 
         if path.exists():
-            raw = path.read_text()
+            raw = path.read_text(encoding="utf-8")
             total = len(raw)
             if max_chars and total > max_chars:
                 text = _trim_to_section(raw, max_chars)
@@ -92,7 +92,7 @@ class PromotedMemory:
         truncated = False
 
         if path.exists():
-            raw = path.read_text()
+            raw = path.read_text(encoding="utf-8")
             total = len(raw)
             if total > cap:
                 text = _trim_to_section(raw, cap)

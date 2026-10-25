@@ -101,7 +101,7 @@ class TelegramStateMixin:
         try:
             self.state_dir.mkdir(parents=True, exist_ok=True)
             state = {"chat_id": chat_id, "message_id": message_id, "thought_id": thought_id}
-            self._placeholder_state_path(chat_id).write_text(json.dumps(state))
+            self._placeholder_state_path(chat_id).write_text(json.dumps(state), encoding="utf-8")
         except Exception:
             logger.exception("Failed to save placeholder state for chat %s", chat_id)
 
@@ -130,7 +130,7 @@ class TelegramStateMixin:
                 "cancel_label": ask_block.cancel_label,
                 "message_id": message_id,
             }
-            self._pending_question_path(chat_id).write_text(json.dumps(payload))
+            self._pending_question_path(chat_id).write_text(json.dumps(payload), encoding="utf-8")
         except Exception:
             logger.exception("Failed to save pending question for chat %s", chat_id)
 
@@ -140,7 +140,7 @@ class TelegramStateMixin:
         if not path.exists():
             return None
         try:
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
             options = data.get("options") or []
             if not options:
                 return None
@@ -272,7 +272,7 @@ class TelegramStateMixin:
             if path.name.endswith((".ask.json", ".board.json")):
                 continue
             try:
-                state = json.loads(path.read_text())
+                state = json.loads(path.read_text(encoding="utf-8"))
                 chat_id = state.get("chat_id")
                 message_id = state.get("message_id")
                 thought_id = state.get("thought_id")

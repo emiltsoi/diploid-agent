@@ -49,7 +49,7 @@ class TurnRetainBuffer:
         if not path.exists():
             return
         try:
-            for line in path.read_text().splitlines():
+            for line in path.read_text(encoding="utf-8").splitlines():
                 if not line.strip():
                     continue
                 try:
@@ -67,7 +67,9 @@ class TurnRetainBuffer:
         try:
             if self.entries:
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("".join(json.dumps(e) + "\n" for e in self.entries))
+                path.write_text(
+                    "".join(json.dumps(e) + "\n" for e in self.entries), encoding="utf-8"
+                )
             elif path.exists():
                 path.unlink()
         except OSError:
