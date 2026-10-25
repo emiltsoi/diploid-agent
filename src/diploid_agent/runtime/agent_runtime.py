@@ -1015,7 +1015,7 @@ class AgentRuntime(RuntimeAPI):
         reply_to_message_id: int | None = None,
         notify: bool = True,
     ) -> ChatResult:
-        return self._ingress.process(
+        result = self._ingress.process(
             chat_id,
             user_message,
             model=model,
@@ -1024,6 +1024,11 @@ class AgentRuntime(RuntimeAPI):
             reply_to_message_id=reply_to_message_id,
             notify=notify,
         )
+        # /chat callers suppress notify but a mirror observer still wants the
+        # turn — this is the only place notify=False results are visible.
+        if result is not None:
+            self._outbox.emit_activity_mirror(chat_id, result)
+        return result
 
     def dispatch(
         self,

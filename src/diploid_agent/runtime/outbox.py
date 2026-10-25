@@ -125,8 +125,31 @@ class RuntimeOutbox:
         except Exception:
             logger.exception("Failed to send notification to %s", chat_id)
 
+    def emit_activity_mirror(self, chat_id: str, chat_result: ChatResult) -> None:
+        """Mirror a result from a non-Telegram chat to the configured observer chat.
+
+        Turns on ``mesh:*``/API chats are otherwise invisible to the operator
+        — ``/chat`` callers get the reply, nobody else sees it. Mirrors arrive
+        labeled ``[chat_id]`` so the observer can tell mesh traffic from
+        steering. Telegram-originated chats are not mirrored (their owner
+        already sees them); empty results carry nothing worth watching.
+        """
+        mirror = self.config.harness.notifications.mirror_chat_id
+        if mirror is None or not self.config.harness.notifications.enabled:
+            return
+        if not chat_result.reply:
+            return
+        if _is_telegram_chat_id(chat_id) or str(chat_id) == str(mirror):
+            return
+        preview = chat_result.reply[:400]
+        self._deliver_chat_result(
+            str(mirror),
+            ChatResult(reply=f"[{chat_id}] {preview}", transient=True),
+        )
+
     def _deliver_chat_result(self, chat_id: str, chat_result: ChatResult) -> None:
         """Send a final ChatResult through the configured delivery channel."""
+        self.emit_activity_mirror(chat_id, chat_result)
         if self._outbox_delivery_enabled:
             self._enqueue_outbox(chat_id, chat_result)
             return
