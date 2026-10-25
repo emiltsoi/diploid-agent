@@ -13,6 +13,7 @@ from pathlib import Path
 
 from diploid_agent._compat import atomic_replace, fcntl
 from diploid_agent.models import WakeEvent
+from diploid_agent.sanitize import sanitize_json_value
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,9 @@ class WakeQueue:
     def enqueue(self, event: WakeEvent) -> WakeEvent:
         if not event.id:
             event.id = self._unique_id()
+        # Record-time scrub: a lone surrogate in a wire payload would crash the
+        # utf-8 save on every retry — the vesper wake-queue wedge class.
+        event.payload = sanitize_json_value(event.payload)
         with self._transaction():
             self._in_memory[event.id] = event
         return event
@@ -121,7 +125,7 @@ class WakeQueue:
             tasks.extend(event.payload.get("tasks") or [])
             merged.update({k: v for k, v in event.payload.items() if k != "tasks"})
             merged["tasks"] = tasks
-            target.payload = merged
+            target.payload = sanitize_json_value(merged)
             return True
 
     def get(self, event_id: str) -> WakeEvent | None:
