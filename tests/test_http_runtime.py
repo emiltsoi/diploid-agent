@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 from diploid_agent.config import (
@@ -182,6 +183,27 @@ def test_task_config_persists_and_reloads(tmp_path: Path) -> None:
     assert fresh.get_task_config().workers == 2
     assert fresh.get_task_config().shell_timeout == 30.0
     assert fresh.get_task_config().enabled_types == ["shell", "noop"]
+
+
+def test_telegram_token_not_persisted_in_overrides(tmp_path: Path) -> None:
+    config = _make_config(tmp_path)
+    config.harness.telegram.enabled = True
+    config.harness.telegram.token = "super-secret-token"
+    runtime = AgentRuntime(config)
+    runtime.engine = FakeEngine()
+    runtime.update_task_config(
+        TaskConfig(workers=2, shell_timeout=30.0, enabled_types=["shell", "noop"])
+    )
+
+    overrides_file = tmp_path / "runtime-overrides.yaml"
+    raw = overrides_file.read_text(encoding="utf-8")
+    assert "super-secret-token" not in raw
+    assert "token" not in yaml.safe_load(raw)["telegram"]
+
+    # Reload still resolves the token from the base config (secrets/env).
+    fresh = AgentRuntime(config)
+    fresh.engine = FakeEngine()
+    assert fresh.config.harness.telegram.token == "super-secret-token"
 
 
 def test_task_config_persistence_is_optional(tmp_path: Path) -> None:

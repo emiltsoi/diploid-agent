@@ -289,7 +289,7 @@ class RuntimeConfigManager:
                         exclude_none=True, mode="json"
                     ),
                     "telegram": self.config.harness.telegram.model_dump(
-                        exclude_none=True, mode="json"
+                        exclude_none=True, mode="json", exclude={"token"}
                     ),
                     "plugins": [
                         p.model_dump(exclude_none=True, mode="json")
