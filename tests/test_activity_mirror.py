@@ -15,7 +15,9 @@ class _Recorder:
         self.sent.append((chat_id, text))
 
 
-def _outbox(mirror: int | None, notifier: _Recorder, *, outbox_delivery: bool = False) -> RuntimeOutbox:
+def _outbox(
+    mirror: int | None, notifier: _Recorder, *, outbox_delivery: bool = False
+) -> RuntimeOutbox:
     config = SimpleNamespace(
         harness=SimpleNamespace(
             notifications=SimpleNamespace(
@@ -73,10 +75,7 @@ def test_outbox_delivery_path_mirrors_exactly_once() -> None:
     rec = _Recorder()
     ob = _outbox(7945905361, rec, outbox_delivery=True)
     ob._deliver_chat_result("mesh:vesper", ChatResult(reply="wake reply"))
-    popped = [
-        (cid, r.reply)
-        for cid, r in iter(lambda: ob.outbox_pop(return_chat_id=True), None)
-    ]
+    popped = [(cid, r.reply) for cid, r in iter(lambda: ob.outbox_pop(return_chat_id=True), None)]
     assert popped == [
         ("7945905361", "[mesh:vesper] wake reply"),
         ("mesh:vesper", "wake reply"),
