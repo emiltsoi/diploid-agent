@@ -11,6 +11,7 @@ from diploid_agent.engine import TurnRequest, TurnResult
 from diploid_agent.models import ActiveTurn, ChatResult, PartialTurn, SessionRecord, WakeEvent
 from diploid_agent.plugins.contexts import PromptContext, RehydrationReason
 from diploid_agent.turn.base import TurnComponent
+from diploid_agent.turn.utils import join_notices
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +172,17 @@ class TurnRehydrate(TurnComponent):
                         session_id=resumed_id,
                         reason=rehydration_reason.value,
                     )
+                reconcile_notice = None
+                try:
+                    report = self.controller.reconcile.reconcile_after_resume(
+                        chat_id, resumed_id, old_record
+                    )
+                    if report is not None and report.count:
+                        reconcile_notice = (
+                            f"adopted {report.count} externally-driven turn(s) on resume"
+                        )
+                except Exception:
+                    logger.exception("post-resume reconcile failed for %s", chat_id)
                 pctx = self.runtime.context_builder.build_follow_up(
                     chat_id,
                     user_message,
@@ -185,6 +197,7 @@ class TurnRehydrate(TurnComponent):
                     wake_event=wake_event,
                     other_instance_running=other_instance_running,
                 )
+                pctx.notice = join_notices(pctx.notice, reconcile_notice)
                 follow_model = pctx.model or use_model
                 request = TurnRequest(
                     prompt=pctx.prompt,

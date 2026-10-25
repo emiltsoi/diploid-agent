@@ -224,6 +224,9 @@ class PluginHooks:
     def on_turn_end(self, chat_id: str, turn: TurnInfo) -> None:
         self._notify_hook(chat_id, "on_turn_end", turn)
 
+    def on_external_turns(self, chat_id: str, turns: list[dict[str, Any]]) -> None:
+        self._notify_hook(chat_id, "on_external_turns", turns)
+
     def on_sleeping(self, chat_id: str, record: SessionRecord | None, reason: str) -> None:
         context = SleepContext(
             chat_id=chat_id,

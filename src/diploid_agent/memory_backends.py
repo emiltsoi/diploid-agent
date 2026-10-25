@@ -185,11 +185,18 @@ class FileMemoryBackend(MemoryBackend):
             self._transcript_cache = (offset + len(raw), st.st_mtime, entries)
             return list(entries)
 
-    def append_transcript(self, user_message: str, assistant_reply: str) -> None:
+    def append_transcript(
+        self,
+        user_message: str,
+        assistant_reply: str,
+        *,
+        external: bool = False,
+    ) -> None:
         self._session_dir.mkdir(parents=True, exist_ok=True)
+        marker = {"external": True} if external else {}
         with open(self._transcript_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps({"role": "user", "content": user_message}) + "\n")
-            f.write(json.dumps({"role": "assistant", "content": assistant_reply}) + "\n")
+            f.write(json.dumps({"role": "user", "content": user_message, **marker}) + "\n")
+            f.write(json.dumps({"role": "assistant", "content": assistant_reply, **marker}) + "\n")
 
     def append_system_note(self, text: str) -> None:
         """Append a single system/mesh note to the transcript."""

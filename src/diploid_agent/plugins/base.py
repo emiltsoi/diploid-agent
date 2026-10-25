@@ -233,6 +233,14 @@ class StatePlugin(abc.ABC):
     def on_turn_end(self, turn: TurnInfo) -> None:
         """Called after a turn is recorded."""
 
+    def on_external_turns(self, turns: list[dict[str, Any]]) -> None:
+        """Called when resume adopts turns driven by another client.
+
+        ``turns`` is a list of ``{"user": str, "assistant": str}`` pairs that
+        appeared in the session's replayed history but not in the diploid-side
+        transcript — i.e. a GUI front-end or second driver held custody.
+        """
+
     def on_sleeping(self, context: SleepContext) -> None:
         """Called when the harness is shutting down."""
 

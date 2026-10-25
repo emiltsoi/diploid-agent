@@ -522,6 +522,7 @@ class PluginManager:
             "event",
             "memory_items",
             "on_turn_end",
+            "on_external_turns",
             "on_sleeping",
             "on_shutdown",
             "before_turn",

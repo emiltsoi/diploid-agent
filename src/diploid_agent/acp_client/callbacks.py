@@ -15,6 +15,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Cap on buffered replayed-history updates per session. Generous — a resumed
+# session may replay hundreds of updates — but bounded so a runaway agent
+# cannot grow memory without bound.
+_REPLAY_CAP = 8192
+
 
 class AcpCallbackPump:
     """Serializes prompt callbacks off the transport reader thread.
@@ -96,7 +101,23 @@ class AcpCallbackPump:
             if len(self._state._active_prompts) == 1:
                 prompt = next(iter(self._state._active_prompts.values()))
             else:
-                logger.debug("No prompt for update session %s", session_id)
+                # No prompt in flight — this is replayed session history
+                # (e.g. during session/load). Buffer it for reconciliation
+                # instead of dropping it.
+                with self._state._lock:
+                    buf = self._state._session_replay.setdefault(session_id, [])
+                    if len(buf) < _REPLAY_CAP:
+                        buf.append(update)
+                    elif session_id not in self._state._replay_warned:
+                        # Overflow drops the newest updates — the tail that
+                        # carries external turns. Warn once per fill.
+                        self._state._replay_warned.add(session_id)
+                        logger.warning(
+                            "Replay buffer full for session %s (%d updates); dropping newest",
+                            session_id,
+                            _REPLAY_CAP,
+                        )
+                logger.debug("Buffered replayed update for session %s", session_id)
                 return
 
         prompt.updates.append(update)

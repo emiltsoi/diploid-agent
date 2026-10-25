@@ -492,6 +492,12 @@ class TurnSession(TurnComponent):
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Failed to resume ACP session %s: %s", source.session_id, exc)
 
+        if resumed_id:
+            # session/load replays history into _session_replay; rehydrate's
+            # reconcile is the adopting consumer. Discard here so this
+            # session's replay can't contaminate a later drain.
+            self.runtime._call_unlocked(self.runtime.engine.drain_session_replay, resumed_id)
+
         if not resumed_id:
             # Fall back to the legacy probe/rehydrate path — but a record
             # rejected by the consistency rules (timeout-flagged, no
@@ -739,6 +745,11 @@ class TurnSession(TurnComponent):
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Failed to resume ACP session for branch %s: %s", chat_id, exc)
+
+        if resumed_id:
+            # Same replay-discard as the switch path above — rehydrate is the
+            # only site that reconciles buffered replay.
+            self.runtime._call_unlocked(self.runtime.engine.drain_session_replay, resumed_id)
 
         if resumed_id:
             pctx = self.runtime.context_builder.build_follow_up(

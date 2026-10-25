@@ -43,6 +43,9 @@ class SessionRecord:
     # turn. Not copied to the next record — a fresh session earns a fresh
     # handoff the next time its window fills.
     pressure_handoff_done: bool = False
+    # Turns adopted from the session replay that were driven by another
+    # client (e.g. a GUI front-end sharing custody) rather than by diploid.
+    external_turns: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
