@@ -138,6 +138,9 @@ class TelegramConfig(BaseModel):
     tts_model_path: str = ""
     tts_command: str = ""
     tts_max_chars: int = 800
+    # Empty = open (any chat that finds the bot). Non-empty = only these
+    # Telegram chat_ids get turns; other updates are consumed and dropped.
+    allowed_chats: list[int] = Field(default_factory=list)
 
 
 class MetricsConfig(BaseModel):

@@ -149,6 +149,7 @@ def main() -> int:
         tts_model_path=config.harness.telegram.tts_model_path,
         tts_command=config.harness.telegram.tts_command,
         tts_max_chars=config.harness.telegram.tts_max_chars,
+        allowed_chats=config.harness.telegram.allowed_chats,
         state_dir=config.harness.sessions_root / ".poller-placeholders",
         sessions_root=config.harness.sessions_root,
         reply_preview_chars=config.harness.memory.max_bot_reply_quote_chars,

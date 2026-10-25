@@ -4313,3 +4313,64 @@ def test_error_reply_exposes_exception_detail() -> None:
     long = _error_reply("Sorry.", RuntimeError("x" * 500))
     assert len(long) < 320
     assert long.endswith("Try again in a moment.")
+
+
+def test_handle_update_drops_non_allowed_chat(tmp_path: Path) -> None:
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+        allowed_chats=[12345],
+    )
+    poller._handle_update(
+        _update(
+            message={
+                "message_id": 1,
+                "chat": {"id": 999, "type": "private"},
+                "from": {"id": 1, "is_bot": False},
+                "text": "hello",
+            }
+        )
+    )
+    assert 999 not in poller._last_user_message_ids
+    assert poller._pending_inputs == {}
+    assert poller._active_workers == {}
+
+
+def test_handle_update_allows_listed_chat(tmp_path: Path) -> None:
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+        allowed_chats=[12345],
+    )
+    poller._handle_update(
+        _update(
+            message={
+                "message_id": 1,
+                "chat": {"id": 12345, "type": "private"},
+                "from": {"id": 1, "is_bot": False},
+                "text": "hello",
+            }
+        )
+    )
+    assert poller._last_user_message_ids.get(12345) == 1
+
+
+def test_handle_update_empty_allowlist_is_open(tmp_path: Path) -> None:
+    poller = TelegramPoller(
+        token="dummy",
+        harness_url="http://localhost",
+        state_dir=tmp_path / ".poller-placeholders",
+    )
+    poller._handle_update(
+        _update(
+            message={
+                "message_id": 1,
+                "chat": {"id": 999, "type": "private"},
+                "from": {"id": 1, "is_bot": False},
+                "text": "hello",
+            }
+        )
+    )
+    assert poller._last_user_message_ids.get(999) == 1
