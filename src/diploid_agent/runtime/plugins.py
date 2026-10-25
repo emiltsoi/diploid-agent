@@ -9,6 +9,7 @@ import sys
 import threading
 from typing import TYPE_CHECKING, Any
 
+from diploid_agent._compat import subprocess_hidden_kwargs
 from diploid_agent.config import Config, PluginConfig
 from diploid_agent.locking import locked
 from diploid_agent.models import ChatResult
@@ -247,6 +248,7 @@ class RuntimePlugins:
             text=True,
             timeout=30.0,
             check=False,
+            **subprocess_hidden_kwargs(),
         )
         try:
             output = _json.loads(result.stdout.splitlines()[-1])

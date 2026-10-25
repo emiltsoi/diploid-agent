@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from diploid_agent._compat import subprocess_hidden_kwargs
 from diploid_agent.config import TelegramConfig
 
 logger = logging.getLogger("telegram_poll")
@@ -42,6 +43,7 @@ def _transcribe_command(path: Path, command: str) -> str | None:
             text=True,
             timeout=_COMMAND_TIMEOUT,
             check=False,
+            **subprocess_hidden_kwargs(),
         )
     except Exception:
         logger.exception("stt command failed for %s", path)
@@ -116,6 +118,7 @@ def _synthesize_command(text: str, command: str, work_dir: Path) -> Path | None:
             capture_output=True,
             timeout=_TTS_TIMEOUT,
             check=False,
+            **subprocess_hidden_kwargs(),
         )
     except Exception:
         logger.exception("tts command failed")
@@ -190,6 +193,7 @@ def _synthesize_piper(text: str, model_path: str, work_dir: Path) -> Path | None
             capture_output=True,
             timeout=_TTS_TIMEOUT,
             check=False,
+            **subprocess_hidden_kwargs(),
         )
     except Exception:
         logger.exception("ffmpeg wav→ogg failed")

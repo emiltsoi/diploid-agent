@@ -11,6 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from diploid_agent._compat import subprocess_hidden_kwargs
 from diploid_agent.acp_client import (
     AcpClient,
     AcpError,
@@ -320,6 +321,7 @@ class AcpEngine(AgentEngine):
                 text=True,
                 timeout=30.0,
                 check=False,
+                **subprocess_hidden_kwargs(),
             )
             if proc.returncode != 0:
                 logger.debug("Failed to list models: %s", proc.stderr)

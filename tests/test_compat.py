@@ -26,6 +26,7 @@ from diploid_agent._compat import (
     pid_alive,
     safe_dir_name,
     short_temp_dir,
+    subprocess_hidden_kwargs,
     subprocess_session_kwargs,
 )
 
@@ -178,6 +179,15 @@ def test_subprocess_session_kwargs_shape() -> None:
         assert "start_new_session" not in kwargs
     else:
         assert kwargs.get("start_new_session") is True
+
+
+def test_spawn_kwargs_hide_console_on_windows() -> None:
+    """Children of the windowless ``pythonw`` harness must not pop a console."""
+    if IS_WINDOWS:
+        assert subprocess_session_kwargs()["creationflags"] & subprocess.CREATE_NO_WINDOW
+        assert subprocess_hidden_kwargs()["creationflags"] & subprocess.CREATE_NO_WINDOW
+    else:
+        assert subprocess_hidden_kwargs() == {}
 
 
 # --------------------------------------------------------------------------

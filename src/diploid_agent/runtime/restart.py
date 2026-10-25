@@ -12,6 +12,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from diploid_agent._compat import subprocess_hidden_kwargs
 from diploid_agent.config import AuthorshipConfig
 from diploid_agent.plugins.contexts import ShutdownContext
 from diploid_agent.runtime.state import RuntimeState
@@ -158,6 +159,7 @@ class _WindowsBackend:
                 text=True,
                 timeout=10.0,
                 check=False,
+                **subprocess_hidden_kwargs(),
             )
         except (OSError, subprocess.SubprocessError):
             return True
