@@ -10,6 +10,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from diploid_agent._compat import IS_WINDOWS
+
 logger = logging.getLogger(__name__)
 
 _SYSTEMCTL_WRAPPER = '''#!/usr/bin/env python3
@@ -115,6 +117,7 @@ class AcpSandbox:
     def __init__(self, service_name: str | None = None) -> None:
         self._service_name = service_name
         self.devin_home: Path | None = None
+        self._junctions: list[Path] = []
 
     def prepare(self, mcp_servers: list[dict[str, Any]] | None = None) -> None:
         """Create an isolated HOME for the ACP subprocess and write configs.
@@ -132,6 +135,8 @@ class AcpSandbox:
             return
 
         self.devin_home = Path(tempfile.mkdtemp(prefix="acp-home-"))
+        if IS_WINDOWS:
+            self._prepare_windows_home()
         config_dir = self.devin_home / ".config" / "devin"
         config_dir.mkdir(parents=True, exist_ok=True)
         codeium_dir = self.devin_home / ".codeium" / "windsurf"
@@ -141,7 +146,8 @@ class AcpSandbox:
         # wrapper so the model cannot run raw `systemctl --user restart` from the
         # subprocess. Restart requests are routed through the harness control socket.
         (self.devin_home / ".run").mkdir(parents=True, exist_ok=True)
-        self._write_sandbox_binaries()
+        if not IS_WINDOWS:
+            self._write_sandbox_binaries()
 
         user_config = Path.home() / ".config" / "devin" / "config.json"
         if user_config.exists():
@@ -156,11 +162,71 @@ class AcpSandbox:
 
         self.write_mcp_configs(mcp_servers)
 
+    def _prepare_windows_home(self) -> None:
+        """Junction shared devin state into the isolated home on Windows.
+
+        Windows devin resolves config/state via %APPDATA%, not $HOME, so the
+        isolated home must shadow AppData: mcp_config.json and config.json
+        stay isolated (plugin servers, permissions), while cli/, User/, and
+        mcp/ are junctioned to the real dirs so sessions.db, session_locks,
+        and acp-messages stay shared across children and custody mouths.
+        Junctions are reparse points that os.path.islink() does not detect;
+        they must be rmdir'd before shutil.rmtree or the real targets get
+        emptied on cleanup.
+        """
+        import _winapi
+
+        assert self.devin_home is not None
+        real_roaming = (
+            Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming"))) / "devin"
+        )
+        iso_devin = self.devin_home / "AppData" / "Roaming" / "devin"
+        iso_devin.mkdir(parents=True, exist_ok=True)
+        (self.devin_home / "AppData" / "Local").mkdir(parents=True, exist_ok=True)
+        for sub in ("cli", "User", "mcp"):
+            target = real_roaming / sub
+            if target.is_dir():
+                link = iso_devin / sub
+                _winapi.CreateJunction(str(target), str(link))
+                self._junctions.append(link)
+        real_local = (
+            Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "devin"
+        )
+        if real_local.is_dir():
+            link = self.devin_home / "AppData" / "Local" / "devin"
+            _winapi.CreateJunction(str(real_local), str(link))
+            self._junctions.append(link)
+        # User site-packages lives under %APPDATA%\Python — without this
+        # junction, children spawned under the isolated env lose every
+        # user-installed package and die with ModuleNotFoundError before
+        # the MCP initialize handshake completes.
+        real_python = real_roaming.parent / "Python"
+        if real_python.is_dir():
+            link = iso_devin.parent / "Python"
+            _winapi.CreateJunction(str(real_python), str(link))
+            self._junctions.append(link)
+        user_config = real_roaming / "config.json"
+        if user_config.exists():
+            try:
+                (iso_devin / "config.json").write_text(user_config.read_text())
+            except OSError:
+                logger.warning("Failed to copy devin config to ACP home")
+        else:
+            (iso_devin / "config.json").write_text(
+                json.dumps({"version": 1, "permissions": {"allow": ["*"]}})
+            )
+
     def cleanup(self) -> None:
         """Remove the isolated HOME created for the ACP subprocess."""
         home = self.devin_home
         self.devin_home = None
         if home is not None and home.exists():
+            for junction in self._junctions:
+                try:
+                    junction.rmdir()
+                except OSError:
+                    logger.warning("Failed to remove junction %s", junction)
+            self._junctions.clear()
             try:
                 shutil.rmtree(home)
             except OSError:
@@ -205,14 +271,27 @@ class AcpSandbox:
                 entry["env"] = dict(env)
             if "instructions" in server:
                 entry["instructions"] = server["instructions"]
+            if IS_WINDOWS:
+                # MCP stdio is UTF-8 JSON-RPC, but a Windows child defaults to
+                # the locale codec (e.g. GBK+surrogateescape): a UTF-8 em-dash
+                # becomes <GBK char>\udc94, and that lone surrogate then wedges
+                # any peer's json.dumps().encode("utf-8") on record. Pin the
+                # child's stdio to UTF-8 unless the server opts out explicitly.
+                entry.setdefault("env", {}).setdefault("PYTHONIOENCODING", "utf-8")
             servers[name] = entry
 
         mcp_config = json.dumps({"mcpServers": servers}, indent=2)
-        try:
-            (self.devin_home / ".config" / "devin" / "mcp_config.json").write_text(mcp_config)
-            (self.devin_home / ".codeium" / "windsurf" / "mcp_config.json").write_text(mcp_config)
-        except OSError:
-            logger.warning("Failed to write mcp_config.json")
+        paths = [
+            self.devin_home / ".config" / "devin" / "mcp_config.json",
+            self.devin_home / ".codeium" / "windsurf" / "mcp_config.json",
+        ]
+        if IS_WINDOWS:
+            paths.append(self.devin_home / "AppData" / "Roaming" / "devin" / "mcp_config.json")
+        for path in paths:
+            try:
+                path.write_text(mcp_config)
+            except OSError:
+                logger.warning("Failed to write mcp_config.json to %s", path)
 
     def _write_sandbox_binaries(self) -> None:
         """Install fake system control binaries into the isolated HOME.

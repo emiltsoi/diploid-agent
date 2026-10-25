@@ -14,7 +14,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from diploid_agent._compat import kill_process_tree, subprocess_session_kwargs
+from diploid_agent._compat import (
+    IS_WINDOWS,
+    kill_process_tree,
+    subprocess_session_kwargs,
+)
 from diploid_agent.acp_client.callbacks import AcpCallbackPump
 from diploid_agent.acp_client.control import ControlSocketInUseError
 from diploid_agent.acp_client.errors import (
@@ -481,6 +485,14 @@ class AcpTransport:
         # configs that can block `devin acp` startup (e.g. `lean-ctx`).
         if self._client._sandbox.devin_home is not None:
             env["HOME"] = str(self._client._sandbox.devin_home)
+            if IS_WINDOWS:
+                # Windows devin resolves config/state via %APPDATA% and
+                # %USERPROFILE%, not $HOME — redirect all three into the
+                # isolated home, whose AppData tree mirrors the real one
+                # (shared store dirs junctioned back by the sandbox).
+                env["USERPROFILE"] = str(self._client._sandbox.devin_home)
+                env["APPDATA"] = str(self._client._sandbox.devin_home / "AppData" / "Roaming")
+                env["LOCALAPPDATA"] = str(self._client._sandbox.devin_home / "AppData" / "Local")
             env["XDG_CONFIG_HOME"] = str(self._client._sandbox.devin_home / ".config")
             env["XDG_DATA_HOME"] = os.environ.get(
                 "XDG_DATA_HOME",
