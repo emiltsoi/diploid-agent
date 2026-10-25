@@ -1069,3 +1069,31 @@ def test_restart_transport_mcp_backoff_is_separate() -> None:
 
     # An MCP-change restart is bucketed separately and should still be allowed.
     client._check_restart_backoff("mcp_change")
+
+
+def test_route_update_buffers_replay_when_no_prompt() -> None:
+    """session/load replays history as updates with no prompt in flight —
+    buffer per session for reconciliation instead of dropping."""
+    client = AcpClient(agent_bin="/bin/true", api_key="test-key")
+    loop = asyncio.new_event_loop()
+    client._loop = loop
+    client._active_prompts = {}
+
+    client._route_update(
+        {
+            "method": "session/update",
+            "params": {
+                "sessionId": "s-1",
+                "update": {
+                    "sessionUpdate": "user_message_chunk",
+                    "content": [{"type": "text", "text": "external turn"}],
+                },
+            },
+        }
+    )
+
+    replayed = client.drain_session_replay("s-1")
+    assert len(replayed) == 1
+    assert replayed[0]["sessionUpdate"] == "user_message_chunk"
+    # Drain clears the buffer.
+    assert client.drain_session_replay("s-1") == []

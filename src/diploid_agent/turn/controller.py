@@ -11,6 +11,7 @@ from diploid_agent.locking import locked
 from diploid_agent.models import ActiveTurn, ChatResult, WakeEvent
 from diploid_agent.turn.dispatch import TurnDispatch
 from diploid_agent.turn.process import TurnProcess
+from diploid_agent.turn.reconcile import TurnReconcile
 from diploid_agent.turn.rehydrate import TurnRehydrate
 from diploid_agent.turn.session import TurnSession
 
@@ -27,6 +28,7 @@ class TurnController:
         self.runtime = runtime
         self.session = TurnSession(self)
         self.rehydrate = TurnRehydrate(self)
+        self.reconcile = TurnReconcile(self)
         self._dispatch = TurnDispatch(self)
         self._process = TurnProcess(self)
 

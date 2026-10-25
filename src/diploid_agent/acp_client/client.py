@@ -352,6 +352,17 @@ class AcpClient:
             self._state._session_models.pop(session_id, None)
             raise
 
+    def drain_session_replay(self, session_id: str) -> list[dict[str, Any]]:
+        """Return and clear buffered ``session/update`` replays for a session.
+
+        History replayed during ``session/load``/``session/resume`` arrives
+        while no prompt is in flight and is buffered per session. Callers use
+        this after a resume to reconcile turns driven by another client
+        (e.g. a GUI front-end) since the record was last written.
+        """
+        with self._state._lock:
+            return self._state._session_replay.pop(session_id, [])
+
     def resume_session(
         self,
         session_id: str,

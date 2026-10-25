@@ -233,6 +233,10 @@ class AcpEngine(AgentEngine):
     def session_alive(self, session_id: str) -> bool:
         return self._client.session_alive(session_id)
 
+    def drain_session_replay(self, session_id: str) -> list[dict[str, Any]]:
+        """Buffered ``session/update`` replays for a session; see client."""
+        return self._client.drain_session_replay(session_id)
+
     def resume_session(
         self,
         session_id: str,
