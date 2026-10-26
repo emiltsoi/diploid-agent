@@ -37,6 +37,21 @@ def test_record_exc_info_scrubbed(caplog) -> None:
     assert "bot<redacted>" in record.exc_text
 
 
+def test_record_nested_arg_scrubbed(caplog) -> None:
+    with caplog.at_level(logging.ERROR, logger="test_redact"):
+        logging.getLogger("test_redact").error("send failed: %s", {"url": TOKEN_URL})
+    message = caplog.records[-1].getMessage()
+    assert "AAFaKE_t0ken" not in message
+    assert "bot<redacted>" in message
+
+
+def test_record_mapping_args_scrubbed(caplog) -> None:
+    with caplog.at_level(logging.ERROR, logger="test_redact"):
+        logging.getLogger("test_redact").error("send failed for %(url)s", {"url": TOKEN_URL})
+    message = caplog.records[-1].getMessage()
+    assert "AAFaKE_t0ken" not in message
+
+
 def test_records_without_token_untouched(caplog) -> None:
     try:
         raise ValueError("plain failure")

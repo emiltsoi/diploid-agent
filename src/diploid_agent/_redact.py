@@ -26,9 +26,12 @@ def _scrub_args(args: object) -> object:
     if isinstance(args, str):
         return _scrub(args) if "bot" in args else args
     if isinstance(args, tuple):
-        return tuple(_scrub(a) if isinstance(a, str) and "bot" in a else a for a in args)
+        return tuple(_scrub_args(a) for a in args)
     if isinstance(args, Mapping):
-        return {k: (_scrub(v) if isinstance(v, str) and "bot" in v else v) for k, v in args.items()}
+        return {k: _scrub_args(v) for k, v in args.items()}
+    rendered = str(args)
+    if "bot" in rendered and _BOT_TOKEN.search(rendered):
+        return _scrub(rendered)
     return args
 
 
