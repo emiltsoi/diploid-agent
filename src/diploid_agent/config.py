@@ -345,6 +345,9 @@ class NotificationsConfig(BaseModel):
     webhook_url: str | None = Field(default=None, min_length=1)
     outbox_delivery: bool = False
     mesh_telegram_float: bool = False
+    # Telegram chat_id that receives labeled mirrors of activity on
+    # non-Telegram chats (mesh:*, api steers). None = no mirroring.
+    mirror_chat_id: int | None = None
 
     @field_validator("webhook_url", mode="before")
     @classmethod
