@@ -274,7 +274,43 @@ class RuntimeConfigManager:
             except (ValueError, TypeError):
                 logger.exception("Invalid plugin override in %s", self._runtime_overrides_path)
         if plugins:
+            self._warn_shadowed_plugins(plugins)
             self.config.harness.plugins = plugins
+
+    def _warn_shadowed_plugins(self, override_plugins: list[PluginConfig]) -> None:
+        """Warn when the overrides snapshot shadows harness.yaml plugin config.
+
+        Unlike the merge-based section overrides, the plugins list REPLACES the
+        yaml list wholesale, so a stale snapshot silently drops plugins or
+        mcp_server env vars that were added to harness.yaml after the snapshot
+        was written (the MESH_ALLOW_LOOPBACK regression, 2026-10-27). The guard
+        below then fails closed and silent. Absence must be loud.
+        """
+        override_by_name = {p.name: p for p in override_plugins}
+        for base in self.config.harness.plugins:
+            over = override_by_name.get(base.name)
+            if over is None:
+                logger.warning(
+                    "Runtime overrides plugin list omits '%s' declared in harness.yaml; "
+                    "the overlay will shadow it entirely",
+                    base.name,
+                )
+                continue
+            base_env = (base.mcp_server.env if base.mcp_server else None) or []
+            over_env = (over.mcp_server.env if over.mcp_server else None) or []
+            dropped = sorted(
+                {e.split("=", 1)[0] for e in base_env}
+                - {e.split("=", 1)[0] for e in over_env}
+            )
+            if dropped:
+                logger.warning(
+                    "Runtime overrides for plugin '%s' drop mcp_server env var(s) %s "
+                    "declared in harness.yaml — likely a stale snapshot; re-save "
+                    "overrides or edit %s",
+                    base.name,
+                    dropped,
+                    self._runtime_overrides_path,
+                )
 
     def _save_runtime_overrides(self) -> bool:
         """Persist runtime config overrides to disk atomically."""
