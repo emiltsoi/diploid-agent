@@ -299,8 +299,7 @@ class RuntimeConfigManager:
             base_env = (base.mcp_server.env if base.mcp_server else None) or []
             over_env = (over.mcp_server.env if over.mcp_server else None) or []
             dropped = sorted(
-                {e.split("=", 1)[0] for e in base_env}
-                - {e.split("=", 1)[0] for e in over_env}
+                {e.split("=", 1)[0] for e in base_env} - {e.split("=", 1)[0] for e in over_env}
             )
             if dropped:
                 logger.warning(
