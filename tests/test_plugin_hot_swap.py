@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -13,6 +14,7 @@ from diploid_agent.config import (
     Config,
     DiploidConfig,
     HarnessConfig,
+    McpServerConfig,
     MemoryConfig,
     PersonaConfig,
     PlanConfig,
@@ -273,3 +275,86 @@ def test_persisted_plugins_loaded_on_new_runtime(tmp_path: Path) -> None:
     names = {p.name for p in fresh.config.harness.plugins}
     assert "self_state" in names
     assert "continuity" in names
+
+
+def _write_overrides(tmp_path: Path, plugins: list[dict]) -> None:
+    (tmp_path / "runtime-overrides.yaml").write_text(
+        yaml.safe_dump({"plugins": plugins}), encoding="utf-8"
+    )
+
+
+def _mesh_plugin(env: list[str]) -> dict:
+    return {
+        "name": "mesh",
+        "enabled": True,
+        "module": "diploid_mesh",
+        "mcp_server": {"name": "diploid-mesh", "command": "python", "env": env},
+    }
+
+
+def test_overrides_warn_when_plugin_env_dropped(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A stale snapshot that drops yaml-declared env vars must warn at load."""
+    runtime = _make_runtime(tmp_path)
+    runtime.config.harness.plugins = [
+        PluginConfig(
+            name="mesh",
+            enabled=True,
+            module="diploid_mesh",
+            mcp_server=McpServerConfig(
+                name="diploid-mesh",
+                command="python",
+                env=["MESH_VAULT_PATH=/v", "MESH_ALLOW_LOOPBACK=1"],
+            ),
+        )
+    ]
+    _write_overrides(tmp_path, [_mesh_plugin(["MESH_VAULT_PATH=/v"])])
+
+    with caplog.at_level(logging.WARNING):
+        runtime._config_manager._load_runtime_overrides()
+
+    assert "'mesh' drop mcp_server env var(s) ['MESH_ALLOW_LOOPBACK']" in caplog.text
+
+
+def test_overrides_warn_when_plugin_omitted(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A yaml plugin absent from the snapshot is shadowed entirely — warn."""
+    runtime = _make_runtime(tmp_path)
+    runtime.config.harness.plugins = [
+        PluginConfig(name="mesh", enabled=True, module="diploid_mesh"),
+        PluginConfig(name="continuity", enabled=True, module="diploid_plugins.continuity"),
+    ]
+    _write_overrides(tmp_path, [_mesh_plugin([])])
+
+    with caplog.at_level(logging.WARNING):
+        runtime._config_manager._load_runtime_overrides()
+
+    assert "omits 'continuity' declared in harness.yaml" in caplog.text
+
+
+def test_overrides_silent_when_plugin_env_matches(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """No warning when the snapshot carries everything yaml declares."""
+    runtime = _make_runtime(tmp_path)
+    runtime.config.harness.plugins = [
+        PluginConfig(
+            name="mesh",
+            enabled=True,
+            module="diploid_mesh",
+            mcp_server=McpServerConfig(
+                name="diploid-mesh",
+                command="python",
+                env=["MESH_VAULT_PATH=/v", "MESH_ALLOW_LOOPBACK=1"],
+            ),
+        )
+    ]
+    _write_overrides(tmp_path, [_mesh_plugin(["MESH_VAULT_PATH=/v", "MESH_ALLOW_LOOPBACK=1"])])
+
+    with caplog.at_level(logging.WARNING):
+        runtime._config_manager._load_runtime_overrides()
+
+    assert "shadow" not in caplog.text
+    assert "drop mcp_server env" not in caplog.text
