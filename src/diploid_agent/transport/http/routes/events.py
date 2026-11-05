@@ -49,7 +49,11 @@ def register_events(
             catch=False,
         )
 
-    @app.get("/ui", dependencies=[Depends(_require_api_key)])
+    # Deliberately unauthenticated: a browser navigation cannot set the
+    # X-API-Key header, so a key-gated /ui would 403 before the page's own
+    # setup form could collect the key. The file is static and carries no
+    # data; every data endpoint above keeps the dependency.
+    @app.get("/ui")
     def ui() -> FileResponse:
         """Serve the webui page."""
         page = Path(__file__).resolve().parents[3] / "webui" / "index.html"

@@ -145,6 +145,26 @@ class RuntimeOutbox:
         if self.config.harness.notifications.enabled and chat_result.reply:
             self._safe_notifier_send(chat_id, chat_result.reply)
 
+    def _log_result_event(self, chat_id: str, chat_result: ChatResult) -> None:
+        """Append a ``result`` event for a reply delivered outside a turn.
+
+        Turn results are logged at their turn sites; paths that deliver a
+        final ChatResult directly (session_op acks, wake-resume deliveries)
+        call this first so the event stream stays complete.
+        """
+        if self._event_log is None:
+            return
+        self._event_log.append(
+            chat_id,
+            "result",
+            {
+                "session_number": chat_result.session_number,
+                "turn_number": chat_result.turn_number,
+                "reply": chat_result.reply,
+                "notice": chat_result.notice,
+            },
+        )
+
     def float_mesh_to_telegram(
         self,
         chat_id: str,

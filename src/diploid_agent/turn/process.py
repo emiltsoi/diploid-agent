@@ -333,6 +333,7 @@ class TurnProcess(TurnPipeline):
                     "session_number": session_number,
                     "turn_number": turn_number,
                     "reply": chat_result.reply,
+                    "notice": chat_result.notice,
                 },
             )
         if notify and "chat_result" in vars() and self.runtime._outbox_delivery_enabled:

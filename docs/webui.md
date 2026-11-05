@@ -50,6 +50,9 @@ A second append target beside the pop queue. Every `_enqueue_outbox` and
   record* — canonical. The two can skew by ≤1 turn across a kill (an
   event appended at turn-start whose turn never commits), and that is
   fine for a UI, but nobody should treat the log as the ledger.
+- **Interior gaps exist:** a failed `append()` write keeps the event in
+  the hot ring but leaves a permanent seq hole in the file; `truncated`
+  only detects head loss. Clients must tolerate interior seq gaps.
 - **Rejected alternative:** derive cold events from `chat_transcript.jsonl`.
   Works for user/assistant pairs but silently reorders any turn longer
   than the poll window, carries no transient markers
@@ -58,6 +61,12 @@ A second append target beside the pop queue. Every `_enqueue_outbox` and
 - **`emit_turn_started` gains `user_message`** — inputs live in the log
   permanently, not only during the live window (callers:
   `turn/dispatch.py:183`, `turn/process.py:255`).
+- **Out-of-turn results log too** — replies delivered outside the turn
+  pipeline (session_op acks in `ingress.py`, wake-resume deliveries in
+  `lifecycle.py`) append `result` events via
+  `RuntimeOutbox._log_result_event` before delivery. `result` payloads
+  carry `notice` alongside `reply` — the same fields the outbox wire
+  shape serializes.
 - **`service_started` marker** — emitted at boot for each chat active in
   the last 24h; the page's "she woke up" signal, replacing the
   telegram-only restart notice (which `_is_telegram_chat_id` rightly
@@ -67,7 +76,7 @@ A second append target beside the pop queue. Every `_enqueue_outbox` and
 
 | endpoint | status | job |
 |---|---|---|
-| `GET /ui` | new | serve the page (static file, loopback) |
+| `GET /ui` | new | serve the page (static file, loopback) — **unauthenticated**: a browser navigation can't set `X-API-Key`, so gating it 403s the setup form itself; every data endpoint keeps the key |
 | `GET /chats` | new | selector list: `chat_id`, label, session count, last activity, kind (telegram/webui by digit rule) |
 | `GET /events/{chat_id}?since=<seq>&wait≤60` | new | replay log: cold from file tail, hot from ring; long-poll like `/turn` |
 | `GET /turn/{chat_id}?wait=` | exists | live overlay between last event and now |

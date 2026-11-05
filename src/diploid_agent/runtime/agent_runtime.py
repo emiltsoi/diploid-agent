@@ -670,9 +670,11 @@ class AgentRuntime(RuntimeAPI):
                         "last_activity": latest.updated_at,
                         "session_number": latest.session_number,
                         "active": chat_id in self._active_turns,
-                        "next_seq": self._events.next_seq(chat_id),
                     }
                 )
+        # Cold ring-loads read files — keep that I/O outside the runtime lock.
+        for row in rows:
+            row["next_seq"] = self._events.next_seq(row["chat_id"])
         rows.sort(key=lambda r: -r["last_activity"])
         return {"chats": rows}
 

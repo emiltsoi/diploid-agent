@@ -152,6 +152,8 @@ async function pollEvents() {
   if (!chatId) return;
   try {
     const r = await api(`/events/${chatId}?since=${lastSeq}&wait=30`);
+    // An in-flight poll can resolve after a chat switch — drop it.
+    if (r.chat_id !== chatId) return;
     for (const ev of r.events || []) {
       lastSeq = Math.max(lastSeq, ev.seq);
       const p = ev.payload || {};
@@ -159,7 +161,8 @@ async function pollEvents() {
         if (p.user_message != null) addMsg("you", `turn ${p.turn_number ?? ""}`, p.user_message);
         herBubble = null;
       } else if (ev.kind === "result") {
-        addMsg("her", `turn ${p.turn_number ?? ""}`, p.reply || "");
+        if (p.reply) addMsg("her", `turn ${p.turn_number ?? ""}`, p.reply);
+        if (p.notice) addMsg("sys", "", `System: ${p.notice}`);
         herBubble = null;
       } else if (ev.kind === "system") {
         if (p.text) addMsg("sys", "", p.text);
@@ -179,6 +182,7 @@ async function pollTurn() {
   if (!chatId) return;
   try {
     const t = await api(`/turn/${chatId}?wait=30`);
+    if (t.chat_id !== chatId) return;
     if (t.status === "running") {
       if (!herBubble) herBubble = addMsg("her", "…", "");
       herBubble.innerHTML = "";

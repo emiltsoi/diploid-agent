@@ -19,8 +19,9 @@ from diploid_agent.config import (
     Secrets,
     TimerConfig,
 )
-from diploid_agent.models import ChatResult
+from diploid_agent.models import ChatResult, WakeEvent
 from diploid_agent.runtime.agent_runtime import AgentRuntime
+from diploid_agent.runtime.event_bus import Event
 from diploid_agent.transport.http import create_app
 
 
@@ -28,7 +29,7 @@ def _fixture_root() -> Path:
     return Path(__file__).parent / "fixtures" / "test-pilot"
 
 
-def _make_config(tmp_path: Path) -> Config:
+def _make_config(tmp_path: Path, *, harness_api_key: str | None = None) -> Config:
     return Config(
         diploid=DiploidConfig(bin="/bin/echo", model="swe-1-7"),
         persona=PersonaConfig(
@@ -43,7 +44,7 @@ def _make_config(tmp_path: Path) -> Config:
             timer=TimerConfig(enabled=True, interval_seconds=0.1),
             notifications=NotificationsConfig(enabled=True, outbox_delivery=True),
         ),
-        secrets=Secrets(WINDSURF_API_KEY="test-key"),
+        secrets=Secrets(WINDSURF_API_KEY="test-key", HARNESS_API_KEY=harness_api_key),
     )
 
 
@@ -169,3 +170,76 @@ def test_events_and_turn_endpoints_cover_webui_chat(client: TestClient) -> None:
     assert status == {"chat_id": "webui:desk", "status": "idle"}
     kinds = [e["kind"] for e in client.get("/events/webui:desk").json()["events"]]
     assert kinds == ["turn_started", "result"]
+
+
+def test_ui_page_open_while_data_endpoints_stay_keyed(tmp_path: Path) -> None:
+    """A browser navigation can't set X-API-Key — /ui must serve openly so the
+    page's own setup form can collect the key for the data calls."""
+    config = _make_config(tmp_path, harness_api_key="harness-secret")
+    runtime = AgentRuntime(config)
+    runtime.engine = FakeEngine()
+    with TestClient(create_app(config, runtime)) as keyed:
+        assert keyed.get("/ui").status_code == 200
+        assert keyed.get("/chats").status_code == 403
+        assert keyed.get("/events/webui:desk").status_code == 403
+        assert keyed.get("/chats", headers={"X-API-Key": "harness-secret"}).status_code == 200
+
+
+def test_session_op_ack_lands_in_event_log(client: TestClient) -> None:
+    """A queued session_op's ack is delivered outside the turn pipeline — it
+    must still append a result event or the replay silently misses it."""
+    runtime = client.app.state.runtime
+    event = runtime.wake_queue.enqueue(
+        WakeEvent(
+            id="",
+            chat_id="webui:desk",
+            reason="session_op",
+            priority=1,
+            scheduled_at=time.time() - 1,
+            payload={"op": "resume", "session_number": 9},
+            silent=True,
+            created_at=time.time(),
+            ready=True,
+        )
+    )
+    result = runtime.wake("webui:desk", event_id=event.id)
+    assert result.reply == ""
+
+    events = runtime.events_since("webui:desk")["events"]
+    assert [e["kind"] for e in events] == ["result"]
+    assert events[0]["payload"]["reply"] == "Session 9 not found for this chat."
+
+
+def test_wake_delivery_without_turn_lands_in_event_log(client: TestClient) -> None:
+    """A non-turn wake result (dispatch diagnostic) delivered by the lifecycle
+    handler must append a result event too — same silent-miss class."""
+    runtime = client.app.state.runtime
+    dispatch = runtime.dispatch_store.add("webui:desk", "sess-x", context="ctx")
+    event = runtime.wake_queue.enqueue(
+        WakeEvent(
+            id="",
+            chat_id="webui:desk",
+            reason="dispatch",
+            priority=1,
+            scheduled_at=time.time() - 1,
+            payload={"dispatch_id": dispatch.id},
+            silent=True,
+            created_at=time.time(),
+            ready=True,
+        )
+    )
+    runtime._lifecycle._handle_timer_fired(
+        Event(
+            type="timer.fired",
+            payload={
+                "event_id": event.id,
+                "chat_id": "webui:desk",
+                "reason": "dispatch",
+                "silent": True,
+            },
+        )
+    )
+
+    events = runtime.events_since("webui:desk")["events"]
+    assert [e["kind"] for e in events] == ["result"]
+    assert events[0]["payload"]["reply"] == "No active session for this chat."

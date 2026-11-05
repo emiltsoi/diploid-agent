@@ -84,7 +84,9 @@ class EventLog:
                     f.write(json.dumps(event, ensure_ascii=False) + "\n")
             except OSError:
                 # The ring still carries it; a client polling before the
-                # next append sees the event. Persistence resumes next write.
+                # next append sees the event. Persistence resumes next write,
+                # but the file keeps a permanent interior seq hole — clients
+                # must tolerate gaps, ``truncated`` only detects head loss.
                 pass
             self._cond.notify_all()
             return event
