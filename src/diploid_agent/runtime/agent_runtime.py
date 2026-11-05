@@ -655,10 +655,17 @@ class AgentRuntime(RuntimeAPI):
                     continue
                 records = list(state.sessions.values())
                 latest = max(records, key=lambda r: r.updated_at)
+                kind = (
+                    "telegram"
+                    if _is_telegram_chat_id(chat_id)
+                    else "webui"
+                    if chat_id.startswith("webui:")
+                    else "mesh"
+                )
                 rows.append(
                     {
                         "chat_id": chat_id,
-                        "kind": "telegram" if _is_telegram_chat_id(chat_id) else "webui",
+                        "kind": kind,
                         "sessions": len(records),
                         "last_activity": latest.updated_at,
                         "session_number": latest.session_number,

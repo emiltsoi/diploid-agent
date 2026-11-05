@@ -45,10 +45,16 @@ A second append target beside the pop queue. Every `_enqueue_outbox` and
   (turn-atomic, only external side-effects survive a kill) applies to
   the wire too. Seq = line order; boot re-tails the file, resumes the
   counter, and the hot ring (`deque(maxlen=500)`) is just a cache of it.
+- **Honesty line (Vesper):** the events log is an *intent record* —
+  presentation, not ledger. `chat_transcript.jsonl` is the *commit
+  record* — canonical. The two can skew by ≤1 turn across a kill (an
+  event appended at turn-start whose turn never commits), and that is
+  fine for a UI, but nobody should treat the log as the ledger.
 - **Rejected alternative:** derive cold events from `chat_transcript.jsonl`.
-  Works for user/assistant pairs but carries no transient markers
-  (`turn_started`, `service_started`, mesh floats) and forces a
-  dual-format reader. Deriving is clever; persisting is honest.
+  Works for user/assistant pairs but silently reorders any turn longer
+  than the poll window, carries no transient markers
+  (`turn_started`, `service_started`, mesh floats), and reconstructs
+  intent from aftermath. Deriving is clever; persisting is honest.
 - **`emit_turn_started` gains `user_message`** — inputs live in the log
   permanently, not only during the live window (callers:
   `turn/dispatch.py:183`, `turn/process.py:255`).
@@ -65,8 +71,12 @@ A second append target beside the pop queue. Every `_enqueue_outbox` and
 | `GET /chats` | new | selector list: `chat_id`, label, session count, last activity, kind (telegram/webui by digit rule) |
 | `GET /events/{chat_id}?since=<seq>&wait≤60` | new | replay log: cold from file tail, hot from ring; long-poll like `/turn` |
 | `GET /turn/{chat_id}?wait=` | exists | live overlay between last event and now |
-| `POST /chat` + `?notify=` | extend | `notify=true` on telegram-attached chats also enqueues the result → reply mirrors to *both* doors. Default stays `false` — no regression |
+| `POST /chat` + `?notify=` | extend | `notify=true` on telegram-attached chats also enqueues the result → reply mirrors to *both* doors. **Dropped on non-telegram ids** — a `webui:` item in the pop queue is a dead letter the delivery worker pops and discards |
 | `_active_turn_status` + `side_effects` | 1-line | tool-activity panel data (`controller.py:78`) |
+
+**Render contract (Vesper):** the page renders ONLY from `/events` +
+`/turn`. The `POST /chat` response body is ack/status, never display —
+otherwise `notify=true` double-bubbles (in-band reply AND event).
 
 Client sync loop: `GET /events?since=` → replay to seq N → long-poll
 `/turn` for the live overlay → keep long-polling `/events` for commits.
@@ -84,13 +94,26 @@ selector (switch base URL, not a gateway).
 
 ## Sync invariants (the claims this design owes)
 
-1. Two consumers on `/events` and `/turn` never diverge — reads only.
+1. **Eventual convergence, stated honestly:** at equal `seq`, two
+   consumers hold identical committed history; the `/turn` overlay is
+   advisory and converges at next commit. (Consumers at different poll
+   phases *always* transiently diverge — "never diverge" was
+   unfalsifiable.)
 2. Telegram's pop queue is untouched by any new code path.
 3. An input through *any* door appears in the log (via `user_message`)
-   and the transcript for *all* doors.
+   and the transcript — verified per door kind: digit, `webui:`, api.
 4. `webui:` chat_ids work with zero telegram config.
 5. A service restart loses nothing a client can't resync: cold events
    from file, live state from `/turn` → `idle`.
+
+**Ordering mechanics:** `seq` is assigned inside the append critical
+section (the log's condition lock) — file order == seq order.
+`since()` holds the same lock across cold-file load and hot-ring read,
+so an event appended mid-read neither gaps nor double-delivers.
+`service_started`'s 24h window is **cosmetic** — a quiet chat loses
+the marker, never resync; do not use it as a liveness gate.
+`/chats` kind is ternary: digit→telegram, `webui:`→webui,
+other→mesh (mesh sessions exist fleet-wide).
 
 ## Tests
 
