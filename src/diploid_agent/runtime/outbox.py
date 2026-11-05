@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from diploid_agent.config import Config
     from diploid_agent.metrics import MetricsCollector
     from diploid_agent.models import ChatState
+    from diploid_agent.runtime.event_log import EventLog
 
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ class RuntimeOutbox:
         store: dict[str, ChatState],
         lock: threading.RLock,
         notifier_fn: Callable[[], Notifier | None],
+        event_log: EventLog | None = None,
     ) -> None:
         self.config = config
         self._metrics = metrics
@@ -46,6 +48,7 @@ class RuntimeOutbox:
         self._lock = lock
         # Late-bound: the notifier is created after this component.
         self._notifier_fn = notifier_fn
+        self._event_log = event_log
         self._outbox: deque[tuple[str, Any]] = deque()
         self._outbox_condition = threading.Condition()
 
@@ -71,7 +74,14 @@ class RuntimeOutbox:
         return self.config.harness.notifications.outbox_delivery
 
     def _enqueue_outbox(self, chat_id: str, chat_result: ChatResult) -> None:
-        """Put a final ChatResult in the outbox for the transport to deliver."""
+        """Put a final ChatResult in the outbox for the transport to deliver.
+
+        Transient items (mesh floats, system notices) also land in the
+        shared event log — a non-destructive read side for clients that
+        never pop this queue.
+        """
+        if self._event_log is not None and getattr(chat_result, "transient", False):
+            self._event_log.append(chat_id, "system", {"text": chat_result.reply or ""})
         with self._outbox_condition:
             self._outbox.append((chat_id, chat_result))
             self._outbox_condition.notify_all()
@@ -81,6 +91,7 @@ class RuntimeOutbox:
         chat_id: str,
         session_number: int | None = None,
         turn_number: int | None = None,
+        user_message: str | None = None,
     ) -> None:
         """Queue a ``turn_started`` marker so transports can stream the turn.
 
@@ -102,6 +113,7 @@ class RuntimeOutbox:
                         "chat_id": chat_id,
                         "session_number": session_number,
                         "turn_number": turn_number,
+                        "user_message": user_message,
                         "result": None,
                     },
                 )
@@ -155,6 +167,26 @@ class RuntimeOutbox:
             return
         if self.config.harness.notifications.enabled and chat_result.reply:
             self._safe_notifier_send(chat_id, chat_result.reply)
+
+    def _log_result_event(self, chat_id: str, chat_result: ChatResult) -> None:
+        """Append a ``result`` event for a reply delivered outside a turn.
+
+        Turn results are logged at their turn sites; paths that deliver a
+        final ChatResult directly (session_op acks, wake-resume deliveries)
+        call this first so the event stream stays complete.
+        """
+        if self._event_log is None:
+            return
+        self._event_log.append(
+            chat_id,
+            "result",
+            {
+                "session_number": chat_result.session_number,
+                "turn_number": chat_result.turn_number,
+                "reply": chat_result.reply,
+                "notice": chat_result.notice,
+            },
+        )
 
     def float_mesh_to_telegram(
         self,
@@ -233,23 +265,29 @@ class RuntimeOutbox:
         outbox delivery is enabled, because the transport's DeliveryWorker may
         not be running yet at startup.
         """
-        if not self.config.harness.notifications.enabled:
-            return
-
         recent_cutoff = time.time() - 86400.0
         chat_ids: list[str] = []
+        telegram_chat_ids: list[str] = []
         with self._lock:
             for chat_id, state in self._store.items():
-                if not _is_telegram_chat_id(chat_id):
-                    continue
                 if not state.sessions:
                     continue
                 latest = max(state.sessions.values(), key=lambda r: r.updated_at)
                 if latest.updated_at >= recent_cutoff:
                     chat_ids.append(chat_id)
+                    if _is_telegram_chat_id(chat_id):
+                        telegram_chat_ids.append(chat_id)
 
-        if not chat_ids:
+        if self._event_log is not None:
+            for chat_id in chat_ids:
+                self._event_log.append(chat_id, "service_started", {})
+
+        if not self.config.harness.notifications.enabled:
             return
+
+        if not telegram_chat_ids:
+            return
+        chat_ids = telegram_chat_ids
 
         logger.info("Sending restart notice to %d recently active chat(s)", len(chat_ids))
         text = "System: service was restarted. You can resume the conversation at any time."

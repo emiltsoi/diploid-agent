@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 # enforced by copy_session_dir. This is a known limitation/acceptance.
 _CHAT_DURABLE_FILES = {
     "chat_transcript.jsonl",
+    "chat_events.jsonl",
     "chat_MEMORY.md",
     "chat_PROMOTED.md",
     "chat_self_state.md",

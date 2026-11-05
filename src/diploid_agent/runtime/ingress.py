@@ -203,6 +203,7 @@ class RuntimeIngress:
                 # empty marker so the handler completes the wake without
                 # re-delivering.
                 if result.reply or result.notice:
+                    self._turn_controller.runtime._outbox._log_result_event(chat_id, result)
                     self._turn_controller.runtime._deliver_chat_result(chat_id, result)
                 return ChatResult(reply="")
             if reason == "plan_task_update":

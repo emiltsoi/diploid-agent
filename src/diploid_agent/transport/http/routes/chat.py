@@ -8,6 +8,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, status
 from diploid_agent.config import (
     Config,
 )
+from diploid_agent.runtime.outbox import _is_telegram_chat_id
 from diploid_agent.transport.base import RuntimeAPI
 from diploid_agent.transport.command_handler import CommandHandler
 from diploid_agent.transport.http.models import *
@@ -25,6 +26,10 @@ def register_chat(
     def chat(req: ChatRequest) -> ChatResponse:
         # The caller (e.g. the Telegram long-polling bot) is responsible for
         # delivering the reply, so suppress the runtime's own outbound notifier.
+        # notify=true on a telegram-attached chat also enqueues the result so
+        # the reply mirrors to both doors (webui + telegram). On non-telegram
+        # chats the flag is dropped — the queued item would be popped by the
+        # telegram delivery worker and silently dropped as undeliverable.
         result = runtime.process(
             req.chat_id,
             req.message,
@@ -32,7 +37,7 @@ def register_chat(
             reply_to=req.reply_to,
             reply_to_is_bot=req.reply_to_is_bot,
             reply_to_message_id=req.reply_to_message_id,
-            notify=False,
+            notify=req.notify and _is_telegram_chat_id(req.chat_id),
         )
         return _to_response(result)
 

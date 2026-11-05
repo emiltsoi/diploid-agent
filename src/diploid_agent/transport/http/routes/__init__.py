@@ -3,6 +3,7 @@
 from .chat import register_chat
 from .config import register_config
 from .cron import register_cron
+from .events import register_events
 from .health import register_health
 from .mesh import register_mesh
 from .models import register_models
@@ -18,6 +19,7 @@ __all__ = [
     "register_chat",
     "register_config",
     "register_cron",
+    "register_events",
     "register_health",
     "register_mesh",
     "register_models",

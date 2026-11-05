@@ -252,6 +252,7 @@ class RuntimeLifecycle:
                 # Some wake results are final messages (e.g. budget notice or
                 # "dispatch already completed") that should still be delivered.
                 if (result.reply or result.notice) and self._outbox._outbox_delivery_enabled:
+                    self._outbox._log_result_event(payload["chat_id"], result)
                     self._outbox._deliver_chat_result(payload["chat_id"], result)
                 self._wake_queue.complete(event_id)
                 return
