@@ -69,10 +69,14 @@ class FakeEngine:
 
 @pytest.fixture
 def client(tmp_path: Path):
+    # Bare TestClient, not `with` — entering the context runs the anyio-portal
+    # lifespan (runtime.start/shutdown) whose teardown can wedge on Linux
+    # (CI freeze: parked in portal thread.join inside __exit__). None of these
+    # tests need the lifespan running.
     runtime = AgentRuntime(_make_config(tmp_path))
     runtime.engine = FakeEngine()
-    with TestClient(create_app(_make_config(tmp_path), runtime)) as client:
-        yield client
+    app = create_app(_make_config(tmp_path), runtime)
+    return TestClient(app)
 
 
 def test_chats_lists_sessions_with_kind(client: TestClient) -> None:
@@ -178,11 +182,11 @@ def test_ui_page_open_while_data_endpoints_stay_keyed(tmp_path: Path) -> None:
     config = _make_config(tmp_path, harness_api_key="harness-secret")
     runtime = AgentRuntime(config)
     runtime.engine = FakeEngine()
-    with TestClient(create_app(config, runtime)) as keyed:
-        assert keyed.get("/ui").status_code == 200
-        assert keyed.get("/chats").status_code == 403
-        assert keyed.get("/events/webui:desk").status_code == 403
-        assert keyed.get("/chats", headers={"X-API-Key": "harness-secret"}).status_code == 200
+    keyed = TestClient(create_app(config, runtime))
+    assert keyed.get("/ui").status_code == 200
+    assert keyed.get("/chats").status_code == 403
+    assert keyed.get("/events/webui:desk").status_code == 403
+    assert keyed.get("/chats", headers={"X-API-Key": "harness-secret"}).status_code == 200
 
 
 def test_session_op_ack_lands_in_event_log(client: TestClient) -> None:
