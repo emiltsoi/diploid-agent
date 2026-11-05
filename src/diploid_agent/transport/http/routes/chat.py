@@ -25,6 +25,8 @@ def register_chat(
     def chat(req: ChatRequest) -> ChatResponse:
         # The caller (e.g. the Telegram long-polling bot) is responsible for
         # delivering the reply, so suppress the runtime's own outbound notifier.
+        # notify=true on a telegram-attached chat also enqueues the result so
+        # the reply mirrors to both doors (webui + telegram).
         result = runtime.process(
             req.chat_id,
             req.message,
@@ -32,7 +34,7 @@ def register_chat(
             reply_to=req.reply_to,
             reply_to_is_bot=req.reply_to_is_bot,
             reply_to_message_id=req.reply_to_message_id,
-            notify=False,
+            notify=req.notify,
         )
         return _to_response(result)
 

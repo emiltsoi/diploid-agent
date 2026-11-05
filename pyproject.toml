@@ -47,6 +47,9 @@ Issues = "https://github.com/emiltsoi/diploid-agent/issues"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+diploid_agent = ["webui/*.html"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

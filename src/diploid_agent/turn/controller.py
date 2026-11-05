@@ -88,6 +88,7 @@ class TurnController:
             "elapsed_seconds": round(time.time() - active.start_time, 1),
             "last_side_effect": active.last_side_effect,
             "last_side_effect_at": active.last_side_effect_at,
+            "side_effects": list(active.side_effects),
         }
 
     def turn_status(self, chat_id: str, wait: float = 0.0) -> dict[str, Any]:

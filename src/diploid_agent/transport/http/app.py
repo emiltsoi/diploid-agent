@@ -23,6 +23,7 @@ from diploid_agent.transport.http.routes import (
     register_chat,
     register_config,
     register_cron,
+    register_events,
     register_health,
     register_mesh,
     register_models,
@@ -73,6 +74,7 @@ def create_app(config: Config, runtime: RuntimeAPI | None = None) -> FastAPI:
 
     register_health(app, runtime, command_handler, config, _require_api_key)
     register_cron(app, runtime, command_handler, config, _require_api_key)
+    register_events(app, runtime, command_handler, _require_api_key)
     register_mesh(app, runtime, command_handler, config, _require_api_key)
     register_chat(app, runtime, command_handler, config, _require_api_key)
     register_sessions(app, runtime, command_handler, config, _require_api_key)

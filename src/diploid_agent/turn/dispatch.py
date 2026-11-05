@@ -178,10 +178,22 @@ class TurnDispatch(TurnPipeline):
         try:
             # Inside the try so _cleanup_turn always drains the count.
             # A user-typed /continue can double-type with the poller — harmless.
+            self.runtime._events.append(
+                chat_id,
+                "turn_started",
+                {
+                    "session_number": session_number,
+                    "turn_number": turn_number,
+                    "user_message": user_message,
+                },
+            )
             self.runtime._typing.on_turn_started(chat_id)
             if notify:
                 self.runtime._outbox.emit_turn_started(
-                    chat_id, session_number=session_number, turn_number=turn_number
+                    chat_id,
+                    session_number=session_number,
+                    turn_number=turn_number,
+                    user_message=user_message,
                 )
             outcome = self._call_engine(
                 chat_id=chat_id,
@@ -251,6 +263,15 @@ class TurnDispatch(TurnPipeline):
         finally:
             self._cleanup_turn(chat_id, record)
 
+        self.runtime._events.append(
+            chat_id,
+            "result",
+            {
+                "session_number": session_number,
+                "turn_number": turn_number,
+                "reply": chat_result.reply,
+            },
+        )
         if notify:
             self.runtime._deliver_chat_result(chat_id, chat_result)
 

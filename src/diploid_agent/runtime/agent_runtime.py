@@ -46,6 +46,7 @@ from diploid_agent.runtime.auto_continue import RuntimeAutoContinue
 from diploid_agent.runtime.config_manager import RuntimeConfigManager
 from diploid_agent.runtime.cron_service import CronService
 from diploid_agent.runtime.event_bus import EventBus
+from diploid_agent.runtime.event_log import EventLog
 from diploid_agent.runtime.ingress import RuntimeIngress
 from diploid_agent.runtime.instance import InstanceManager
 from diploid_agent.runtime.lifecycle import RuntimeLifecycle
@@ -194,12 +195,14 @@ class AgentRuntime(RuntimeAPI):
         if self._task_board is not None:
             self._task_board.start()
             self.plan_manager.on_change = self._task_board.handle
+        self._events = EventLog(chat_dir_fn=self._chat_store.chat_dir)
         self._outbox = RuntimeOutbox(
             config=config,
             metrics=self.metrics,
             store=self._store,
             lock=self._lock,
             notifier_fn=lambda: self.notifier,
+            event_log=self._events,
         )
 
         # Typing presence uses a direct notifier so it still works when
@@ -630,6 +633,41 @@ class AgentRuntime(RuntimeAPI):
     ) -> ChatResult | tuple[str, ChatResult] | None:
         """Return the next ChatResult for a chat, blocking up to ``wait`` seconds."""
         return self._outbox.outbox_pop(chat_id, wait=wait, return_chat_id=return_chat_id)
+
+    def events_since(
+        self,
+        chat_id: str,
+        since: int = 0,
+        wait: float = 0.0,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        """Return chat events with ``seq > since``; long-polls up to ``wait``."""
+        return self._events.since(chat_id, since=since, wait=wait, limit=limit)
+
+    def chats_list(self) -> dict[str, Any]:
+        """List known chats for the webui session selector."""
+        from diploid_agent.runtime.outbox import _is_telegram_chat_id
+
+        with self._lock:
+            rows = []
+            for chat_id, state in self._store.items():
+                if not state.sessions:
+                    continue
+                records = list(state.sessions.values())
+                latest = max(records, key=lambda r: r.updated_at)
+                rows.append(
+                    {
+                        "chat_id": chat_id,
+                        "kind": "telegram" if _is_telegram_chat_id(chat_id) else "webui",
+                        "sessions": len(records),
+                        "last_activity": latest.updated_at,
+                        "session_number": latest.session_number,
+                        "active": chat_id in self._active_turns,
+                        "next_seq": self._events.next_seq(chat_id),
+                    }
+                )
+        rows.sort(key=lambda r: -r["last_activity"])
+        return {"chats": rows}
 
     def _call_unlocked(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         """Release the RLock while running a long call, then reacquire.

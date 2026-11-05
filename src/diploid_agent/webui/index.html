@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Common Room</title>
+<style>
+  :root {
+    --bg: #16120e; --panel: #1f1a14; --edge: #3a3128;
+    --gold: #e0b56a; --gold-dim: #8a6f42;
+    --text: #e8ddd0; --dim: #9c8f80;
+    --her: #2a221a; --you: #24313d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+    height: 100vh; display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px; border-bottom: 1px solid var(--edge);
+    background: var(--panel);
+  }
+  header .title { color: var(--gold); font-weight: 600; }
+  select, input, button {
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--edge); border-radius: 6px;
+    padding: 6px 10px; font: inherit;
+  }
+  button { cursor: pointer; border-color: var(--gold-dim); }
+  button:hover { border-color: var(--gold); }
+  #status { color: var(--dim); font-size: 12px; margin-left: auto; }
+  #side { color: var(--gold-dim); font-size: 12px; min-height: 1em; }
+  #log {
+    flex: 1; overflow-y: auto; padding: 16px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .msg { max-width: 78%; padding: 8px 12px; border-radius: 10px; white-space: pre-wrap; word-wrap: break-word; }
+  .msg.her { background: var(--her); border: 1px solid var(--edge); align-self: flex-start; }
+  .msg.you { background: var(--you); align-self: flex-end; }
+  .msg.sys { background: none; color: var(--dim); font-size: 12px; align-self: center; font-style: italic; }
+  .msg .meta { font-size: 11px; color: var(--gold-dim); margin-bottom: 3px; }
+  #composer {
+    display: flex; gap: 8px; padding: 12px 16px;
+    border-top: 1px solid var(--edge); background: var(--panel);
+  }
+  #composer input { flex: 1; }
+  #setup { margin: auto; max-width: 420px; display: flex; flex-direction: column; gap: 10px; }
+  .hidden { display: none !important; }
+  #notify-row { font-size: 12px; color: var(--dim); display: flex; gap: 6px; align-items: center; }
+</style>
+</head>
+<body>
+<header>
+  <span class="title">◉ the Common Room</span>
+  <select id="chatSel"><option value="">— choose session —</option></select>
+  <span id="side"></span>
+  <span id="status">offline</span>
+</header>
+<div id="log"></div>
+<div id="composer">
+  <input id="input" placeholder="say something…" autocomplete="off">
+  <button id="send">send</button>
+  <label id="notify-row"><input type="checkbox" id="notify"> mirror to telegram</label>
+</div>
+<div id="setup" class="hidden">
+  <span class="title">the Common Room</span>
+  <input id="baseUrl" placeholder="http://127.0.0.1:4003" value="http://127.0.0.1:4003">
+  <input id="apiKey" type="password" placeholder="X-API-Key">
+  <button id="connect">enter</button>
+</div>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+let BASE = localStorage.getItem("cr_base") || "";
+let KEY = localStorage.getItem("cr_key") || "";
+let chatId = "";
+let lastSeq = 0;
+let liveTimer = null, eventTimer = null;
+const live = { text: "", side: "", running: false };
+
+if (!BASE || !KEY) { $("setup").classList.remove("hidden"); }
+else { connect(); }
+
+$("connect").onclick = () => {
+  BASE = $("baseUrl").value.replace(/\/$/, "");
+  KEY = $("apiKey").value;
+  localStorage.setItem("cr_base", BASE);
+  localStorage.setItem("cr_key", KEY);
+  $("setup").classList.add("hidden");
+  connect();
+};
+
+async function api(path, opts) {
+  const r = await fetch(BASE + path, {
+    ...opts,
+    headers: { "X-API-Key": KEY, "Content-Type": "application/json", ...(opts||{}).headers },
+  });
+  if (r.status === 403) { $("setup").classList.remove("hidden"); throw new Error("auth"); }
+  return r.json();
+}
+
+async function connect() {
+  try {
+    const data = await api("/chats");
+    const sel = $("chatSel");
+    sel.innerHTML = '<option value="">— choose session —</option>';
+    for (const c of data.chats || []) {
+      const o = document.createElement("option");
+      o.value = c.chat_id;
+      o.textContent = `${c.chat_id} · ${c.kind} · s${c.session_number}`;
+      sel.appendChild(o);
+    }
+    // Prefer an existing telegram chat; else first.
+    const tg = (data.chats || []).find(c => c.kind === "telegram") || (data.chats || [])[0];
+    if (tg) { sel.value = tg.chat_id; pickChat(); }
+    $("status").textContent = "connected";
+  } catch (e) {
+    $("status").textContent = "unreachable — " + e.message;
+    setTimeout(connect, 5000);
+  }
+}
+
+$("chatSel").onchange = pickChat;
+
+function pickChat() {
+  chatId = $("chatSel").value;
+  lastSeq = 0;
+  $("log").innerHTML = "";
+  clearTimeout(liveTimer); clearTimeout(eventTimer);
+  if (!chatId) return;
+  pollEvents();
+  pollTurn();
+}
+
+function addMsg(cls, meta, text) {
+  const d = document.createElement("div");
+  d.className = "msg " + cls;
+  if (meta) { const m = document.createElement("div"); m.className = "meta"; m.textContent = meta; d.appendChild(m); }
+  d.appendChild(document.createTextNode(text));
+  const log = $("log");
+  const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+  log.appendChild(d);
+  if (nearBottom) log.scrollTop = log.scrollHeight;
+  return d;
+}
+
+let herBubble = null;
+
+async function pollEvents() {
+  if (!chatId) return;
+  try {
+    const r = await api(`/events/${chatId}?since=${lastSeq}&wait=30`);
+    for (const ev of r.events || []) {
+      lastSeq = Math.max(lastSeq, ev.seq);
+      const p = ev.payload || {};
+      if (ev.kind === "turn_started") {
+        if (p.user_message != null) addMsg("you", `turn ${p.turn_number ?? ""}`, p.user_message);
+        herBubble = null;
+      } else if (ev.kind === "result") {
+        addMsg("her", `turn ${p.turn_number ?? ""}`, p.reply || "");
+        herBubble = null;
+      } else if (ev.kind === "system") {
+        if (p.text) addMsg("sys", "", p.text);
+      } else if (ev.kind === "service_started") {
+        addMsg("sys", "", "— she woke up —");
+      }
+    }
+    if (r.truncated) addMsg("sys", "", "…missed events…");
+    eventTimer = setTimeout(pollEvents, 0);
+  } catch (e) {
+    $("status").textContent = "events lost — " + e.message;
+    eventTimer = setTimeout(pollEvents, 3000);
+  }
+}
+
+async function pollTurn() {
+  if (!chatId) return;
+  try {
+    const t = await api(`/turn/${chatId}?wait=30`);
+    if (t.status === "running") {
+      if (!herBubble) herBubble = addMsg("her", "…", "");
+      herBubble.innerHTML = "";
+      const m = document.createElement("div"); m.className = "meta"; m.textContent = `turn · ${Math.round(t.elapsed_seconds)}s`;
+      herBubble.appendChild(m);
+      herBubble.appendChild(document.createTextNode(t.message_text || "…"));
+      $("side").textContent = t.last_side_effect || "";
+      $("status").textContent = "thinking…";
+    } else {
+      herBubble = null;
+      $("side").textContent = "";
+      $("status").textContent = "idle";
+    }
+    liveTimer = setTimeout(pollTurn, 0);
+  } catch (e) {
+    liveTimer = setTimeout(pollTurn, 3000);
+  }
+}
+
+$("send").onclick = send;
+$("input").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+
+async function send() {
+  const el = $("input");
+  const text = el.value.trim();
+  if (!text || !chatId) return;
+  el.value = "";
+  try {
+    await api("/chat", {
+      method: "POST",
+      body: JSON.stringify({ chat_id: chatId, message: text, notify: $("notify").checked }),
+    });
+  } catch (e) {
+    addMsg("sys", "", "send failed: " + e.message);
+  }
+}
+</script>
+</body>
+</html>

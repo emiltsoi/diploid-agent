@@ -247,13 +247,25 @@ class TurnProcess(TurnPipeline):
         try:
             # Start inside the try so the finally's _cleanup_turn always
             # drains the count; a failure before this point leaves nothing.
+            self.runtime._events.append(
+                chat_id,
+                "turn_started",
+                {
+                    "session_number": session_number,
+                    "turn_number": turn_number,
+                    "user_message": user_message,
+                },
+            )
             if wake_event is not None:
                 self.runtime._typing.on_turn_started(chat_id)
                 # Visible wake turns get a stream display; silent wakes stay
                 # typing-only. emit_turn_started no-ops without outbox delivery.
                 if notify and not wake_event.silent:
                     self.runtime._outbox.emit_turn_started(
-                        chat_id, session_number=session_number, turn_number=turn_number
+                        chat_id,
+                        session_number=session_number,
+                        turn_number=turn_number,
+                        user_message=user_message,
                     )
             outcome = self._call_engine(
                 chat_id=chat_id,
@@ -313,6 +325,16 @@ class TurnProcess(TurnPipeline):
                 else:
                     notifier_stream.finish(ChatResult(reply=""))
 
+        if "chat_result" in vars():
+            self.runtime._events.append(
+                chat_id,
+                "result",
+                {
+                    "session_number": session_number,
+                    "turn_number": turn_number,
+                    "reply": chat_result.reply,
+                },
+            )
         if notify and "chat_result" in vars() and self.runtime._outbox_delivery_enabled:
             self.runtime._deliver_chat_result(chat_id, chat_result)
 

@@ -23,6 +23,10 @@ class ChatRequest(BaseModel):
         None,
         description="Whether the replied-to message was sent by the assistant",
     )
+    notify: bool = Field(
+        False,
+        description="Also enqueue the result for transport delivery (mirrors the reply to telegram on telegram-attached chats)",
+    )
     reply_to_message_id: int | None = Field(
         None,
         description="Telegram message_id of the replied-to message",

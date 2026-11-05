@@ -292,3 +292,16 @@ def test_stop_uses_recorded_session_when_no_live_prompt() -> None:
 
     assert "stopping" in result.reply.lower()
     assert engine.cancelled == ["old-session"]
+
+
+def test_turn_status_includes_side_effects_list() -> None:
+    """A running turn's status carries the side_effects list for tool panels."""
+    runtime = _FakeRuntime()
+    controller = TurnController(runtime)
+    active = ActiveTurn("chat-1", "session-1", "hi", time.time())
+    active.side_effects.append({"title": "exec: ls", "status": "done", "at": time.time()})
+    runtime._active_turns["chat-1"] = active
+
+    status = controller.turn_status("chat-1")
+    assert status["side_effects"][0]["title"] == "exec: ls"
+    assert status["status"] == "running"
