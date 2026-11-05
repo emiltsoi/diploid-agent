@@ -38,4 +38,5 @@ jobs:
         run: ruff format --check src tests
 
       - name: Test
-        run: pytest tests
+        run: pytest tests -vv -o faulthandler_timeout=60
+        timeout-minutes: 12
