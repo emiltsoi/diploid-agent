@@ -98,6 +98,62 @@ def test_windows_cleanup_unlinks_junctions_before_rmtree(
     assert (real_devin / "cli" / "sessions.db").read_bytes() == b"precious"
 
 
+def test_prepare_creates_home_under_durable_base(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The isolated HOME must not live under $TMPDIR: macOS sweeps stale tmp
+    files while the devin child still runs — an aged-out mcp_config.json left
+    sessions resolving an empty MCP map (2026-11-07). Homes go under
+    DIPLOID_ACP_HOME_ROOT (a cache dir in production) instead."""
+    base = tmp_path / "acp-homes"
+    monkeypatch.setenv("DIPLOID_ACP_HOME_ROOT", str(base))
+
+    sandbox = AcpSandbox()
+    sandbox.prepare(mcp_servers=[{"name": "s", "command": "cmd", "args": []}])
+    try:
+        home = sandbox.devin_home
+        assert home is not None
+        assert home.parent == base
+        assert home.name.startswith("acp-home-")
+        config = json.loads((home / ".config" / "devin" / "mcp_config.json").read_text())
+        assert "s" in config["mcpServers"]
+    finally:
+        sandbox.cleanup()
+
+    assert not home.exists()
+
+
+def test_write_mcp_configs_none_preserves_existing_file(tmp_path: Path) -> None:
+    """mcp_servers=None means 'leave the file alone', not 'write empty' —
+    session ops rewrite on every establish and must not wipe a config that
+    was written with an explicit list earlier."""
+    sandbox = AcpSandbox()
+    sandbox.devin_home = tmp_path
+    (tmp_path / ".config" / "devin").mkdir(parents=True)
+    (tmp_path / ".codeium" / "windsurf").mkdir(parents=True)
+    if IS_WINDOWS:
+        (tmp_path / "AppData" / "Roaming" / "devin").mkdir(parents=True)
+
+    sandbox.write_mcp_configs([{"name": "s", "command": "cmd"}])
+    before = (tmp_path / ".config" / "devin" / "mcp_config.json").read_text()
+    sandbox.write_mcp_configs(None)
+
+    assert (tmp_path / ".config" / "devin" / "mcp_config.json").read_text() == before
+
+
+def test_write_mcp_configs_empty_list_writes_empty_map(tmp_path: Path) -> None:
+    """An explicit empty list is a real signal — probes run with no servers."""
+    sandbox = AcpSandbox()
+    sandbox.devin_home = tmp_path
+    (tmp_path / ".config" / "devin").mkdir(parents=True)
+    (tmp_path / ".codeium" / "windsurf").mkdir(parents=True)
+
+    sandbox.write_mcp_configs([])
+
+    config = json.loads((tmp_path / ".config" / "devin" / "mcp_config.json").read_text())
+    assert config == {"mcpServers": {}}
+
+
 def test_write_mcp_configs_normalizes_env_list(tmp_path: Path) -> None:
     sandbox = AcpSandbox()
     sandbox.devin_home = tmp_path

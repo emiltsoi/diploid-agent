@@ -111,6 +111,33 @@ if __name__ == "__main__":
 '''
 
 
+def _acp_home_base() -> Path:
+    """Parent dir for isolated ACP homes.
+
+    The home must NOT live under $TMPDIR: macOS sweeps stale tmp files while
+    the `devin acp` child is still running — an aged-out `mcp_config.json`
+    left sessions resolving an empty MCP server map (2026-11-07, both seats).
+    A cache dir is never swept. `DIPLOID_ACP_HOME_ROOT` overrides for tests
+    and debugging.
+    """
+    override = os.environ.get("DIPLOID_ACP_HOME_ROOT")
+    if override:
+        return Path(override)
+    if IS_WINDOWS:
+        root = (
+            Path(os.environ["LOCALAPPDATA"])
+            if os.environ.get("LOCALAPPDATA")
+            else (Path.home() / "AppData" / "Local")
+        )
+    else:
+        root = (
+            Path(os.environ["XDG_CACHE_HOME"])
+            if os.environ.get("XDG_CACHE_HOME")
+            else (Path.home() / ".cache")
+        )
+    return root / "diploid-agent" / "acp-homes"
+
+
 class AcpSandbox:
     """Prepare and manage the isolated HOME for the ACP subprocess."""
 
@@ -134,7 +161,10 @@ class AcpSandbox:
             self.write_mcp_configs(mcp_servers)
             return
 
-        self.devin_home = Path(tempfile.mkdtemp(prefix="acp-home-"))
+        base = _acp_home_base()
+        base.mkdir(parents=True, exist_ok=True)
+        os.chmod(base, 0o700)
+        self.devin_home = Path(tempfile.mkdtemp(prefix="acp-home-", dir=base))
         if IS_WINDOWS:
             self._prepare_windows_home()
         config_dir = self.devin_home / ".config" / "devin"
@@ -241,8 +271,12 @@ class AcpSandbox:
         `devin acp` 3000.6.7+ loads MCP servers from `mcp_config.json` at
         process startup, so the isolated home must contain the active servers
         before the subprocess is spawned.
+
+        ``mcp_servers=None`` is a no-op — callers that rewrite on every
+        session op must not wipe an existing config when no list is set.
+        An explicit empty list still writes an empty ``mcpServers`` map.
         """
-        if self.devin_home is None:
+        if self.devin_home is None or mcp_servers is None:
             return
 
         servers: dict[str, dict[str, Any]] = {}
