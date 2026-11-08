@@ -181,42 +181,41 @@ class StreamDisplay:
                 self.last_text_sent = self.visible
                 self.last_growth_at = now
                 edited = True
-            elif self.visible:
-                # No new text: check whether the visible tail we already
-                # showed has been sitting idle long enough to be its own
-                # message. We use the displayed text (not the raw text with
-                # hidden ask blocks) so a trailing ask block does not cause
-                # a duplicate commit of the same visible content.
-                if self._should_commit(self.tail_text, now - self.last_growth_at):
-                    # Freeze the current placeholder as a sent message and
-                    # start a fresh one so the rest of the reply can stream
-                    # below it. committed_display accumulates every shown
-                    # chunk so later tails stay suffixes of display_text.
-                    shown = self.tail_text[:4096]
-                    self.committed_display = (
-                        self.committed_display + shown
-                        if self.committed_display
-                        and self.display_text.startswith(self.committed_display)
-                        else shown
+            elif self.visible and self._should_commit(self.tail_text, now - self.last_growth_at):
+                # No new text: the visible tail we already showed has been
+                # sitting idle long enough to be its own message. We use the
+                # displayed text (not the raw text with hidden ask blocks) so
+                # a trailing ask block does not cause a duplicate commit of
+                # the same visible content.
+                # Freeze the current placeholder as a sent message and start a
+                # fresh one so the rest of the reply can stream below it.
+                # committed_display accumulates every shown chunk so later
+                # tails stay suffixes of display_text.
+                shown = self.tail_text[:4096]
+                self.committed_display = (
+                    self.committed_display + shown
+                    if self.committed_display
+                    and self.display_text.startswith(self.committed_display)
+                    else shown
+                )
+                if self.committed_raw_ok and len(self.tail_text) <= 4096:
+                    self.committed_text = self.text
+                else:
+                    # The displayed commit hit the 4096 cap (or a prior
+                    # commit did), so the raw prefix no longer maps to what
+                    # was shown; finalization strips by display.
+                    self.committed_text = ""
+                    self.committed_raw_ok = False
+                self.committed_message_id = self.message_id
+                self.committed_last_chunk = shown
+                self.last_text_sent = _REPLY_PLACEHOLDER
+                self.last_growth_at = now
+                self.message_id = self._send_placeholder(_REPLY_PLACEHOLDER)
+                if self.message_id is not None:
+                    self.poller._save_placeholder_state(
+                        self.chat_id, self.message_id, self.thought_id
                     )
-                    if self.committed_raw_ok and len(self.tail_text) <= 4096:
-                        self.committed_text = self.text
-                    else:
-                        # The displayed commit hit the 4096 cap (or a prior
-                        # commit did), so the raw prefix no longer maps to
-                        # what was shown; finalization strips by display.
-                        self.committed_text = ""
-                        self.committed_raw_ok = False
-                    self.committed_message_id = self.message_id
-                    self.committed_last_chunk = shown
-                    self.last_text_sent = _REPLY_PLACEHOLDER
-                    self.last_growth_at = now
-                    self.message_id = self._send_placeholder(_REPLY_PLACEHOLDER)
-                    if self.message_id is not None:
-                        self.poller._save_placeholder_state(
-                            self.chat_id, self.message_id, self.thought_id
-                        )
-                    edited = True
+                edited = True
 
         # Tool-progress line: while the streamed tail is empty (think/tool
         # phase) the placeholder shows the current side effect instead of a
