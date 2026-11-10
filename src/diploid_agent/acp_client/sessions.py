@@ -170,6 +170,18 @@ class AcpSessionOps:
             raise RuntimeError(f"resume call made zero attempts for {method}")
         raise last_exc
 
+    def _rewrite_mcp_configs(self) -> None:
+        """Re-write ``mcp_config.json`` before a session-establishing call.
+
+        devin resolves the session's server set from that file, not from the
+        payload (3000.6.7+ rejects inline ``mcpServers``). If the file vanished
+        since spawn — e.g. the macOS $TMPDIR sweeper deleting aged entries
+        while the child still ran (2026-11-07) — the next session op would
+        resolve an empty server map. Rewriting here makes the loss self-heal
+        without a transport restart; a ``None`` list is a no-op.
+        """
+        self._client._sandbox.write_mcp_configs(self._state._mcp_servers)
+
     async def _resume_session(
         self,
         session_id: str,
@@ -188,7 +200,7 @@ class AcpSessionOps:
         servers.
 
         The active MCP server list is written to the ACP subprocess's
-        ``mcp_config.json`` by ``_prepare_devin_home``; ``devin acp`` 3000.6.7+
+        ``mcp_config.json`` by ``AcpSandbox.prepare``; ``devin acp`` 3000.6.7+
         rejects inline ``mcpServers`` definitions in the resume/load payload, so
         we pass an empty list just like we do for ``session/new``.
         """
@@ -198,6 +210,7 @@ class AcpSessionOps:
         # write the correct mcp_config.json.
         if mcp_servers is not None:
             self._state._mcp_servers = self._client._sandbox.normalize_mcp_servers(mcp_servers)
+        self._rewrite_mcp_configs()
         resume_params: dict[str, Any] = {
             "sessionId": session_id,
             "cwd": use_cwd,
@@ -301,6 +314,7 @@ class AcpSessionOps:
         # write the correct mcp_config.json.
         if mcp_servers is not None:
             self._state._mcp_servers = self._client._sandbox.normalize_mcp_servers(mcp_servers)
+        self._rewrite_mcp_configs()
         if self._client._lifecycle_log is not None:
             self._client._lifecycle_log.write(
                 "session.load.attempt",
@@ -432,7 +446,7 @@ class AcpSessionOps:
             cwd.mkdir(parents=True, exist_ok=True)
 
         # `devin acp` 3000.6.7+ loads MCP servers from the isolated
-        # `mcp_config.json` written by `_prepare_devin_home`.  `session/new`
+        # `mcp_config.json` written by `AcpSandbox.prepare`.  `session/new`
         # no longer accepts inline server definitions in its `mcpServers`
         # parameter; passing them produces "data did not match any variant of
         # untagged enum McpServer".  Pass an empty list and rely on the config
@@ -441,6 +455,7 @@ class AcpSessionOps:
         # does not hold the harness lock for multiple minutes. The watchdog
         # stall threshold is also bounded by _watchdog_timeout, so align the
         # call timeout with that ceiling (at least 60s to allow normal init).
+        self._rewrite_mcp_configs()
         if self._client._lifecycle_log is not None:
             self._client._lifecycle_log.write(
                 "session.new.attempt",

@@ -130,6 +130,33 @@ def test_session_load_passes_empty_mcp_servers(client: AcpClient, monkeypatch) -
     assert client._mcp_servers == mcp_servers
 
 
+def test_session_load_rewrites_vanished_mcp_config(
+    client: AcpClient, monkeypatch, tmp_path: Path
+) -> None:
+    """Regression for the tmp-sweeper bite: if mcp_config.json disappears
+    while the devin child is still running, the next session op must rewrite
+    it — otherwise the session resolves an empty MCP server map."""
+    home = tmp_path / "acp-home-x"
+    for sub in (".config/devin", ".codeium/windsurf"):
+        (home / sub).mkdir(parents=True)
+    client._sandbox.devin_home = home
+
+    async def fake_call(method: str, params: dict[str, Any], **kwargs: Any) -> Any:
+        return {}
+
+    monkeypatch.setattr(client, "_call", fake_call)
+    client._loop.run_until_complete(
+        client._session_load(
+            "s-9",
+            cwd=Path("/"),
+            mcp_servers=[{"name": "test-mcp", "command": "cmd", "args": []}],
+        )
+    )
+
+    config = json.loads((home / ".config" / "devin" / "mcp_config.json").read_text())
+    assert config["mcpServers"]["test-mcp"]["command"] == "cmd"
+
+
 @pytest.mark.parametrize(
     "error,expected",
     [
