@@ -39,9 +39,6 @@ def _rmdir_junctions(root: Path) -> None:
     orphan's own tree: junctions are removed in place, real dirs are queued
     for scanning — the walk never crosses a junction boundary.
     """
-    is_junction = getattr(os.path, "isjunction", None)
-    if is_junction is None:
-        return
     stack = [root]
     while stack:
         try:
@@ -53,7 +50,9 @@ def _rmdir_junctions(root: Path) -> None:
             try:
                 if not entry.is_dir(follow_symlinks=False):
                     continue
-                if is_junction(entry.path):
+                # DirEntry.is_junction() exists on all supported Pythons
+                # (3.8+); os.path.isjunction is 3.12+.
+                if entry.is_junction():
                     os.rmdir(entry.path)
                 else:
                     stack.append(Path(entry.path))
