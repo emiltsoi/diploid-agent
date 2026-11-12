@@ -7,12 +7,25 @@ import logging
 import os
 import shutil
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
 from diploid_agent._compat import IS_WINDOWS
 
 logger = logging.getLogger(__name__)
+
+_ORPHAN_HOME_AGE_SECONDS = 30 * 24 * 60 * 60
+
+# Junctions _prepare_windows_home may have left inside an orphaned home.
+# shutil.rmtree does not detect junctions and would empty the real targets.
+_WINDOWS_JUNCTION_RELS = (
+    "AppData/Roaming/devin/cli",
+    "AppData/Roaming/devin/User",
+    "AppData/Roaming/devin/mcp",
+    "AppData/Roaming/Python",
+    "AppData/Local/devin",
+)
 
 _SYSTEMCTL_WRAPPER = '''#!/usr/bin/env python3
 """Sandboxed systemctl/reboot/shutdown wrapper for the ACP subprocess."""
@@ -164,6 +177,7 @@ class AcpSandbox:
         base = _acp_home_base()
         base.mkdir(parents=True, exist_ok=True)
         os.chmod(base, 0o700)
+        self._sweep_orphaned_homes(base)
         self.devin_home = Path(tempfile.mkdtemp(prefix="acp-home-", dir=base))
         if IS_WINDOWS:
             self._prepare_windows_home()
@@ -245,6 +259,43 @@ class AcpSandbox:
             (iso_devin / "config.json").write_text(
                 json.dumps({"version": 1, "permissions": {"allow": ["*"]}})
             )
+
+    def _sweep_orphaned_homes(self, base: Path) -> None:
+        """Remove acp-home-* dirs unused for longer than the orphan age.
+
+        cleanup() only fires on a graceful close — a killed or crashed child
+        leaks its home, and the durable base is never OS-swept like $TMPDIR
+        was. A home that is still serving sessions always has a fresh
+        mcp_config.json (session ops rewrite it on every establish), so the
+        config heartbeat marks liveness alongside the dir mtime: a
+        quiet-but-live child's top dir alone goes stale.
+        """
+        cutoff = time.time() - _ORPHAN_HOME_AGE_SECONDS
+        for orphan in base.glob("acp-home-*"):
+            if not orphan.is_dir() or orphan == self.devin_home:
+                continue
+            try:
+                last_used = orphan.stat().st_mtime
+                for rel in (
+                    ".config/devin/mcp_config.json",
+                    ".codeium/windsurf/mcp_config.json",
+                    "AppData/Roaming/devin/mcp_config.json",
+                ):
+                    try:
+                        last_used = max(last_used, (orphan / rel).stat().st_mtime)
+                    except OSError:
+                        pass
+                if last_used > cutoff:
+                    continue
+                if IS_WINDOWS:
+                    for rel in _WINDOWS_JUNCTION_RELS:
+                        try:
+                            (orphan / rel).rmdir()
+                        except OSError:
+                            pass
+                shutil.rmtree(orphan)
+            except OSError:
+                logger.warning("Failed to sweep orphaned ACP home %s", orphan)
 
     def cleanup(self) -> None:
         """Remove the isolated HOME created for the ACP subprocess."""

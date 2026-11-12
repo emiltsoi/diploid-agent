@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -121,6 +122,69 @@ def test_prepare_creates_home_under_durable_base(
         sandbox.cleanup()
 
     assert not home.exists()
+
+
+def _make_orphan(base: Path, name: str, age_seconds: float) -> Path:
+    """Create a fake leftover acp-home-* backdated to look orphaned."""
+    orphan = base / name
+    config_dir = orphan / ".config" / "devin"
+    config_dir.mkdir(parents=True)
+    config = config_dir / "mcp_config.json"
+    config.write_text('{"mcpServers": {}}')
+    old = time.time() - age_seconds
+    os.utime(config, (old, old))
+    os.utime(config_dir, (old, old))
+    os.utime(orphan, (old, old))
+    return orphan
+
+
+def test_prepare_sweeps_stale_orphan_homes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Killed or crashed children leak acp-home-* dirs forever under the
+    durable base — prepare() must sweep ones past the orphan age while
+    leaving fresh homes and non-matching dirs alone."""
+    base = tmp_path / "acp-homes"
+    base.mkdir()
+    monkeypatch.setenv("DIPLOID_ACP_HOME_ROOT", str(base))
+
+    stale = _make_orphan(base, "acp-home-stale00", 31 * 24 * 60 * 60)
+    fresh = _make_orphan(base, "acp-home-fresh00", 60)
+    (base / "not-ours").mkdir()
+
+    sandbox = AcpSandbox()
+    sandbox.prepare(mcp_servers=[])
+    try:
+        assert not stale.exists()
+        assert fresh.exists()
+        assert (base / "not-ours").is_dir()
+        assert sandbox.devin_home is not None and sandbox.devin_home.exists()
+    finally:
+        sandbox.cleanup()
+
+
+def test_prepare_keeps_orphan_with_fresh_config_heartbeat(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Liveness is the config heartbeat, not the dir mtime: session ops
+    rewrite mcp_config.json on every establish, so a long-lived home whose
+    top dir has gone stale must NOT be swept while it still serves ops."""
+    base = tmp_path / "acp-homes"
+    base.mkdir()
+    monkeypatch.setenv("DIPLOID_ACP_HOME_ROOT", str(base))
+
+    orphan = _make_orphan(base, "acp-home-quiet00", 31 * 24 * 60 * 60)
+    # Rewrite the config fresh WITHOUT touching the dir mtime — exactly what
+    # a session op does on a home that has been quiet since spawn.
+    config = orphan / ".config" / "devin" / "mcp_config.json"
+    config.write_text('{"mcpServers": {}}')
+    old = time.time() - 31 * 24 * 60 * 60
+    os.utime(orphan, (old, old))
+
+    sandbox = AcpSandbox()
+    sandbox.prepare(mcp_servers=[])
+    try:
+        assert orphan.exists()
+    finally:
+        sandbox.cleanup()
 
 
 def test_write_mcp_configs_none_preserves_existing_file(tmp_path: Path) -> None:
