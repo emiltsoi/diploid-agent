@@ -31,6 +31,9 @@ class FakeSandbox:
     def prepare(self, mcp_servers: Any) -> None:
         self.prepared.append(mcp_servers)
 
+    def mark_child_pid(self, pid: int) -> None:
+        pass
+
 
 class FakeProcess:
     def __init__(self, returncode: int | None = None) -> None:
