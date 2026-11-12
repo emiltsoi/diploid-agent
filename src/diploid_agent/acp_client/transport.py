@@ -537,6 +537,10 @@ class AcpTransport:
                 detail={"child_pid": self._proc.pid},
             )
 
+        # Liveness marker for the acp-home orphan sweep: a live pid protects
+        # the home regardless of heartbeat age.
+        self._client._sandbox.mark_child_pid(self._proc.pid)
+
         self._reader_task = asyncio.create_task(self._reader())
         self._reader_task.add_done_callback(self._on_reader_done)
         self._stderr_task = asyncio.create_task(self._stderr_drain())

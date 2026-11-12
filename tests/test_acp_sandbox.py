@@ -161,6 +161,68 @@ def test_prepare_sweeps_stale_orphan_homes(monkeypatch: pytest.MonkeyPatch, tmp_
         sandbox.cleanup()
 
 
+def test_prepare_never_sweeps_orphan_with_live_pid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A live child's home is never reapable however stale it looks — the
+    base is shared across seats and a quiet seat can exceed the orphan age
+    between session ops on a still-running child."""
+    base = tmp_path / "acp-homes"
+    base.mkdir()
+    monkeypatch.setenv("DIPLOID_ACP_HOME_ROOT", str(base))
+
+    orphan = _make_orphan(base, "acp-home-livepid", 31 * 24 * 60 * 60)
+    (orphan / ".acp-child-pid").write_text(str(os.getpid()))
+    old = time.time() - 31 * 24 * 60 * 60
+    os.utime(orphan, (old, old))
+
+    sandbox = AcpSandbox()
+    sandbox.prepare(mcp_servers=[])
+    try:
+        assert orphan.exists()
+    finally:
+        sandbox.cleanup()
+
+
+def test_prepare_sweeps_orphan_with_dead_pid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A dead pid marker is no protection — the home reaps by age."""
+    import subprocess
+    import sys
+
+    base = tmp_path / "acp-homes"
+    base.mkdir()
+    monkeypatch.setenv("DIPLOID_ACP_HOME_ROOT", str(base))
+
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    orphan = _make_orphan(base, "acp-home-deadpid", 31 * 24 * 60 * 60)
+    (orphan / ".acp-child-pid").write_text(str(proc.pid))
+    old = time.time() - 31 * 24 * 60 * 60
+    os.utime(orphan, (old, old))
+
+    sandbox = AcpSandbox()
+    sandbox.prepare(mcp_servers=[])
+    try:
+        assert not orphan.exists()
+    finally:
+        sandbox.cleanup()
+
+
+def test_write_mcp_configs_resurrects_missing_parents(tmp_path: Path) -> None:
+    """write_mcp_configs must mkdir the config dirs it writes into — a reaped
+    or reset home has no .config tree, and the session-op rewrite is the
+    self-heal: it must not fail silently on a missing parent."""
+    sandbox = AcpSandbox()
+    sandbox.devin_home = tmp_path  # bare home: no config dirs exist
+
+    sandbox.write_mcp_configs([{"name": "s", "command": "cmd"}])
+
+    config = json.loads((tmp_path / ".config" / "devin" / "mcp_config.json").read_text())
+    assert "s" in config["mcpServers"]
+
+
 def test_prepare_keeps_orphan_with_fresh_config_heartbeat(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

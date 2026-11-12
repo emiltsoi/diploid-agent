@@ -17,15 +17,49 @@ logger = logging.getLogger(__name__)
 
 _ORPHAN_HOME_AGE_SECONDS = 30 * 24 * 60 * 60
 
-# Junctions _prepare_windows_home may have left inside an orphaned home.
-# shutil.rmtree does not detect junctions and would empty the real targets.
-_WINDOWS_JUNCTION_RELS = (
-    "AppData/Roaming/devin/cli",
-    "AppData/Roaming/devin/User",
-    "AppData/Roaming/devin/mcp",
-    "AppData/Roaming/Python",
-    "AppData/Local/devin",
-)
+
+def _pid_alive(pid: int) -> bool:
+    """True if pid is currently running. Ambiguous answers count as alive —
+    a false-live verdict only leaks a dir; a false-dead verdict reaps a
+    live home."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OSError, ValueError):
+        return True
+    return True
+
+
+def _rmdir_junctions(root: Path) -> None:
+    """Remove every junction under root without descending into them.
+
+    Junctions present as ordinary directories (os.path.islink misses them),
+    so shutil.rmtree would descend and empty the real target. Scan the
+    orphan's own tree: junctions are removed in place, real dirs are queued
+    for scanning — the walk never crosses a junction boundary.
+    """
+    is_junction = getattr(os.path, "isjunction", None)
+    if is_junction is None:
+        return
+    stack = [root]
+    while stack:
+        try:
+            with os.scandir(stack.pop()) as it:
+                entries = list(it)
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                if not entry.is_dir(follow_symlinks=False):
+                    continue
+                if is_junction(entry.path):
+                    os.rmdir(entry.path)
+                else:
+                    stack.append(Path(entry.path))
+            except OSError:
+                pass
+
 
 _SYSTEMCTL_WRAPPER = '''#!/usr/bin/env python3
 """Sandboxed systemctl/reboot/shutdown wrapper for the ACP subprocess."""
@@ -275,6 +309,15 @@ class AcpSandbox:
             if not orphan.is_dir() or orphan == self.devin_home:
                 continue
             try:
+                marker = orphan / ".acp-child-pid"
+                if marker.exists() and _pid_alive(int(marker.read_text().strip())):
+                    # A live child's home is never reapable, however stale the
+                    # heartbeat: the base is shared across seats and a quiet
+                    # seat can go >30d between session ops on a live child.
+                    continue
+            except (OSError, ValueError):
+                pass
+            try:
                 last_used = orphan.stat().st_mtime
                 for rel in (
                     ".config/devin/mcp_config.json",
@@ -288,14 +331,24 @@ class AcpSandbox:
                 if last_used > cutoff:
                     continue
                 if IS_WINDOWS:
-                    for rel in _WINDOWS_JUNCTION_RELS:
-                        try:
-                            (orphan / rel).rmdir()
-                        except OSError:
-                            pass
+                    _rmdir_junctions(orphan)
                 shutil.rmtree(orphan)
             except OSError:
                 logger.warning("Failed to sweep orphaned ACP home %s", orphan)
+
+    def mark_child_pid(self, pid: int) -> None:
+        """Record the ACP child's pid inside its home.
+
+        The orphan sweep reads this marker to tell a dead home (reapable by
+        age) from a live one (never reapable): heartbeat staleness can only
+        age a home out, a live pid always protects it.
+        """
+        if self.devin_home is None:
+            return
+        try:
+            (self.devin_home / ".acp-child-pid").write_text(str(pid))
+        except OSError:
+            logger.warning("Failed to write child pid marker in %s", self.devin_home)
 
     def cleanup(self) -> None:
         """Remove the isolated HOME created for the ACP subprocess."""
@@ -374,6 +427,10 @@ class AcpSandbox:
             paths.append(self.devin_home / "AppData" / "Roaming" / "devin" / "mcp_config.json")
         for path in paths:
             try:
+                # mkdir first: a reaped/reset home must be repairable — the
+                # session-op rewrite is the self-heal and it must not fail
+                # silently on a missing parent.
+                path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(mcp_config)
             except OSError:
                 logger.warning("Failed to write mcp_config.json to %s", path)
