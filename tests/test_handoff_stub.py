@@ -106,6 +106,24 @@ def test_handoff_outcome_classification() -> None:
     assert handoff_outcome("## next-self\n\nmine\n\n" + stub_only) == "authored"
     # A stale-marker mention inside prose must not hide a real heading.
     assert handoff_outcome("notes mention <!-- harness-handoff --> in passing\n") == "none"
+    # Mid-prose mentions are not headings: convention docs, backtick quotes,
+    # and "wrote the note" sentences must never count as authored.
+    assert handoff_outcome("I discussed the `## next-self` convention.\n") == "none"
+    assert handoff_outcome("wrote the ## next-self note before sleeping\n") == "none"
+    assert handoff_outcome("prose `## next-self` mention\n" + stub_only) == "stub_only"
+
+
+def test_prose_mention_does_not_block_stub(tmp_path: Path) -> None:
+    # A file that merely *discusses* the convention still earns a floor —
+    # only a line-start heading is an authored handoff.
+    path = tmp_path / "chat-1" / "chat_self_state.md"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "# self state\n\nThe `## next-self` convention is mine to write.\n",
+        encoding="utf-8",
+    )
+    assert _write(path) is True
+    assert "<!-- harness-handoff -->" in path.read_text(encoding="utf-8")
 
 
 def test_stub_marks_floor_when_no_model_handoff(tmp_path: Path) -> None:

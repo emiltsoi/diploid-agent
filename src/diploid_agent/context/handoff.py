@@ -25,11 +25,19 @@ logger = logging.getLogger(__name__)
 _MARKER_OPEN = "<!-- harness-handoff -->"
 _MARKER_CLOSE = "<!-- /harness-handoff -->"
 _HEADING = "## next-self"
+# Handoff detection must anchor at line start — a mid-prose mention
+# (`## next-self` inside backticks, convention docs, quoted stubs) is not a
+# heading and must never count as an authored handoff. Same convention as
+# the continuity plugin's `^##\s*next-self\b` check.
+_HEADING_RE = re.compile(r"^##\s*next-self\b", re.IGNORECASE | re.MULTILINE)
 _MARKER_RE = re.compile(re.escape(_MARKER_OPEN) + r".*?" + re.escape(_MARKER_CLOSE), re.DOTALL)
 # The stub writes its own bare `_HEADING` above the marker, so classifying a
 # file must strip the whole stub *section* — heading included — before asking
 # whether a model-authored handoff exists alongside it.
-_STUB_SECTION_RE = re.compile(re.escape(_HEADING) + r"\s*\n+\s*" + _MARKER_RE.pattern, re.DOTALL)
+_STUB_SECTION_RE = re.compile(
+    r"^" + re.escape(_HEADING) + r"\s*\n+\s*" + _MARKER_RE.pattern,
+    re.DOTALL | re.MULTILINE,
+)
 
 
 def handoff_outcome(text: str) -> str:
@@ -42,8 +50,9 @@ def handoff_outcome(text: str) -> str:
       prose is not a stub and classifies here too.
     """
     if _STUB_SECTION_RE.search(text):
-        return "authored" if _HEADING in _STUB_SECTION_RE.sub("", text) else "stub_only"
-    return "authored" if _HEADING in text else "none"
+        stripped = _STUB_SECTION_RE.sub("", text)
+        return "authored" if _HEADING_RE.search(stripped) else "stub_only"
+    return "authored" if _HEADING_RE.search(text) else "none"
 
 
 def handoff_stub_path(sessions_root: Path, chat_id: str) -> Path:
@@ -145,7 +154,7 @@ def write_handoff_stub(
         if _MARKER_OPEN in text:
             inner = block.split(_MARKER_OPEN, 1)[1].rsplit(_MARKER_CLOSE, 1)[0]
             text = _MARKER_RE.sub(_MARKER_OPEN + inner + _MARKER_CLOSE, text, count=1)
-        elif _HEADING in text:
+        elif _HEADING_RE.search(text):
             return False
         else:
             text = text.rstrip("\n") + ("\n\n" if text.strip() else "") + block
