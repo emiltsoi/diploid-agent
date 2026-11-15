@@ -26,6 +26,24 @@ _MARKER_OPEN = "<!-- harness-handoff -->"
 _MARKER_CLOSE = "<!-- /harness-handoff -->"
 _HEADING = "## next-self"
 _MARKER_RE = re.compile(re.escape(_MARKER_OPEN) + r".*?" + re.escape(_MARKER_CLOSE), re.DOTALL)
+# The stub writes its own bare `_HEADING` above the marker, so classifying a
+# file must strip the whole stub *section* — heading included — before asking
+# whether a model-authored handoff exists alongside it.
+_STUB_SECTION_RE = re.compile(re.escape(_HEADING) + r"\s*\n+\s*" + _MARKER_RE.pattern, re.DOTALL)
+
+
+def handoff_outcome(text: str) -> str:
+    """Classify a self-state file's handoff state at a fold.
+
+    - ``"authored"`` — a model-written ``## next-self`` exists (with or
+      without a stub alongside it);
+    - ``"stub_only"`` — the harness floor stub is the only handoff present;
+    - ``"none"`` — no handoff of either kind. A stray marker mention in
+      prose is not a stub and classifies here too.
+    """
+    if _STUB_SECTION_RE.search(text):
+        return "authored" if _HEADING in _STUB_SECTION_RE.sub("", text) else "stub_only"
+    return "authored" if _HEADING in text else "none"
 
 
 def handoff_stub_path(sessions_root: Path, chat_id: str) -> Path:
@@ -51,15 +69,30 @@ def _last_turn_snapshot(chat_dir: Path) -> dict:
 
 
 def _stub_block(
-    *, session_number: int, turn_number: int, intent: str, side_effect: str, arriving: str
+    *,
+    session_number: int,
+    turn_number: int,
+    intent: str,
+    side_effect: str,
+    arriving: str,
+    model_authored: bool,
 ) -> str:
     when = datetime.fromtimestamp(time.time(), tz=UTC).isoformat(timespec="seconds")
+    if model_authored:
+        handoff_line = (
+            "- outgoing handoff: the previous self DID author `## next-self` — "
+            "prefer it over this floor."
+        )
+    else:
+        handoff_line = (
+            "- outgoing handoff: the previous self did NOT author `## next-self` "
+            "— this stub is the only floor."
+        )
     return (
         f"{_HEADING}\n\n{_MARKER_OPEN}\n"
         f"Harness-written stub at the context-pressure fold "
-        f"(session {session_number}, before turn {turn_number}, {when}). "
-        "The previous turn may not have survived to write its own handoff — "
-        "if a fresher `## next-self` appears elsewhere in this file, prefer it.\n"
+        f"(session {session_number}, before turn {turn_number}, {when}).\n"
+        f"{handoff_line}\n"
         f"- last durable intent: {intent or '(none recorded)'}\n"
         f"- last side effect: {side_effect or '(none recorded)'}\n"
         f"- message arriving at the fold: {arriving or '(none)'}\n"
@@ -95,15 +128,20 @@ def write_handoff_stub(
         msg = str(snapshot.get("user_message") or "").strip().splitlines()
         intent = (msg[0] if msg else "")[:200]
     side_effect = " ".join(str(snapshot.get("last_side_effect") or "").split())[:300]
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
+    except OSError:
+        logger.warning("Could not read handoff stub at %s", path)
+        return False
     block = _stub_block(
         session_number=session_number,
         turn_number=turn_number,
         intent=intent,
         side_effect=side_effect,
         arriving=arriving,
+        model_authored=handoff_outcome(text) == "authored",
     )
     try:
-        text = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
         if _MARKER_OPEN in text:
             inner = block.split(_MARKER_OPEN, 1)[1].rsplit(_MARKER_CLOSE, 1)[0]
             text = _MARKER_RE.sub(_MARKER_OPEN + inner + _MARKER_CLOSE, text, count=1)
