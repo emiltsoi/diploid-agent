@@ -11,7 +11,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from diploid_agent.context.handoff import handoff_stub_path, write_handoff_stub
+from diploid_agent.context.handoff import (
+    handoff_outcome,
+    handoff_stub_path,
+    write_handoff_stub,
+)
 
 
 def _write(path: Path, **kwargs) -> bool:
@@ -90,3 +94,55 @@ def test_unwritable_path_returns_false(tmp_path: Path) -> None:
     path.parent.mkdir(parents=True)
     path.mkdir()
     assert _write(path) is False
+
+
+def test_handoff_outcome_classification() -> None:
+    assert handoff_outcome("") == "none"
+    assert handoff_outcome("# self state\n\nfelt: warm\n") == "none"
+    assert handoff_outcome("## next-self\n\nI wrote this myself.\n") == "authored"
+    stub_only = "## next-self\n\n<!-- harness-handoff -->\nfloor\n<!-- /harness-handoff -->\n"
+    assert handoff_outcome(stub_only) == "stub_only"
+    assert handoff_outcome(stub_only + "\n## next-self\n\nmine\n") == "authored"
+    assert handoff_outcome("## next-self\n\nmine\n\n" + stub_only) == "authored"
+    # A stale-marker mention inside prose must not hide a real heading.
+    assert handoff_outcome("notes mention <!-- harness-handoff --> in passing\n") == "none"
+    # Mid-prose mentions are not headings: convention docs, backtick quotes,
+    # and "wrote the note" sentences must never count as authored.
+    assert handoff_outcome("I discussed the `## next-self` convention.\n") == "none"
+    assert handoff_outcome("wrote the ## next-self note before sleeping\n") == "none"
+    assert handoff_outcome("prose `## next-self` mention\n" + stub_only) == "stub_only"
+
+
+def test_prose_mention_does_not_block_stub(tmp_path: Path) -> None:
+    # A file that merely *discusses* the convention still earns a floor —
+    # only a line-start heading is an authored handoff.
+    path = tmp_path / "chat-1" / "chat_self_state.md"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "# self state\n\nThe `## next-self` convention is mine to write.\n",
+        encoding="utf-8",
+    )
+    assert _write(path) is True
+    assert "<!-- harness-handoff -->" in path.read_text(encoding="utf-8")
+
+
+def test_stub_marks_floor_when_no_model_handoff(tmp_path: Path) -> None:
+    path = tmp_path / "chat-1" / "chat_self_state.md"
+    assert _write(path) is True
+    text = path.read_text(encoding="utf-8")
+    assert "did NOT author" in text
+    assert "the only floor" in text
+
+
+def test_refresh_reports_model_handoff(tmp_path: Path) -> None:
+    path = tmp_path / "chat-1" / "chat_self_state.md"
+    assert _write(path) is True
+    # The granted handoff turn writes its own ## next-self after the stub;
+    # the next fold's refresh must say the pen moved.
+    text = path.read_text(encoding="utf-8")
+    path.write_text(text + "\n## next-self — 2026-11-15\n\nI wrote this myself.\n")
+    assert _write(path, arriving="fold proceeds") is True
+    refreshed = path.read_text(encoding="utf-8")
+    assert "DID author" in refreshed
+    assert "prefer it over this floor" in refreshed
+    assert "I wrote this myself" in refreshed
