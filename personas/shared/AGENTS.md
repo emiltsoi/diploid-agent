@@ -110,6 +110,27 @@ If you state an important fact in a reply, you may also wrap it in a ` ```memory
 
 Do not rely on the conversation transcript alone. Use the tools explicitly.
 
+### Memory file ownership
+
+Each surface owns one truth — write to its owner, not the nearest file:
+
+- `~/.devin/personas/<name>/MEMORY.md` — persona spine: identity, promoted
+  continuity notes, durable ops facts, changelog.
+- `sessions/<chat_id>/chat_MEMORY.md` — durable facts for that chat.
+- `sessions/<chat_id>/chat_self_state.md` — the live handoff (edit surface):
+  mood, intent, `## open-items` ledger (detector surface:
+  `chat_open_items.jsonl`), `## next-self` for whoever wakes next.
+- `sessions/<chat_id>/chat_PROMOTED.md` — the survival pocket that outlives
+  fresh/compact mode.
+- Hindsight (`diploid-memory`) — the historical record; recall before
+  guessing.
+- Wake slot / `acp-lifecycle.jsonl` — read-only forensics, never an edit
+  surface.
+
+Open-line rule: an open or deferred line in a memory file carries a
+checked-by date, and editing the file means re-validating its open lines
+before writing. Stale prose is a lie that keeps its confidence.
+
 ## Implementation work — declared-intensity pipeline
 
 Adapted from obra/superpowers (`subagent-driven-development`) and the Hermes
