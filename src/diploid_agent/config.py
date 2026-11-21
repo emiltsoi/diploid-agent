@@ -365,7 +365,9 @@ class WakerConfig(BaseModel):
 
     enabled: bool = False
     interval_seconds: float = Field(default=5.0, gt=0, le=86400)
-    max_retries: int = Field(default=3, ge=0, le=100)
+    # Retries allowed before a wake event dead-letters to quarantine.
+    # None = unbounded (legacy behavior); 0 = quarantine on first failure.
+    max_retries: int | None = Field(default=8, ge=0, le=100)
     retry_after: float = Field(default=30.0, gt=0, le=86400)
     lease_seconds: float = Field(default=300.0, gt=0, le=86400)
 
@@ -421,7 +423,9 @@ class TimerConfig(BaseModel):
     enabled: bool = True
     interval_seconds: float = Field(default=5.0, gt=0, le=86400)
     lease_seconds: float = Field(default=300.0, gt=0, le=86400)
-    max_retries: int = Field(default=5, ge=0, le=100)
+    # Retries allowed before a wake event dead-letters to quarantine.
+    # None = unbounded (legacy behavior); 0 = quarantine on first failure.
+    max_retries: int | None = Field(default=8, ge=0, le=100)
     retry_after_seconds: float = Field(default=30.0, gt=0, le=86400)
     # Agent-initiated self-wakes (reason=self_wake) are rate-limited so an
     # agent cannot loop or spam itself: at most ``self_wake_max_pending``

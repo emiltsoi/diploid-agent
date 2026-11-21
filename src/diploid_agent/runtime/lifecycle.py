@@ -242,7 +242,12 @@ class RuntimeLifecycle:
                 # The wake did not result in a real turn. Retry the transient
                 # cases; otherwise just drop without completing.
                 if result.reply in _WAKE_RETRY_REPLIES:
-                    self._wake_queue.fail(event_id, retry_after=retry_after)
+                    self._wake_queue.fail(
+                        event_id,
+                        retry_after=retry_after,
+                        max_retries=self._config.harness.timer.max_retries,
+                        last_error=result.reply,
+                    )
                     return
                 # Some wake results are internal diagnostics that should not be
                 # surfaced as user-visible replies.
@@ -261,9 +266,14 @@ class RuntimeLifecycle:
                 if cron_job_id:
                     self._cron_service.record_turn_delivery(cron_job_id)
             self._wake_queue.complete(event_id)
-        except Exception:
+        except Exception as exc:
             logger.exception("Wake failed for %s", event_id)
-            self._wake_queue.fail(event_id, retry_after=retry_after)
+            self._wake_queue.fail(
+                event_id,
+                retry_after=retry_after,
+                max_retries=self._config.harness.timer.max_retries,
+                last_error=str(exc),
+            )
 
     def _handle_task_completed(self, event: Event) -> None:
         payload = event.payload

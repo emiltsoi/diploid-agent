@@ -86,6 +86,10 @@ def register_chat(
             runtime.wake_queue.complete(req.event_id)
         return _to_response(raw)
 
+    @app.get("/wake/quarantine", dependencies=[Depends(_require_api_key)])
+    def wake_quarantine() -> dict[str, Any]:
+        return {"quarantined": runtime.wake_queue.quarantined()}
+
     @app.post("/stop", response_model=ChatResponse, dependencies=[Depends(_require_api_key)])
     def stop(req: StopRequest) -> ChatResponse:
         raw = command_handler.call(

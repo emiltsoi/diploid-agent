@@ -158,10 +158,12 @@ class RuntimeIngress:
             if chat_result.turn_number is not None:
                 self._wake_queue.complete(wake_id)
             return chat_result
-        except Exception:
+        except Exception as exc:
             self._wake_queue.fail(
                 wake_id,
                 retry_after=self._config.harness.waker.retry_after,
+                max_retries=self._config.harness.waker.max_retries,
+                last_error=str(exc),
             )
             raise
         finally:
