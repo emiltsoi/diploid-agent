@@ -387,3 +387,73 @@ def test_fire_now_skips_missing_and_not_ready(tmp_path: Path) -> None:
     assert q.fire_now("nonexistent") is None
     q.enqueue(WakeEvent(id="nr", chat_id="c1", reason="mesh_digest", priority=1, scheduled_at=0.0))
     assert q.fire_now("nr") is None  # not armed yet
+
+
+def test_fire_matching_fires_class_not_id(tmp_path: Path) -> None:
+    """Flush-by-scan: every armed unleased digest for the peer fires —
+    including msg_id-suffixed ids and coexisting duplicates — while a leased
+    or different-peer digest is left alone."""
+    q = _digest(tmp_path)  # mesh-digest:c1:peer-a, armed, sender=peer-a
+    q.enqueue(
+        WakeEvent(
+            id="mesh-digest:c1:peer-a:m2",
+            chat_id="c1",
+            reason="mesh_digest",
+            priority=1,
+            scheduled_at=time.time() + 600,
+            payload={"sender": "peer-a", "messages": []},
+            ready=True,
+        )
+    )
+    q.enqueue(
+        WakeEvent(
+            id="mesh-digest:c1:peer-b:m3",
+            chat_id="c1",
+            reason="mesh_digest",
+            priority=1,
+            scheduled_at=time.time() + 600,
+            payload={"sender": "peer-b", "messages": []},
+            ready=True,
+        )
+    )
+    fired = q.fire_matching(chat_id="c1", reason="mesh_digest", key_field="sender", key="peer-a")
+    assert {e.id for e in fired} == {"mesh-digest:c1:peer-a", "mesh-digest:c1:peer-a:m2"}
+    assert all(e.scheduled_at <= time.time() for e in fired)
+    assert q.get("mesh-digest:c1:peer-b:m3").scheduled_at > time.time()
+
+
+def test_fire_matching_leaves_leased_alone(tmp_path: Path) -> None:
+    q = _digest(tmp_path)
+    due = q.pop_due(now=time.time() + 601, lease_seconds=300.0)
+    assert len(due) == 1
+    assert (
+        q.fire_matching(chat_id="c1", reason="mesh_digest", key_field="sender", key="peer-a") == []
+    )
+
+
+def test_mid_lease_park_does_not_overwrite(tmp_path: Path) -> None:
+    """Leg-1 pin: enqueue of a msg_id-unique parked event while the same-peer
+    digest is leased leaves both rows intact; complete() of the in-flight
+    digest cannot eat the parked message."""
+    q = _digest(tmp_path)  # armed digest id mesh-digest:c1:peer-a
+    due = q.pop_due(now=time.time() + 601, lease_seconds=300.0)
+    assert [e.id for e in due] == ["mesh-digest:c1:peer-a"]
+    # Ingress parks under a unique id when merge refuses (leased).
+    incoming = WakeEvent(
+        id="mesh-digest:c1:peer-a:m9",
+        chat_id="c1",
+        reason="mesh_digest",
+        priority=1,
+        scheduled_at=time.time() + 600,
+        payload={"sender": "peer-a", "messages": [{"display": "m9"}]},
+        ready=True,
+    )
+    assert (
+        q.merge_into_ready(incoming, key="peer-a", key_field="sender", list_field="messages")
+        is None
+    )
+    q.enqueue(incoming)
+    q.complete("mesh-digest:c1:peer-a")
+    parked = q.get("mesh-digest:c1:peer-a:m9")
+    assert parked is not None
+    assert parked.payload["messages"] == [{"display": "m9"}]

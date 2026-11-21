@@ -32,7 +32,11 @@ def _mesh_digest_message(payload: dict[str, Any]) -> str:
     items = payload.get("messages") or []
     sender = payload.get("sender", "unknown")
     n = len(items)
-    header = f"[mesh digest: {n} informational message{'s' if n != 1 else ''} from {sender}]"
+    header = (
+        f"[mesh digest: {n} informational message{'s' if n != 1 else ''} from {sender}]"
+        "\nInformational only — handle the contents locally; reply via mesh only"
+        " if something genuinely requires a response."
+    )
     body = "\n\n".join(str(item.get("display", "")) for item in items if isinstance(item, dict))
     return header + "\n\n" + body if body else header
 

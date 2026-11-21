@@ -129,6 +129,9 @@ class WakeQueue:
             ]
             if not candidates:
                 return None
+            # Newest armed digest wins if two ever coexist (e.g. a parked
+            # arrival created a second digest while the first was leased);
+            # the merge then stretches only that digest's own window.
             target = max(candidates, key=lambda e: e.created_at)
             merged = dict(target.payload)
             items = list(merged.get(list_field) or [])
@@ -204,6 +207,39 @@ class WakeQueue:
                 return event
             event.scheduled_at = now
             return event
+
+    def fire_matching(
+        self,
+        *,
+        chat_id: str,
+        reason: str,
+        key_field: str,
+        key: str,
+        now: float | None = None,
+    ) -> list[WakeEvent]:
+        """``fire_now`` for a class of events rather than one id.
+
+        Flush-on-priority can't name a digest by id — digest ids are
+        msg_id-suffixed so a parked arrival can never overwrite an
+        in-flight (leased) digest under a deterministic id. Forces every
+        ready, unleased event matching ``chat_id``/``reason``/
+        ``payload[key_field] == key`` to fire next tick.
+        """
+        if now is None:
+            now = time.time()
+        with self._transaction():
+            fired = []
+            for e in self._in_memory.values():
+                if (
+                    e.chat_id == chat_id
+                    and e.reason == reason
+                    and e.ready
+                    and (e.leased_until is None or e.leased_until <= now)
+                    and e.payload.get(key_field) == key
+                ):
+                    e.scheduled_at = now
+                    fired.append(e)
+            return fired
 
     def complete(self, event_id: str) -> WakeEvent | None:
         with self._transaction():
