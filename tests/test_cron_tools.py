@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from datetime import date, datetime
 from pathlib import Path
 
@@ -409,3 +410,159 @@ def test_open_items_lint_cli_dispatch(tmp_path: Path) -> None:
     _oi_write(led)
     rc = main(["open-items-lint", "--file", str(led)])
     assert rc == 0
+
+
+def test_quarantine_lint_clean_when_absent(tmp_path: Path, capsys) -> None:
+    from diploid_agent.cron_tools import main
+
+    rc = main(["quarantine-lint", "--file", str(tmp_path / "wake_queue.quarantine.jsonl")])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "(clean)" in out
+
+
+def test_quarantine_lint_flags_rows(tmp_path: Path, capsys) -> None:
+    qf = tmp_path / "wake_queue.quarantine.jsonl"
+    rows = [
+        {"id": "w1", "quarantined_at": 100.0, "last_error": "boom"},
+        {"id": "w2", "quarantined_at": 50.0},
+    ]
+    qf.write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+    rc = main(["quarantine-lint", "--file", str(qf)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "2 dead-lettered" in out
+    assert "oldest quarantined_at 50" in out
+
+
+def _wo_run(tmp_path: Path, oi_rows: list[dict], **surfaces) -> int:
+    from diploid_agent.cron_tools import main
+
+    oi = tmp_path / "chat_open_items.jsonl"
+    oi.write_text("".join(json.dumps(r) + "\n" for r in oi_rows))
+    argv = ["work-object-lint", "--open-items", str(oi), "--age-seconds", "3600"]
+    for flag, rows in surfaces.items():
+        p = tmp_path / f"{flag}.jsonl"
+        if flag == "working_memory":
+            p.write_text(json.dumps(rows))
+        else:
+            p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        argv += [f"--{flag.replace('_', '-')}", str(p)]
+    return main(argv)
+
+
+def test_work_object_lint_clean_when_all_rowed(tmp_path: Path, capsys) -> None:
+    now = time.time()
+    rc = _wo_run(
+        tmp_path,
+        [{"id": "oi-1", "claim": "dispatch-abc in flight", "status": "open"}],
+        dispatch_store=[{"id": "dispatch-abc", "status": "pending", "started_at": now - 7200}],
+    )
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "(clean)" in out
+    assert "live: 1 dispatch, 0 task, 0 wake" in out
+
+
+def test_work_object_lint_flags_unrowed_dispatch(tmp_path: Path, capsys) -> None:
+    now = time.time()
+    _wo_run(
+        tmp_path,
+        [{"id": "oi-1", "claim": "unrelated", "status": "open"}],
+        dispatch_store=[{"id": "dispatch-xyz", "status": "pending", "started_at": now - 7200}],
+    )
+    out = capsys.readouterr().out
+    assert "dispatch dispatch-xyz: live" in out
+    assert "no open row" in out
+
+
+def test_work_object_lint_headline_when_ledger_empty(tmp_path: Path, capsys) -> None:
+    now = time.time()
+    _wo_run(
+        tmp_path,
+        [],
+        dispatch_store=[{"id": "dispatch-1", "status": "pending", "started_at": now - 7200}],
+    )
+    out = capsys.readouterr().out
+    assert "ledger has no open rows" in out
+    assert "occupied room" in out
+
+
+def test_work_object_lint_young_work_not_a_finding(tmp_path: Path, capsys) -> None:
+    now = time.time()
+    _wo_run(
+        tmp_path,
+        [{"id": "oi-1", "claim": "unrelated", "status": "open"}],
+        dispatch_store=[{"id": "dispatch-new", "status": "pending", "started_at": now - 60}],
+    )
+    out = capsys.readouterr().out
+    assert "(clean)" in out
+
+
+def test_work_object_lint_terminal_dispatch_ignored(tmp_path: Path, capsys) -> None:
+    _wo_run(
+        tmp_path,
+        [{"id": "oi-1", "claim": "unrelated", "status": "open"}],
+        dispatch_store=[{"id": "dispatch-old", "status": "completed", "started_at": 0.0}],
+    )
+    out = capsys.readouterr().out
+    assert "(clean)" in out
+    assert "live: 0 dispatch" in out
+
+
+def test_work_object_lint_bookkeeping_wakes_skipped(tmp_path: Path, capsys) -> None:
+    now = time.time()
+    wakes = [
+        {"id": "w-cron", "ready": True, "reason": "cron:day-note", "scheduled_at": now - 7200},
+        {
+            "id": "w-plan",
+            "ready": True,
+            "reason": "plan_task_update",
+            "scheduled_at": now - 7200,
+            "payload": {"plan_id": "plan-1"},
+        },
+        {"id": "w-live", "ready": True, "reason": "user_request", "scheduled_at": now - 7200},
+    ]
+    _wo_run(
+        tmp_path,
+        [{"id": "oi-1", "claim": "unrelated", "status": "open"}],
+        wake_queue=wakes,
+    )
+    out = capsys.readouterr().out
+    assert "bookkeeping wakes skipped: 2" in out
+    assert "wake w-live: live" in out  # the armed user_request IS flagged
+
+
+def test_work_object_lint_plan_tasks(tmp_path: Path, capsys) -> None:
+    now = time.time()
+    plans = [
+        {
+            "id": "plan-1",
+            "status": "active",
+            "tasks": [
+                {"id": "task-live", "status": "running", "started_at": now - 7200, "name": "fix"},
+                {"id": "task-done", "status": "done", "name": "shipped"},
+            ],
+        },
+        {"id": "plan-2", "status": "completed", "tasks": [{"id": "t", "status": "pending"}]},
+    ]
+    _wo_run(
+        tmp_path,
+        [{"id": "oi-1", "claim": "unrelated", "status": "open"}],
+        plans=plans,
+    )
+    out = capsys.readouterr().out
+    assert "task task-live: live" in out
+    assert "task-done" not in out
+    assert "live: 0 dispatch, 1 task, 0 wake" in out
+
+
+def test_work_object_lint_working_memory_info(tmp_path: Path, capsys) -> None:
+    _wo_run(
+        tmp_path,
+        [{"id": "oi-1", "claim": "unrelated", "status": "open"}],
+        working_memory={"plan": ["a", "b", "c"]},
+    )
+    out = capsys.readouterr().out
+    assert "working-memory plan lines: 3" in out

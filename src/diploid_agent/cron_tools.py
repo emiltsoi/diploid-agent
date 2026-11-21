@@ -368,6 +368,177 @@ def open_items_lint(args: argparse.Namespace) -> int:
     return 0
 
 
+def _read_jsonl_rows(path: Path) -> list[dict[str, Any]]:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    rows = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return rows
+
+
+# Bookkeeping wakes are already objects of the plan/cron machinery that owns
+# them — linting them against the open-items ledger double-counts. Mirrors
+# WAKE_BUDGET_REASON_PREFIXES in wake_queue.py plus the plan/armed reasons.
+_WORK_LINT_WAKE_PREFIXES = ("self_wake", "cron:")
+_WORK_LINT_WAKE_EXACT = {"plan_task_update", "plan_completed", "auto_continue"}
+_LIVE_TASK_STATUSES = {"pending", "ready", "running", "blocked"}
+_LIVE_PLAN_STATUSES = {"draft", "active", "paused"}
+
+
+def work_object_lint(args: argparse.Namespace) -> int:
+    """Diff live-work surfaces against the open-items ledger.
+
+    The detector family's world→ledger half: dispatches in-flight, non-terminal
+    plan tasks, and armed non-bookkeeping wakes are live work; each should be
+    represented by an `open` row in `chat_open_items.jsonl` (matched by id or
+    leading summary text) or it is work that exists with no object.
+    """
+    now = time.time()
+    age_floor = args.age_seconds
+
+    haystack = ""
+    open_rows = 0
+    for row in _read_jsonl_rows(Path(args.open_items)):
+        if row.get("status") == "open":
+            open_rows += 1
+            haystack += " " + str(row.get("claim", ""))
+
+    live: list[tuple[str, str, float, str]] = []  # (id, kind, ts, text)
+    counts = {"dispatch": 0, "task": 0, "wake": 0, "wake_bookkeeping": 0}
+
+    if args.dispatch_store:
+        for d in _read_jsonl_rows(Path(args.dispatch_store)):
+            if d.get("status") == "pending":
+                counts["dispatch"] += 1
+                live.append(
+                    (
+                        str(d.get("id") or ""),
+                        "dispatch",
+                        float(d.get("started_at") or 0.0),
+                        str(d.get("summary") or d.get("context") or ""),
+                    )
+                )
+
+    if args.plans:
+        for p in _read_jsonl_rows(Path(args.plans)):
+            if p.get("status") not in _LIVE_PLAN_STATUSES:
+                continue
+            for t in p.get("tasks") or []:
+                if t.get("status") not in _LIVE_TASK_STATUSES:
+                    continue
+                counts["task"] += 1
+                live.append(
+                    (
+                        str(t.get("id") or p.get("id") or ""),
+                        "task",
+                        float(t.get("started_at") or t.get("created_at") or 0.0),
+                        str(t.get("name") or t.get("description") or p.get("name") or ""),
+                    )
+                )
+
+    if args.wake_queue:
+        for e in _read_jsonl_rows(Path(args.wake_queue)):
+            if not e.get("ready"):
+                continue
+            reason = str(e.get("reason") or "")
+            payload = e.get("payload") or {}
+            if (
+                reason.startswith(_WORK_LINT_WAKE_PREFIXES)
+                or reason in _WORK_LINT_WAKE_EXACT
+                or payload.get("plan_id")
+            ):
+                counts["wake_bookkeeping"] += 1
+                continue
+            counts["wake"] += 1
+            live.append(
+                (
+                    str(e.get("id") or ""),
+                    "wake",
+                    float(e.get("scheduled_at") or e.get("created_at") or 0.0),
+                    reason,
+                )
+            )
+
+    wm_plan_lines = 0
+    if args.working_memory:
+        try:
+            wm = json.loads(Path(args.working_memory).read_text(encoding="utf-8"))
+            wm_plan_lines = len(wm.get("plan") or [])
+        except (OSError, json.JSONDecodeError, AttributeError):
+            pass
+
+    findings = []
+    if live and open_rows == 0:
+        findings.append(
+            f"{len(live)} live work item(s) but the ledger has no open rows — "
+            "the board reads clean on an occupied room"
+        )
+    for item_id, kind, ts, text in live:
+        objected = bool(item_id and item_id in haystack) or bool(text and text[:60] in haystack)
+        if objected:
+            continue
+        age = now - ts if ts else float("inf")
+        if age < age_floor:
+            continue
+        age_str = f"{age / 3600:.1f}h" if ts else "undated"
+        findings.append(f"{kind} {item_id or '(no id)'}: live {age_str}, no open row")
+
+    info = [f"live: {counts['dispatch']} dispatch, {counts['task']} task, {counts['wake']} wake"]
+    if counts["wake_bookkeeping"]:
+        info.append(f"bookkeeping wakes skipped: {counts['wake_bookkeeping']}")
+    if args.working_memory:
+        info.append(f"working-memory plan lines: {wm_plan_lines} (unmatchable, count only)")
+
+    print(f"work-object-lint: {args.open_items}")
+    print("== findings ==")
+    print("\n".join(f"- {f}" for f in findings) or "(clean)")
+    print("== info ==")
+    print("\n".join(f"- {i}" for i in info))
+    return 0
+
+
+def quarantine_lint(args: argparse.Namespace) -> int:
+    """Flag a non-empty wake-quarantine dead-letter file.
+
+    A row in `wake_queue.quarantine.jsonl` is an event that exhausted its
+    retries and dead-lettered — a claim the world contradicted, which is
+    exactly what the detector family surfaces. Absent or empty file is clean.
+    """
+    target = Path(args.file)
+    rows = []
+    if target.exists():
+        try:
+            rows = [
+                json.loads(line)
+                for line in target.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+        except (OSError, json.JSONDecodeError):
+            print(f"quarantine-lint: {target} unreadable", file=sys.stderr)
+            return 0
+
+    findings = []
+    if rows:
+        oldest = min(r.get("quarantined_at", 0.0) for r in rows)
+        findings.append(
+            f"{len(rows)} dead-lettered wake event(s), oldest quarantined_at {oldest:.0f} — "
+            f"inspect {target.name}, fix or drop, re-enqueue"
+        )
+
+    print(f"quarantine-lint: {target.name}")
+    print("== findings ==")
+    print("\n".join(f"- {f}" for f in findings) or "(clean)")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="diploid_agent.cron_tools")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -407,6 +578,26 @@ def main(argv: list[str] | None = None) -> int:
     oi.add_argument("--file", required=True, help="Ledger to lint (chat_open_items.jsonl)")
     oi.add_argument("--stale-days", type=int, default=14, help="Age threshold for open claims")
     oi.set_defaults(func=open_items_lint)
+
+    wo = sub.add_parser(
+        "work-object-lint", help="Diff live-work surfaces against an open-items ledger"
+    )
+    wo.add_argument("--open-items", required=True, help="chat_open_items.jsonl")
+    wo.add_argument("--dispatch-store", help="dispatch_store.jsonl")
+    wo.add_argument("--plans", help="plans.jsonl")
+    wo.add_argument("--wake-queue", help="wake_queue.jsonl")
+    wo.add_argument("--working-memory", help="chat_working_memory.json (info counts only)")
+    wo.add_argument(
+        "--age-seconds",
+        type=float,
+        default=3600.0,
+        help="Unmatched work younger than this is not a finding (default 1h)",
+    )
+    wo.set_defaults(func=work_object_lint)
+
+    ql = sub.add_parser("quarantine-lint", help="Flag a non-empty wake-queue dead-letter file")
+    ql.add_argument("--file", required=True, help="Quarantine file (wake_queue.quarantine.jsonl)")
+    ql.set_defaults(func=quarantine_lint)
 
     args = parser.parse_args(argv)
     return int(args.func(args))
