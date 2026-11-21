@@ -213,3 +213,91 @@ def test_rehydration_sees_leased_event(tmp_path: Path) -> None:
     event = q2.get("w1")
     assert event is not None
     assert event.leased_until == 61.0
+
+
+def _seed_event(q: WakeQueue, event_id: str = "w1") -> None:
+    q.enqueue(
+        WakeEvent(
+            id=event_id,
+            chat_id="c1",
+            reason="dispatch",
+            priority=1,
+            scheduled_at=0.0,
+            created_at=0.0,
+            ready=True,
+        )
+    )
+
+
+def test_fail_quarantines_past_max_retries(tmp_path: Path) -> None:
+    q = WakeQueue(tmp_path / "wake.jsonl")
+    _seed_event(q)
+
+    q.fail("w1", retry_after=30.0, now=1.0, max_retries=2, last_error="first")
+    q.fail("w1", retry_after=30.0, now=2.0, max_retries=2, last_error="second")
+    assert q.get("w1") is not None
+
+    e = q.fail("w1", retry_after=30.0, now=3.0, max_retries=2, last_error="third strike")
+    assert e is not None
+    assert e.attempts == 3
+    assert q.get("w1") is None
+    assert q.pending() == []
+
+    rows = q.quarantined()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["id"] == "w1"
+    assert row["attempts"] == 3
+    assert row["quarantined_at"] == 3.0
+    assert row["last_error"] == "third strike"
+
+
+def test_fail_max_retries_zero_quarantines_first_failure(tmp_path: Path) -> None:
+    q = WakeQueue(tmp_path / "wake.jsonl")
+    _seed_event(q)
+    q.fail("w1", retry_after=30.0, now=1.0, max_retries=0, last_error="nope")
+    assert q.get("w1") is None
+    rows = q.quarantined()
+    assert len(rows) == 1
+    assert rows[0]["attempts"] == 1
+
+
+def test_fail_none_max_retries_unbounded(tmp_path: Path) -> None:
+    q = WakeQueue(tmp_path / "wake.jsonl")
+    _seed_event(q)
+    for i in range(20):
+        e = q.fail("w1", retry_after=1.0, now=float(i), max_retries=None)
+        assert e is not None
+    assert q.get("w1") is not None
+    assert q.get("w1").attempts == 20
+    assert q.quarantined() == []
+
+
+def test_fail_default_preserves_unbounded(tmp_path: Path) -> None:
+    q = WakeQueue(tmp_path / "wake.jsonl")
+    _seed_event(q)
+    for i in range(20):
+        q.fail("w1", retry_after=1.0, now=float(i))
+    assert q.get("w1") is not None
+    assert q.quarantined() == []
+
+
+def test_quarantine_row_survives_rehydration(tmp_path: Path) -> None:
+    q = WakeQueue(tmp_path / "wake.jsonl")
+    _seed_event(q)
+    q.fail("w1", retry_after=1.0, now=1.0, max_retries=0, last_error="poison")
+
+    q2 = WakeQueue(tmp_path / "wake.jsonl")
+    assert q2.get("w1") is None
+    rows = q2.quarantined()
+    assert len(rows) == 1
+    assert rows[0]["last_error"] == "poison"
+
+
+def test_quarantined_event_not_due(tmp_path: Path) -> None:
+    q = WakeQueue(tmp_path / "wake.jsonl")
+    _seed_event(q)
+    q.fail("w1", retry_after=0.0, now=1.0, max_retries=0)
+    assert q.pop_due(now=2.0, lease_seconds=60.0) == []
+    assert q.due_count(now=2.0) == 0
+    assert q.pending_count() == 0

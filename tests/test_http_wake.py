@@ -104,3 +104,37 @@ def test_post_wake_silent_does_not_notify(tmp_path: Path, monkeypatch) -> None:
     assert resp.status_code == 200
     assert not sent
     assert runtime.wake_queue.get(e.id) is None
+
+
+def test_get_wake_quarantine(tmp_path: Path, monkeypatch) -> None:
+    runtime = AgentRuntime(_make_config(tmp_path))
+    runtime.engine = FakeEngine()
+    app = create_app(_make_config(tmp_path), runtime)
+    client = TestClient(app)
+
+    resp = client.get("/wake/quarantine")
+    assert resp.status_code == 200
+    assert resp.json() == {"quarantined": []}
+
+    from diploid_agent.models import WakeEvent
+
+    e = runtime.wake_queue.enqueue(
+        WakeEvent(
+            id="wq1",
+            chat_id="chat-1",
+            reason="timer",
+            priority=1,
+            scheduled_at=0.0,
+            created_at=0.0,
+            ready=True,
+        )
+    )
+    runtime.wake_queue.fail(e.id, retry_after=30.0, max_retries=0, last_error="poison")
+
+    resp = client.get("/wake/quarantine")
+    assert resp.status_code == 200
+    rows = resp.json()["quarantined"]
+    assert len(rows) == 1
+    assert rows[0]["id"] == "wq1"
+    assert rows[0]["last_error"] == "poison"
+    assert runtime.wake_queue.get(e.id) is None

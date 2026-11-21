@@ -41,6 +41,7 @@ class WakeQueue:
     def __init__(self, path: Path) -> None:
         self._path = Path(path).expanduser()
         self._lock_path = self._path.with_suffix(self._path.suffix + ".lock")
+        self._quarantine_path = self._path.with_suffix(".quarantine.jsonl")
         self._in_memory: dict[str, WakeEvent] = {}
         self._lock = threading.Lock()
         self._load()
@@ -185,7 +186,18 @@ class WakeQueue:
         event_id: str,
         retry_after: float,
         now: float | None = None,
+        max_retries: int | None = None,
+        last_error: str | None = None,
     ) -> WakeEvent | None:
+        """Reschedule a claimed event for retry, or dead-letter it.
+
+        ``max_retries`` bounds the retry count: when the next failure would
+        exceed it, the event is appended to the sibling quarantine file and
+        removed from the live queue instead of being rescheduled. ``None``
+        preserves the legacy unbounded behavior; ``0`` quarantines on the
+        first failure. ``last_error`` is recorded in the dead letter so the
+        row explains itself.
+        """
         if now is None:
             now = time.time()
         with self._transaction():
@@ -193,9 +205,51 @@ class WakeQueue:
             if event is None:
                 return None
             event.attempts += 1
+            if max_retries is not None and event.attempts > max_retries:
+                event.leased_until = None
+                self._append_quarantine(event, now=now, last_error=last_error)
+                self._in_memory.pop(event_id)
+                logger.error(
+                    "Wake event %s quarantined after %d attempts (chat %s, reason %s): %s",
+                    event.id,
+                    event.attempts,
+                    event.chat_id,
+                    event.reason,
+                    last_error,
+                )
+                return event
             event.scheduled_at = now + retry_after
             event.leased_until = None
             return event
+
+    def _append_quarantine(
+        self,
+        event: WakeEvent,
+        *,
+        now: float,
+        last_error: str | None,
+    ) -> None:
+        row = asdict(event)
+        row["quarantined_at"] = now
+        row["last_error"] = last_error
+        with open(self._quarantine_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row, default=str) + "\n")
+
+    def quarantined(self) -> list[dict]:
+        """Read the dead-letter file. Returns [] when nothing quarantined."""
+        try:
+            text = self._quarantine_path.read_text(encoding="utf-8")
+        except OSError:
+            return []
+        rows = []
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                logger.warning("Skipping malformed quarantine line")
+        return rows
 
     def pending_count(self) -> int:
         with self._transaction():

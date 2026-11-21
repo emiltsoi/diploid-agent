@@ -30,6 +30,24 @@ housekeeping, phantom LLM runs, digests — belong to the
 - `POST /continue` — completes a dispatch, marks the wake event ready, and
   immediately runs the continuation turn (consuming the wake event).
 
+## Retry cap and quarantine
+
+A wake event that fails delivery is rescheduled by `.fail()` — but not
+forever. `max_retries` (`harness.timer.max_retries` for the in-harness
+timer path, `harness.waker.max_retries` for `continue_turn` and the
+standalone `diploid-waker --max-retries`) bounds how many times an event
+may fail. Once exceeded, the event dead-letters: it is appended to
+`wake_queue.quarantine.jsonl` (next to the queue) with `quarantined_at`,
+final `attempts`, and `last_error`, and removed from the live queue. This
+is the general never-deliverable class — a poisoned or impossible event
+stops retrying instead of wedging the queue indefinitely (the 2026-10-26
+UTF-16 wedge retried 48 times before a manual scrub).
+
+`None` (unbounded) preserves the old behavior; `0` quarantines on first
+failure. `GET /wake/quarantine` lists the dead letters. Recovery is
+manual: inspect the row, fix or drop the payload, and re-enqueue a
+corrected event via `POST /wake` or `POST /dispatch`.
+
 ## Instance guard
 
 `sessions/<chat_id>/instance.lock` contains the PID, instance id, and

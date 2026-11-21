@@ -28,6 +28,12 @@ def main() -> int:
     parser.add_argument("--interval", type=float, default=5.0)
     parser.add_argument("--lease-seconds", type=float, default=300.0)
     parser.add_argument("--retry-after", type=float, default=30.0)
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=None,
+        help="quarantine an event after this many fails (default: unbounded)",
+    )
     parser.add_argument("--api-key")
     args = parser.parse_args()
 
@@ -51,13 +57,23 @@ def main() -> int:
                     # The /wake endpoint completed the event on success.
                     pass
                 else:
-                    q.fail(event.id, retry_after=args.retry_after)
+                    q.fail(
+                        event.id,
+                        retry_after=args.retry_after,
+                        max_retries=args.max_retries,
+                        last_error=f"{resp.status_code} {resp.text[:500]}",
+                    )
                     print(
                         f"wake failed for {event.id}: {resp.status_code} {resp.text}",
                         file=sys.stderr,
                     )
             except Exception as exc:  # noqa: BLE001
-                q.fail(event.id, retry_after=args.retry_after)
+                q.fail(
+                    event.id,
+                    retry_after=args.retry_after,
+                    max_retries=args.max_retries,
+                    last_error=str(exc)[:500],
+                )
                 print(f"wake error for {event.id}: {exc}", file=sys.stderr)
         time.sleep(args.interval)
 
