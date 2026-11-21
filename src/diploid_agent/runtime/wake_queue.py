@@ -98,14 +98,23 @@ class WakeQueue:
             self._in_memory[event.id] = event
         return event
 
-    def merge_into_ready(self, event: WakeEvent, *, key: str) -> bool:
+    def merge_into_ready(
+        self,
+        event: WakeEvent,
+        *,
+        key: str,
+        key_field: str = "plan_id",
+        list_field: str = "tasks",
+    ) -> WakeEvent | None:
         """Fold `event` into an already-ready, unleased event sharing its
-        ``reason``, ``chat_id``, and ``payload["plan_id"] == key``.
+        ``reason``, ``chat_id``, and ``payload[key_field] == key``.
 
         Pending bookkeeping wakes for one plan coalesce into a single digest
-        event instead of one ping per task. ``payload["tasks"]`` lists are
-        concatenated; every other payload key takes the newer event's value.
-        Returns True when the event was absorbed (caller must not enqueue it).
+        event instead of one ping per task; mesh informational deliveries
+        coalesce per peer the same way (``key_field="sender"``,
+        ``list_field="messages"``). The named payload list is concatenated;
+        every other payload key takes the newer event's value. Returns the
+        absorbing event (caller must not enqueue `event`), or ``None``.
         """
         now = time.time()
         with self._transaction():
@@ -116,18 +125,18 @@ class WakeQueue:
                 and e.reason == event.reason
                 and e.ready
                 and (e.leased_until is None or e.leased_until <= now)
-                and e.payload.get("plan_id") == key
+                and e.payload.get(key_field) == key
             ]
             if not candidates:
-                return False
+                return None
             target = max(candidates, key=lambda e: e.created_at)
             merged = dict(target.payload)
-            tasks = list(merged.get("tasks") or [])
-            tasks.extend(event.payload.get("tasks") or [])
-            merged.update({k: v for k, v in event.payload.items() if k != "tasks"})
-            merged["tasks"] = tasks
+            items = list(merged.get(list_field) or [])
+            items.extend(event.payload.get(list_field) or [])
+            merged.update({k: v for k, v in event.payload.items() if k != list_field})
+            merged[list_field] = items
             target.payload = sanitize_json_value(merged)
-            return True
+            return target
 
     def get(self, event_id: str) -> WakeEvent | None:
         with self._transaction():
@@ -175,6 +184,26 @@ class WakeQueue:
             for event in due:
                 event.leased_until = now + lease_seconds
             return due
+
+    def fire_now(self, event_id: str, now: float | None = None) -> WakeEvent | None:
+        """Force an armed event to fire on the next tick.
+
+        Used by flush-on-priority: an urgent delivery from a peer with a
+        parked digest fires the digest without waiting out its window.
+        Deliberately not ``fail()`` — no attempts increment, no retry
+        backoff. Leased events are left alone (they pop on their own or
+        fail forward); ``None`` when the event is absent or not ready.
+        """
+        if now is None:
+            now = time.time()
+        with self._transaction():
+            event = self._in_memory.get(event_id)
+            if event is None or not event.ready:
+                return None
+            if event.leased_until is not None and event.leased_until > now:
+                return event
+            event.scheduled_at = now
+            return event
 
     def complete(self, event_id: str) -> WakeEvent | None:
         with self._transaction():

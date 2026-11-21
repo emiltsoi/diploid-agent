@@ -301,3 +301,89 @@ def test_quarantined_event_not_due(tmp_path: Path) -> None:
     assert q.pop_due(now=2.0, lease_seconds=60.0) == []
     assert q.due_count(now=2.0) == 0
     assert q.pending_count() == 0
+
+
+def _digest(path: Path, sender: str = "peer-a", **kw) -> WakeQueue:
+    q = WakeQueue(path / "wake.jsonl")
+    q.enqueue(
+        WakeEvent(
+            id=f"mesh-digest:c1:{sender}",
+            chat_id="c1",
+            reason="mesh_digest",
+            priority=1,
+            scheduled_at=time.time() + 600,
+            payload={"sender": sender, "messages": [{"display": "m0"}]},
+            ready=True,
+        )
+    )
+    return q
+
+
+def test_merge_mesh_fields_parameterized(tmp_path: Path) -> None:
+    """key_field/list_field let non-plan digests fold: an armed future mesh
+    digest absorbs a second arrival by sender, messages concatenate."""
+    q = _digest(tmp_path)
+    incoming = WakeEvent(
+        id="mesh-digest:c1:peer-a",
+        chat_id="c1",
+        reason="mesh_digest",
+        priority=1,
+        scheduled_at=time.time() + 600,
+        payload={"sender": "peer-a", "messages": [{"display": "m1"}], "extra": "new"},
+        ready=True,
+    )
+    merged = q.merge_into_ready(incoming, key="peer-a", key_field="sender", list_field="messages")
+    assert merged is not None
+    assert [m["display"] for m in merged.payload["messages"]] == ["m0", "m1"]
+    assert merged.payload["extra"] == "new"  # non-list keys take newer value
+
+
+def test_merge_mesh_wrong_key_does_not_fold(tmp_path: Path) -> None:
+    q = _digest(tmp_path)
+    incoming = WakeEvent(
+        id="mesh-digest:c1:peer-b",
+        chat_id="c1",
+        reason="mesh_digest",
+        priority=1,
+        scheduled_at=time.time() + 600,
+        payload={"sender": "peer-b", "messages": [{"display": "m1"}]},
+        ready=True,
+    )
+    assert (
+        q.merge_into_ready(incoming, key="peer-b", key_field="sender", list_field="messages")
+        is None
+    )
+
+
+def test_merge_returns_event_not_bool(tmp_path: Path) -> None:
+    """Return type changed to WakeEvent | None — planning.py's `if not
+    merge(...)` truthiness still holds (None = enqueue, event = absorbed)."""
+    q = _digest(tmp_path)
+    incoming = WakeEvent(
+        id="x",
+        chat_id="c1",
+        reason="mesh_digest",
+        priority=1,
+        scheduled_at=time.time(),
+        payload={"sender": "peer-a", "messages": []},
+        ready=True,
+    )
+    assert q.merge_into_ready(incoming, key="peer-a", key_field="sender", list_field="messages")
+
+
+def test_fire_now_forces_due_no_attempts(tmp_path: Path) -> None:
+    q = _digest(tmp_path)
+    digest_id = "mesh-digest:c1:peer-a"
+    fired = q.fire_now(digest_id)
+    assert fired is not None
+    assert fired.scheduled_at <= time.time()
+    assert fired.attempts == 0  # not fail(): no attempts, no backoff
+    due = q.pop_due(now=time.time(), lease_seconds=60.0)
+    assert [e.id for e in due] == [digest_id]
+
+
+def test_fire_now_skips_missing_and_not_ready(tmp_path: Path) -> None:
+    q = WakeQueue(tmp_path / "wake.jsonl")
+    assert q.fire_now("nonexistent") is None
+    q.enqueue(WakeEvent(id="nr", chat_id="c1", reason="mesh_digest", priority=1, scheduled_at=0.0))
+    assert q.fire_now("nr") is None  # not armed yet

@@ -27,6 +27,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _mesh_digest_message(payload: dict[str, Any]) -> str:
+    """Render a folded mesh digest turn: one header + every parked display."""
+    items = payload.get("messages") or []
+    sender = payload.get("sender", "unknown")
+    n = len(items)
+    header = f"[mesh digest: {n} informational message{'s' if n != 1 else ''} from {sender}]"
+    body = "\n\n".join(str(item.get("display", "")) for item in items if isinstance(item, dict))
+    return header + "\n\n" + body if body else header
+
+
 class RuntimeIngress:
     """Owns the public turn-entry methods every transport calls.
 
@@ -212,6 +222,8 @@ class RuntimeIngress:
                 user_message = self._planning._build_plan_task_update_message(payload)
             elif reason == "plan_completed":
                 user_message = self._planning._build_plan_completed_message(payload)
+            elif reason == "mesh_digest":
+                user_message = _mesh_digest_message(payload)
             else:
                 if payload and isinstance(payload.get("user_message"), str):
                     user_message = payload["user_message"]

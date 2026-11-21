@@ -614,6 +614,19 @@ class RoutingConfig(BaseModel):
     budget: ConversationBudget = Field(default_factory=ConversationBudget)
 
 
+class MeshCoalesceConfig(BaseModel):
+    """Inbound mesh coalescing — fold ``action=info`` + ``reply=no`` arrivals
+    into one digest turn per peer instead of one turn per envelope.
+
+    Opt-in (default off): when disabled every delivery wakes immediately as
+    before. See ``commonplace/diploid-mesh-coalesce-plan.md``.
+    """
+
+    enabled: bool = False
+    window_seconds: float = 600.0
+    max_items: int = Field(default=25, ge=1)
+
+
 class MeshConfig(BaseModel):
     """Mesh peer configuration."""
 
@@ -643,6 +656,7 @@ class MeshConfig(BaseModel):
     delivery_timeout: float = 10.0
     max_sends_per_turn: int = Field(default=3, ge=0)
     max_message_in_turn_suggestion: int = Field(default=2, ge=0)
+    coalesce: MeshCoalesceConfig = Field(default_factory=MeshCoalesceConfig)
 
     @field_validator("private_key_path", "vault_path", "outbox_dir")
     @classmethod
